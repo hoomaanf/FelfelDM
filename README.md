@@ -21,6 +21,7 @@
 ---
 
 ## 📋 Table of Contents
+
 - [Features](#-features)
 - [Installation](#-installation)
   - [Quick Install](#quick-install)
@@ -38,6 +39,7 @@
 ## ✨ Features
 
 ### Core Features
+
 - 🚀 **Multiple Queues** - Create and manage multiple download queues
 - ⏰ **Scheduled Downloads** - Set time windows for automatic downloads
 - 📊 **Real-time Progress** - Live download speed and progress tracking
@@ -45,6 +47,7 @@
 - 🗑️ **Safe Removal** - Remove from list or delete files permanently
 
 ### Advanced Features
+
 - 🌐 **Browser Extension** - Firefox/Chrome extension for one-click downloads
 - 🔌 **aria2 Integration** - High-performance multi-connection downloads
 - 🎨 **Modern UI** - Dark theme with Papirus icons
@@ -58,6 +61,7 @@
 ## 🛠️ Installation
 
 ### Prerequisites
+
 ```bash
 # Arch Linux
 sudo pacman -S python python-pip aria2 git
@@ -73,11 +77,13 @@ sudo dnf install python3 python3-pip aria2 git
 ### Quick Install
 
 **One-line installation:**
+
 ```bash
 bash <(curl -s https://raw.githubusercontent.com/hoomaanf/FelfelDM/main/build_and_install.sh)
 ```
 
 **Or manually:**
+
 ```bash
 # 1. Clone the repository
 git clone https://github.com/hoomaanf/FelfelDM.git
@@ -101,6 +107,7 @@ bash <(curl -s https://raw.githubusercontent.com/hoomaanf/FelfelDM/main/uninstal
 ## 🚀 Usage
 
 ### Running the Application
+
 ```bash
 # From terminal
 python3 main.py
@@ -110,34 +117,39 @@ FelfelDM
 ```
 
 ### Adding Downloads
+
 1. Click **Add** button or press `Ctrl+N`
 2. Enter URLs (one per line)
 3. Select queue and options
 4. Click OK
 
 ### Managing Queues
+
 - **Start/Pause**: Control entire queues
 - **Schedule**: Set time windows for downloads
 - **Priority**: Create queues for different categories
 
 ### Download Controls
+
 - **Pause/Resume**: Individual download control
 - **Remove**: From list or delete files
 - **Clear Completed**: Remove finished downloads
 
 ### Keyboard Shortcuts
-| Shortcut | Action |
-|----------|--------|
-| `Ctrl+N` | Add downloads |
+
+| Shortcut | Action           |
+| -------- | ---------------- |
+| `Ctrl+N` | Add downloads    |
 | `Ctrl+Q` | Quit application |
-| `Ctrl+,` | Open settings |
-| `F5` | Refresh table |
+| `Ctrl+,` | Open settings    |
+| `F5`     | Refresh table    |
 
 ---
 
 ## 🌐 Browser Extension
 
 ### Features
+
 - 📥 **One-click Download** - Add current page to FelfelDM
 - 🖱️ **Context Menu** - Right-click links, images, videos
 - 🔗 **Selected Links** - Download multiple links from selection
@@ -147,12 +159,14 @@ FelfelDM
 ### Installation
 
 #### Firefox
+
 1. Open `about:debugging`
 2. Click **This Firefox**
 3. Click **Load Temporary Add-on**
 4. Select `FelfelDM-extension/manifest-firefox.json`
 
 #### Chrome/Chromium
+
 1. Open `chrome://extensions/`
 2. Enable **Developer mode**
 3. Click **Load unpacked**
@@ -163,6 +177,7 @@ FelfelDM
 ## 🔧 Building from Source
 
 ### With PyInstaller
+
 ```bash
 # Install dependencies
 pip install pyinstaller
@@ -175,6 +190,7 @@ pyinstaller --onefile --windowed --name FelfelDM --icon=logo/icon256.png --add-d
 ```
 
 ### With Nuitka
+
 ```bash
 # Install Nuitka
 pip install nuitka
@@ -191,18 +207,21 @@ python -m nuitka --standalone --onefile --enable-plugin=pyqt6 --include-package=
 ## ⚙️ Configuration
 
 ### Application Settings
+
 - **aria2 RPC**: Host, port, and secret key
 - **Download Options**: Max concurrent, retry attempts
 - **Speed Limit**: Global download speed limit
 - **Auto Cleanup**: Auto-remove completed downloads
 
 ### Queue Settings
+
 - **Save Path**: Custom download directory
 - **Max Concurrent**: Maximum parallel downloads
 - **Schedule**: Time windows and days
 
 ### Configuration File
-Location: `~/.config/dlmanager/data.json`
+
+Location: `~/.config/felfelDM/data.json`
 
 ---
 
@@ -237,6 +256,7 @@ FelfelDM/
 ## 🐛 Troubleshooting
 
 ### aria2 not found
+
 ```bash
 # Arch
 sudo pacman -S aria2
@@ -246,16 +266,19 @@ sudo apt install aria2
 ```
 
 ### Module not found
+
 ```bash
 pip install -r requirements.txt
 ```
 
 ### Extension not connecting
+
 1. Make sure FelfelDM is running
 2. Check local server: `curl http://localhost:8765/ping`
 3. Restart the application
 
 ### Permission denied
+
 ```bash
 chmod +x main.py
 ```
