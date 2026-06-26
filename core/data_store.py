@@ -65,7 +65,7 @@ class Queue:
 
 
 class DataStore:
-    PATH = os.path.expanduser("~/.config/dlmanager/data.json")
+    PATH = os.path.expanduser("~/.config/felfelDM/data.json")
 
     def __init__(self):
         os.makedirs(os.path.dirname(self.PATH), exist_ok=True)
