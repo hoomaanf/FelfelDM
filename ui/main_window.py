@@ -531,7 +531,6 @@ class MainWindow(QMainWindow):
                                 QSystemTrayIcon.MessageIcon.Information, 2000)
 
     def _clear_completed_downloads(self):
-        """پاک کردن دانلودهای کامل شده از صف و aria2"""
         q = self._current_queue()
         if not q:
             return
@@ -583,7 +582,6 @@ class MainWindow(QMainWindow):
                             QSystemTrayIcon.MessageIcon.Information, 2000)
 
     def _update_progress_bar(self):
-        """به‌روزرسانی نوار پیشرفت"""
         q = self._current_queue()
         total_size = 0
         completed_size = 0
@@ -657,7 +655,6 @@ class MainWindow(QMainWindow):
             
             
     def _add_downloads_from_extension(self, urls):
-        """اضافه کردن دانلود از اکستنشن با استفاده از AddDownload Dialog"""
         if not urls:
             return
         
@@ -886,7 +883,6 @@ class MainWindow(QMainWindow):
             self._refresh_table()
 
     def _remove_selected(self):
-        """حذف دانلودهای انتخاب شده با گزینه حذف فایل"""
         selected = self.table.selectionModel().selectedRows()
         if not selected:
             QMessageBox.information(self, "Info", "No downloads selected.")
@@ -1037,7 +1033,6 @@ class MainWindow(QMainWindow):
         self.model.update_rows(filtered)
 
     def _refresh_table(self):
-        """به‌روزرسانی جدول با اطلاعات دانلودهای صف جاری"""
         q = self._current_queue()
         
         if not q:

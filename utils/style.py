@@ -10,7 +10,6 @@ from PyQt6.QtGui import QPalette, QColor, QBrush, QPen, QFont, QIcon
 # ─── Custom Style for SpinBox Arrows ──────────────────────────────────────────
 
 class CustomProxyStyle(QProxyStyle):
-    """استایل سفارشی برای نمایش فلش‌های SpinBox"""
     
     def drawPrimitive(self, element, option, painter, widget=None):
         if element == QStyle.PrimitiveElement.PE_IndicatorSpinUp:
@@ -63,7 +62,6 @@ class CustomProxyStyle(QProxyStyle):
 # ─── Style Setup ──────────────────────────────────────────────────────────────
 
 def setup_style(app):
-    """تنظیم استایل با آیکون‌های پاپیروس و تشخیص خودکار تم"""
     
     is_dark = True
     try:

@@ -33,7 +33,6 @@ def get_category(filename):
     return '📁 Other'
 
 def get_icon(name, fallback=None):
-    """گرفتن آیکون از تم فعلی با fallback"""
     icon = QIcon.fromTheme(name)
     if icon.isNull() and fallback:
         icon = QIcon.fromTheme(fallback)

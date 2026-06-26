@@ -4,7 +4,6 @@ from http.server import HTTPServer, BaseHTTPRequestHandler
 from PyQt6.QtCore import QThread, pyqtSignal, QObject
 
 class ServerThread(QThread):
-    """سرور در ترد جداگانه"""
     
     urls_received = pyqtSignal(list)  # سیگنال برای ارسال لینک‌ها
     
@@ -15,7 +14,6 @@ class ServerThread(QThread):
         self.running = False
     
     def run(self):
-        """اجرای سرور در ترد جداگانه"""
         try:
             self.server = HTTPServer(('localhost', self.port), Handler)
             self.server.server_thread = self  # ارجاع به ترد
@@ -34,7 +32,6 @@ class ServerThread(QThread):
             print(f"❌ Server failed: {e}")
     
     def stop(self):
-        """متوقف کردن سرور"""
         self.running = False
         if self.server:
             try:
@@ -48,7 +45,6 @@ class ServerThread(QThread):
 
 
 class Handler(BaseHTTPRequestHandler):
-    """مدیریت درخواست‌های HTTP"""
     
     def do_OPTIONS(self):
         self.send_response(200)
@@ -98,14 +94,12 @@ class Handler(BaseHTTPRequestHandler):
 
 
 class LocalServer:
-    """مدیریت سرور محلی"""
     
     def __init__(self, main_window=None):
         self.main_window = main_window
         self.thread = None
     
     def start(self, port=8765):
-        """شروع سرور"""
         if self.thread and self.thread.isRunning():
             return True
         
@@ -134,11 +128,9 @@ class LocalServer:
             return False
     
     def stop(self):
-        """متوقف کردن سرور"""
         if self.thread:
             self.thread.stop()
             self.thread = None
     
     def is_running(self):
-        """بررسی وضعیت سرور"""
         return self.thread and self.thread.isRunning()

@@ -5,7 +5,6 @@ from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QColor, QPalette
 
 class ProgressDelegate(QStyledItemDelegate):
-    """نمایش پیشرفت به صورت نوار در جدول"""
     def paint(self, painter, option, index):
         if index.column() == 2:
             text = index.model().data(index, Qt.ItemDataRole.DisplayRole)

@@ -43,7 +43,6 @@ class Queue:
         return q
 
     def is_scheduled_now(self):
-        """بررسی اینکه آیا الان زمان اجرای صف است"""
         if not self.schedule_enabled:
             return True
         now = datetime.now()

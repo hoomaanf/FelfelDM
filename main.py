@@ -12,7 +12,6 @@ from ui.main_window import MainWindow
 from utils.style import setup_style, CustomProxyStyle
 
 def main():
-    """نقطه ورود اصلی برنامه"""
     
     # تنظیمات High DPI برای نمایش بهتر در صفحه‌های با رزولوشن بالا
     QApplication.setHighDpiScaleFactorRoundingPolicy(

@@ -105,7 +105,6 @@ class DownloadTableModel(QAbstractTableModel):
         return self.rows[row_idx].get("gid") if 0 <= row_idx < len(self.rows) else None
 
     def sort(self, column, order=Qt.SortOrder.AscendingOrder):
-        """مرتب‌سازی بر اساس ستون انتخاب شده"""
         if column < 0 or column >= len(self.COLS):
             return
         
@@ -130,7 +129,6 @@ class DownloadTableModel(QAbstractTableModel):
         self.layoutChanged.emit()
     
     def _get_progress_value(self, row):
-        """محاسبه مقدار پیشرفت برای مرتب‌سازی"""
         total = int(row.get("totalLength", 0))
         completed = int(row.get("completedLength", 0))
         if total > 0:
@@ -138,7 +136,6 @@ class DownloadTableModel(QAbstractTableModel):
         return 0
     
     def _get_eta_value(self, row):
-        """محاسبه مقدار ETA برای مرتب‌سازی"""
         total = int(row.get("totalLength", 0))
         completed = int(row.get("completedLength", 0))
         speed = int(row.get("downloadSpeed", 0))
