@@ -14,6 +14,7 @@ from ui.table_model import DownloadTableModel
 from ui.delegates import ProgressDelegate
 from utils.helpers import format_size, format_speed, get_category, get_icon
 from core.local_server import LocalServer
+from utils.helpers import get_resource_path
 
 class MainWindow(QMainWindow):
     def __init__(self):
@@ -32,7 +33,7 @@ class MainWindow(QMainWindow):
         
         if not default_exists:
             default_queue = Queue("Default", paused=True)
-            self.store.queues.insert(0, default_queue)  # اول لیست قرار بده
+            self.store.queues.insert(0, default_queue)  
             self.store.save()
             
         self.aria2 = Aria2RPC(
@@ -60,7 +61,7 @@ class MainWindow(QMainWindow):
         root.setContentsMargins(0, 0, 0, 0)
         root.setSpacing(0)
 
-        # ─── سایدبار (با QSplitter برای تغییر اندازه) ──────────────────────
+        
         splitter = QSplitter(Qt.Orientation.Horizontal)
         splitter.setChildrenCollapsible(False)
         splitter.setHandleWidth(4)
@@ -74,7 +75,7 @@ class MainWindow(QMainWindow):
             }
         """)
 
-        # ─── سایدبار ──────────────────────────────────────────────────────────
+        
         sidebar = QWidget()
         sidebar.setObjectName("sidebar")
         sidebar.setMinimumWidth(180)
@@ -146,13 +147,13 @@ class MainWindow(QMainWindow):
         sb_lay.addWidget(status_group)
         sb_lay.addStretch()
 
-        # ─── بخش اصلی ──────────────────────────────────────────────────────────
+        
         main_area = QWidget()
         ma_lay = QVBoxLayout(main_area)
         ma_lay.setContentsMargins(0, 0, 0, 0)
         ma_lay.setSpacing(0)
 
-        # تولبار
+        
         toolbar = QWidget()
         toolbar.setStyleSheet("""
             QWidget {
@@ -218,7 +219,7 @@ class MainWindow(QMainWindow):
 
         ma_lay.addWidget(toolbar)
 
-        # جدول
+        
         self.table = QTableView()
         self.table.setTextElideMode(Qt.TextElideMode.ElideRight)
         self.table.setWordWrap(False)   
@@ -236,7 +237,7 @@ class MainWindow(QMainWindow):
         self.table.sortByColumn(0, Qt.SortOrder.AscendingOrder)
         ma_lay.addWidget(self.table)
 
-        # نوار وضعیت
+        
         self.statusBar().setStyleSheet("QStatusBar { background-color: #2d2d30; color: #efeff1; }")
         self.progress_bar = QProgressBar()
         self.progress_bar.setMaximum(100)
@@ -260,7 +261,7 @@ class MainWindow(QMainWindow):
 
         root.addWidget(splitter)
 
-        # منو
+        
         mb = self.menuBar()
 
         file_menu = mb.addMenu("&File")
@@ -303,14 +304,12 @@ class MainWindow(QMainWindow):
     def _build_tray(self):
         self.tray = QSystemTrayIcon(self)
         
-        # پیدا کردن آیکون تری
+        
         icon_paths = [
-            "logo/icon64.png",
-            "logo/icon128.png", 
-            "icons/icon64.png",
-            "icons/icon128.png",
-            "icon64.png",
-            "icon128.png"
+            get_resource_path("logo/icon64.png"),
+            get_resource_path("logo/icon128.png"), 
+            get_resource_path("icons/icon64.png"),
+            get_resource_path("icons/icon128.png"),
         ]
         
         icon_set = False
@@ -322,7 +321,7 @@ class MainWindow(QMainWindow):
                 break
         
         if not icon_set:
-            # fallback به آیکون Papirus
+            
             self.tray.setIcon(get_icon('download-manager'))
             print("⚠️ Tray icon: Using Papirus fallback")
 
@@ -355,7 +354,7 @@ class MainWindow(QMainWindow):
 
         QApplication.quit()
 
-    # ─── مدیریت صف ──────────────────────────────────────────────────────────
+    
 
     def _on_queue_changed(self, idx):
         if idx >= 0:
@@ -604,7 +603,7 @@ class MainWindow(QMainWindow):
     def _add_queue(self):
         name, ok = QInputDialog.getText(self, "New Queue", "Queue name:")
         if ok and name.strip():
-            # جلوگیری از ایجاد صف با اسم Default
+            
             if name.strip() == "Default":
                 QMessageBox.warning(self, "Error", "Queue name 'Default' is reserved.")
                 return
@@ -637,7 +636,7 @@ class MainWindow(QMainWindow):
         if not q:
             return
         
-        # 🔥 جلوگیری از پاک کردن صف Default
+        
         if q.name == "Default":
             QMessageBox.warning(self, "Error", "Cannot delete the Default queue.")
             return
@@ -658,21 +657,21 @@ class MainWindow(QMainWindow):
         if not urls:
             return
         
-        # برنامه رو جلو بیار
+        
         self.show()
         self.raise_()
         self.activateWindow()
         
-        # پیدا کردن index صف Default
+        
         default_idx = 0
         for i, q in enumerate(self.store.queues):
             if q.name == "Default":
                 default_idx = i
                 break
         
-        # ایجاد دیالوگ AddDownload با صف Default انتخاب شده
+        
         dlg = AddDownloadDialog(self.store.queues, default_idx, self)
-        dlg.url_edit.setPlainText("\n".join(urls))  # لینک‌ها رو پر کن
+        dlg.url_edit.setPlainText("\n".join(urls))  
         
         if dlg.exec():
             d = dlg.get_data()
@@ -890,13 +889,13 @@ class MainWindow(QMainWindow):
 
         count = len(selected)
         
-        # دیالوگ انتخاب روش حذف
+        
         msg = QMessageBox(self)
         msg.setWindowTitle("Remove Downloads")
         msg.setText(f"Remove {count} download(s)?")
         msg.setInformativeText("Choose what to do with the downloaded files:")
         
-        # دکمه‌ها
+        
         btn_remove_only = msg.addButton("Remove from List Only", QMessageBox.ButtonRole.ActionRole)
         btn_remove_files = msg.addButton("Remove & Delete Files", QMessageBox.ButtonRole.DestructiveRole)
         btn_cancel = msg.addButton("Cancel", QMessageBox.ButtonRole.RejectRole)
@@ -919,7 +918,7 @@ class MainWindow(QMainWindow):
                 gids_to_remove.append(gid)
         
         for gid in gids_to_remove:
-            # گرفتن اطلاعات فایل قبل از حذف
+            
             file_paths = []
             if delete_files and gid in self._all_downloads:
                 files = self._all_downloads[gid].get("files", [])
@@ -928,22 +927,22 @@ class MainWindow(QMainWindow):
                     if path and os.path.exists(path):
                         file_paths.append(path)
             
-            # حذف از aria2
+            
             try:
                 self.aria2.remove(gid)
             except Exception as e:
                 print(f"⚠ Could not remove GID {gid} from aria2: {e}")
             
-            # حذف از صف‌ها
+            
             for q in self.store.queues:
                 if gid in q.downloads:
                     q.downloads.remove(gid)
             
-            # حذف از کش
+            
             if gid in self._all_downloads:
                 del self._all_downloads[gid]
             
-            # حذف فایل‌ها (اگر کاربر انتخاب کرده باشه)
+            
             if delete_files:
                 for path in file_paths:
                     try:
@@ -1041,7 +1040,7 @@ class MainWindow(QMainWindow):
 
         all_rows = []
         for gid in q.downloads:
-            # اگر دانلود در کش وجود دارد
+            
             if gid in self._all_downloads:
                 row = self._all_downloads[gid].copy()
                 current_status = row.get('status')
@@ -1050,9 +1049,9 @@ class MainWindow(QMainWindow):
                     if current_status == 'paused' and current_status not in ['complete', 'removed']:
                         row['status'] = 'waiting'
                         row['downloadSpeed'] = 0
-                    # اگر دانلود active هست، همون active بمونه
+                    
                     elif current_status == 'active':
-                        # سرعت رو از کش بگیر
+                        
                         pass
                     elif current_status == 'error':
                         row['status'] = 'waiting'
@@ -1069,13 +1068,13 @@ class MainWindow(QMainWindow):
                 
                 all_rows.append(row)
             
-            # اگر دانلود در کش وجود ندارد، از aria2 اطلاعات بگیریم
+            
             else:
                 try:
-                    # دریافت اطلاعات دانلود از aria2 با tell_status
+                    
                     dl_info = self.aria2.tell_status(gid)
                     if dl_info:
-                        # استخراج نام فایل
+                        
                         name = "Unknown File"
                         files = dl_info.get("files", [])
                         if files and files[0].get("path"):
@@ -1088,22 +1087,22 @@ class MainWindow(QMainWindow):
                             info = bittorrent.get("info", {})
                             name = info.get("name", "Unknown File")
                         
-                        # دریافت وضعیت واقعی از aria2
+                        
                         real_status = dl_info.get("status", "unknown")
                         
-                        # استخراج سرعت دانلود
+                        
                         speed = dl_info.get("downloadSpeed", 0)
                         try:
                             speed = int(speed)
                         except (ValueError, TypeError):
                             speed = 0
                         
-                        # ساخت ردیف
+                        
                         row = {
                             "gid": gid,
                             "name": name,
                             "category": get_category(name),
-                            "status": real_status,  # وضعیت واقعی از aria2
+                            "status": real_status,  
                             "totalLength": dl_info.get("totalLength", 0),
                             "completedLength": dl_info.get("completedLength", 0),
                             "downloadSpeed": speed,
@@ -1112,20 +1111,20 @@ class MainWindow(QMainWindow):
                             "errorMessage": dl_info.get("errorMessage", "")
                         }
                         
-                        # اگر صف Pause است و دانلود کامل یا خطا نیست، paused کن
+                        
                         if q.paused and real_status not in ['complete', 'error', 'removed']:
                             row['status'] = 'paused'
                             row['downloadSpeed'] = 0
-                        # اگر صف در حال اجراست و دانلود paused است، به waiting تغییر بده
+                        
                         elif not q.paused and real_status == 'paused' and real_status not in ['complete', 'error', 'removed']:
                             row['status'] = 'waiting'
                             row['downloadSpeed'] = 0
                         
-                        # ذخیره در کش
+                        
                         self._all_downloads[gid] = row
                         all_rows.append(row)
                     else:
-                        # اگر اطلاعاتی دریافت نشد، یک ردیف پیش‌فرض با وضعیت unknown
+                        
                         row = {
                             "gid": gid,
                             "name": f"Unknown ({gid[:8]})",
@@ -1141,7 +1140,7 @@ class MainWindow(QMainWindow):
                         all_rows.append(row)
                 
                 except Exception as e:
-                    # در صورت خطا، دانلود را با وضعیت error نمایش بده
+                    
                     print(f"⚠ Could not fetch info for GID {gid}: {e}")
                     row = {
                         "gid": gid,
@@ -1157,7 +1156,7 @@ class MainWindow(QMainWindow):
                     }
                     all_rows.append(row)
 
-        # اعمال فیلتر جستجو
+        
         search_text = self.search_box.text().strip()
         if search_text:
             filtered_rows = []
@@ -1169,13 +1168,13 @@ class MainWindow(QMainWindow):
         else:
             rows_to_show = all_rows
 
-        # به‌روزرسانی مدل
+        
         current_sort_col = self.model.sort_column
         current_sort_order = self.model.sort_order
         
         self.model.update_rows(rows_to_show)
         
-        # اعمال مرتب‌سازی قبلی
+        
         if current_sort_col >= 0 and len(rows_to_show) > 0:
             self.model.sort(current_sort_col, current_sort_order)
             
@@ -1255,7 +1254,7 @@ class MainWindow(QMainWindow):
 
         self._apply_settings_to_aria2()
 
-        # ─── پاک کردن خودکار کامل شده‌ها ──────────────────────────────────────
+        
         if self.store.settings.get("auto_clear_completed", False):
             q = self._current_queue()
             if q:
@@ -1273,10 +1272,10 @@ class MainWindow(QMainWindow):
                     self.store.save()
                     self._refresh_queue_list()
 
-        # ─── به‌روزرسانی نوار پیشرفت ──────────────────────────────────────────
+        
         self._update_progress_bar()
 
-        # ─── بررسی Shutdown ────────────────────────────────────────────────────
+        
         if self.shutdown_cb.isChecked():
             total_active = int(stat.get("numActive", 0))
             total_waiting = int(stat.get("numWaiting", 0))
@@ -1295,7 +1294,7 @@ class MainWindow(QMainWindow):
                                         QSystemTrayIcon.MessageIcon.Information, 3000)
                     os.system("systemctl poweroff")
 
-        # ─── به‌روزرسانی کش دانلودها ──────────────────────────────────────────
+        
         all_downloads_dict = {}
         
         def process_dl(dl, default_status):
@@ -1337,19 +1336,19 @@ class MainWindow(QMainWindow):
                 "errorMessage": dl.get("errorMessage", "")
             }
 
-        # پردازش active
+        
         for dl in result["active"]:
             data = process_dl(dl, "active")
             if data:
                 all_downloads_dict[data["gid"]] = data
 
-        # پردازش waiting
+        
         for dl in result["waiting"]:
             data = process_dl(dl, "waiting")
             if data and data["gid"] not in all_downloads_dict:
                 all_downloads_dict[data["gid"]] = data
 
-        # پردازش stopped
+        
         for dl in result["stopped"]:
             gid = dl.get("gid")
             if gid and gid not in all_downloads_dict:
@@ -1357,7 +1356,7 @@ class MainWindow(QMainWindow):
                 if data:
                     all_downloads_dict[gid] = data
 
-        # ─── حفظ وضعیت Paused از کش قبلی ──────────────────────────────────────
+        
         for gid, old_data in self._all_downloads.items():
             if gid in all_downloads_dict and old_data.get("status") == "paused":
                 all_downloads_dict[gid]["status"] = "paused"
@@ -1370,20 +1369,20 @@ class MainWindow(QMainWindow):
                 for gid in q.downloads:
                     if gid in self._all_downloads:
                         status = self._all_downloads[gid].get("status")
-                        # فقط دانلودهای active و waiting رو pause کن
+                        
                         if status in ["active", "waiting"]:
                             self.aria2.pause(gid)
                             self._all_downloads[gid]["status"] = "paused"
                             self._all_downloads[gid]["downloadSpeed"] = 0
-                        # وضعیت‌های complete و error رو دست نزن
+                        
                         elif status in ["complete", "error", "removed"]:
-                            # هیچ کاری نکن، وضعیتشون رو حفظ کن
+                            
                             pass
 
-        # ─── به‌روزرسانی جدول ──────────────────────────────────────────────────
+        
         self._refresh_table()
         
-        # ─── به‌روزرسانی وضعیت صف ──────────────────────────────────────────────
+        
         self._update_queue_status()
     
     def _start_aria2_if_needed(self):

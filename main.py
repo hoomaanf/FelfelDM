@@ -13,24 +13,23 @@ from utils.style import setup_style, CustomProxyStyle
 
 def main():
     
-    # تنظیمات High DPI برای نمایش بهتر در صفحه‌های با رزولوشن بالا
     QApplication.setHighDpiScaleFactorRoundingPolicy(
         Qt.HighDpiScaleFactorRoundingPolicy.PassThrough
     )
     
-    # تنظیمات محیط برای Wayland و KDE
     os.environ.setdefault("QT_QPA_PLATFORM", "wayland")
     os.environ.setdefault("QT_QPA_PLATFORMTHEME", "kde")
     
-    # ایجاد اپلیکیشن
     app = QApplication(sys.argv)
     
-    # 🆕 ست کردن آیکون برنامه (قبل از هر چیز)
+    if getattr(sys, 'frozen', False) and hasattr(sys, '_MEIPASS'):
+        base_path = sys._MEIPASS
+    else:
+        base_path = os.path.dirname(os.path.abspath(__file__))
+
     icon_paths = [
-        "logo/icon256.png",
-        "logo/icon128.png", 
-        "logo/icon256.png",
-        "logo/icon128.png"
+        os.path.join(base_path, "logo/icon256.png"),
+        os.path.join(base_path, "logo/icon128.png")
     ]
     
     icon_set = False
@@ -44,23 +43,17 @@ def main():
     if not icon_set:
         print("⚠️ No icon found! Using default.")
     
-    # اعمال استایل سفارشی برای SpinBox (فلش‌های بالا/پایین)
     app.setStyle(CustomProxyStyle())
     
-    # تنظیم نام اپلیکیشن
     app.setApplicationName("FelfelDM")
     
-    # جلوگیری از خروج برنامه وقتی آخرین پنجره بسته میشه
     app.setQuitOnLastWindowClosed(False)
     
-    # اعمال استایل کلی (تم تاریک/روشن، آیکون‌ها و ...)
     setup_style(app)
     
-    # ایجاد و نمایش پنجره اصلی
     win = MainWindow()
     win.show()
     
-    # اجرای حلقه اصلی برنامه
     sys.exit(app.exec())
 
 if __name__ == "__main__":

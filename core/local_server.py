@@ -5,7 +5,7 @@ from PyQt6.QtCore import QThread, pyqtSignal, QObject
 
 class ServerThread(QThread):
     
-    urls_received = pyqtSignal(list)  # سیگنال برای ارسال لینک‌ها
+    urls_received = pyqtSignal(list)  
     
     def __init__(self, port=8765):
         super().__init__()
@@ -16,7 +16,7 @@ class ServerThread(QThread):
     def run(self):
         try:
             self.server = HTTPServer(('localhost', self.port), Handler)
-            self.server.server_thread = self  # ارجاع به ترد
+            self.server.server_thread = self  
             self.running = True
             print(f"✅ Local server running on http://localhost:{self.port}")
             
@@ -72,7 +72,7 @@ class Handler(BaseHTTPRequestHandler):
                 urls = data.get('urls', [])
                 
                 if urls and hasattr(self.server, 'server_thread'):
-                    # ارسال سیگنال به ترد اصلی
+                    
                     self.server.server_thread.urls_received.emit(urls)
                 
                 self.send_response(200)
@@ -104,7 +104,7 @@ class LocalServer:
             return True
         
         try:
-            # تست پورت
+            
             sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             sock.settimeout(1)
             result = sock.connect_ex(('localhost', port))
@@ -114,10 +114,10 @@ class LocalServer:
                 print(f"⚠️ Port {port} already in use")
                 return True
             
-            # ایجاد و راه‌اندازی ترد
+            
             self.thread = ServerThread(port)
             
-            # اتصال سیگنال به متد اصلی
+            
             self.thread.urls_received.connect(self.main_window._add_downloads_from_extension)
             
             self.thread.start()

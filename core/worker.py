@@ -38,17 +38,13 @@ class BackendWorker(QThread):
             status_changed = False
 
             for queue in self.store.queues:
-                # ─── همه GIDهایی که توی all_server_states هستن رو نگه دار ────
-                # اما اگه GID جدیدی هست که توی queue.downloads نیست، اضافه کن
                 current_gids = set(queue.downloads)
                 server_gids = set(all_server_states.keys())       
                 
-                # GIDهایی که توی سرور نیستن رو حذف کن
                 queue.downloads = [g for g in queue.downloads if g in all_server_states]
                 
                 is_scheduled_time = queue.is_scheduled_now()
                 
-                # اگر صف Pause هست یا زمانش نیست
                 if queue.paused or not is_scheduled_time:
                     for g in queue.downloads:
                         if all_server_states.get(g) == 'active':
@@ -56,7 +52,6 @@ class BackendWorker(QThread):
                             status_changed = True
                     continue
 
-                # اگر زمان هست و صف Pause نیست، Resume کن
                 q_active = sum(1 for g in queue.downloads if all_server_states.get(g) == 'active')
                 if q_active < queue.max_concurrent:
                     slots = queue.max_concurrent - q_active

@@ -92,7 +92,6 @@ class DataStore:
             self.queues = [Queue.from_dict(q) for q in data.get("queues", [])]
             self.settings.update(data.get("settings", {}))
             
-            # اطمینان از اینکه هر صف تنظیمات درست داره
             for q in self.queues:
                 if not hasattr(q, 'paused'):
                     q.paused = True
