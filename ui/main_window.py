@@ -90,7 +90,8 @@ class MainWindow(QMainWindow):
         sb_lay.setSpacing(8)
 
         header_lay = QHBoxLayout()
-         
+        
+ 
         header_lay.addStretch()
         sb_lay.addLayout(header_lay)
 
@@ -885,37 +886,94 @@ class MainWindow(QMainWindow):
             self._refresh_table()
 
     def _remove_selected(self):
+        """حذف دانلودهای انتخاب شده با گزینه حذف فایل"""
         selected = self.table.selectionModel().selectedRows()
         if not selected:
             QMessageBox.information(self, "Info", "No downloads selected.")
             return
 
         count = len(selected)
-        if QMessageBox.question(self, "Remove", f"Remove {count} download(s)?") == QMessageBox.StandardButton.Yes:
-            removed = 0
-            gids_to_remove = []
-            for idx in selected:
-                gid = self.model.get_gid(idx.row())
-                if gid:
-                    gids_to_remove.append(gid)
-
-            for gid in gids_to_remove:
+        
+        # دیالوگ انتخاب روش حذف
+        msg = QMessageBox(self)
+        msg.setWindowTitle("Remove Downloads")
+        msg.setText(f"Remove {count} download(s)?")
+        msg.setInformativeText("Choose what to do with the downloaded files:")
+        
+        # دکمه‌ها
+        btn_remove_only = msg.addButton("Remove from List Only", QMessageBox.ButtonRole.ActionRole)
+        btn_remove_files = msg.addButton("Remove & Delete Files", QMessageBox.ButtonRole.DestructiveRole)
+        btn_cancel = msg.addButton("Cancel", QMessageBox.ButtonRole.RejectRole)
+        
+        msg.setDefaultButton(btn_remove_only)
+        msg.exec()
+        
+        clicked = msg.clickedButton()
+        
+        if clicked == btn_cancel:
+            return
+        
+        delete_files = (clicked == btn_remove_files)
+        
+        removed = 0
+        gids_to_remove = []
+        for idx in selected:
+            gid = self.model.get_gid(idx.row())
+            if gid:
+                gids_to_remove.append(gid)
+        
+        for gid in gids_to_remove:
+            # گرفتن اطلاعات فایل قبل از حذف
+            file_paths = []
+            if delete_files and gid in self._all_downloads:
+                files = self._all_downloads[gid].get("files", [])
+                for f in files:
+                    path = f.get("path")
+                    if path and os.path.exists(path):
+                        file_paths.append(path)
+            
+            # حذف از aria2
+            try:
                 self.aria2.remove(gid)
-                for q in self.store.queues:
-                    if gid in q.downloads:
-                        q.downloads.remove(gid)
-                if gid in self._all_downloads:
-                    del self._all_downloads[gid]
-                removed += 1
-
-            self.store.save()
-            self._refresh_table()
-            self._refresh_queue_list()
-            self._update_queue_buttons()
-
-            if removed > 0:
-                self.tray.showMessage("FelfelDM", f"Removed {removed} download(s)",
-                                     QSystemTrayIcon.MessageIcon.Information, 2000)
+            except Exception as e:
+                print(f"⚠ Could not remove GID {gid} from aria2: {e}")
+            
+            # حذف از صف‌ها
+            for q in self.store.queues:
+                if gid in q.downloads:
+                    q.downloads.remove(gid)
+            
+            # حذف از کش
+            if gid in self._all_downloads:
+                del self._all_downloads[gid]
+            
+            # حذف فایل‌ها (اگر کاربر انتخاب کرده باشه)
+            if delete_files:
+                for path in file_paths:
+                    try:
+                        if os.path.isfile(path):
+                            os.remove(path)
+                            print(f"🗑 Deleted file: {path}")
+                        elif os.path.isdir(path):
+                            import shutil
+                            shutil.rmtree(path)
+                            print(f"🗑 Deleted folder: {path}")
+                    except Exception as e:
+                        print(f"⚠ Could not delete {path}: {e}")
+            
+            removed += 1
+        
+        self.store.save()
+        self._refresh_table()
+        self._refresh_queue_list()
+        self._update_queue_buttons()
+        
+        if removed > 0:
+            msg_text = f"Removed {removed} download(s)"
+            if delete_files:
+                msg_text += " (files deleted)"
+            self.tray.showMessage("FelfelDM", msg_text,
+                                QSystemTrayIcon.MessageIcon.Information, 2000)
 
     def _selected_gid(self):
         idx = self.table.currentIndex()
