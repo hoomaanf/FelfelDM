@@ -19,7 +19,7 @@ class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
        
-        self.setWindowTitle("DL Manager")
+        self.setWindowTitle("FelfelDM")
         self.setMinimumSize(1050, 680)
 
         self.store = DataStore()
@@ -90,12 +90,7 @@ class MainWindow(QMainWindow):
         sb_lay.setSpacing(8)
 
         header_lay = QHBoxLayout()
-        icon = QLabel()
-        icon.setPixmap(get_icon('download-manager').pixmap(32, 32))
-        header_lay.addWidget(icon)
-        title = QLabel("<b>DL Manager</b>")
-        title.setStyleSheet("font-size: 16px; color: #efeff1;")
-        header_lay.addWidget(title)
+         
         header_lay.addStretch()
         sb_lay.addLayout(header_lay)
 
@@ -306,7 +301,29 @@ class MainWindow(QMainWindow):
 
     def _build_tray(self):
         self.tray = QSystemTrayIcon(self)
-        self.tray.setIcon(get_icon('download-manager'))
+        
+        # پیدا کردن آیکون تری
+        icon_paths = [
+            "logo/icon64.png",
+            "logo/icon128.png", 
+            "icons/icon64.png",
+            "icons/icon128.png",
+            "icon64.png",
+            "icon128.png"
+        ]
+        
+        icon_set = False
+        for path in icon_paths:
+            if os.path.exists(path):
+                self.tray.setIcon(QIcon(path))
+                icon_set = True
+                print(f"✅ Tray icon loaded from: {path}")
+                break
+        
+        if not icon_set:
+            # fallback به آیکون Papirus
+            self.tray.setIcon(get_icon('download-manager'))
+            print("⚠️ Tray icon: Using Papirus fallback")
 
         menu = QMenu()
         menu.addAction(get_icon('window'), "Show", self.show)
@@ -317,11 +334,10 @@ class MainWindow(QMainWindow):
         self.tray.show()
 
     def _show_about(self):
-        QMessageBox.about(self, "About DL Manager",
-            "<h2 style='color: #3daee9;'>DL Manager</h2>"
-            "<p>A modern download manager</p>"
-            "<p>Built with PyQt6 and aria2</p>"
-            "<p style='color: #95a5a6;'>Using Papirus icons</p>")
+        QMessageBox.about(self, "About FelfelDM",
+        "<h2 style='color: #e74c3c;'>🌶️ FelfelDM</h2>"
+        "<p>A modern download manager</p>"
+        "<p>Built with PyQt6 and aria2</p>")
 
     def closeEvent(self, e):
         e.ignore()
@@ -468,7 +484,7 @@ class MainWindow(QMainWindow):
                             self._all_downloads[gid]["status"] = "active"
         else:
             days_text = ", ".join(["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"][i] for i in q.days)
-            self.tray.showMessage("DL Manager", 
+            self.tray.showMessage("FelfelDM", 
                 f"⏰ Queue started. Waiting for schedule: {q.schedule_start.strftime('%H:%M')}-{q.schedule_end.strftime('%H:%M')} {days_text}",
                 QSystemTrayIcon.MessageIcon.Information, 4000)
 
@@ -477,7 +493,7 @@ class MainWindow(QMainWindow):
         self._update_queue_buttons()
 
         if resumed > 0:
-            self.tray.showMessage("DL Manager", f"Started {resumed} download(s)",
+            self.tray.showMessage("FelfelDM", f"Started {resumed} download(s)",
                                 QSystemTrayIcon.MessageIcon.Information, 2000)
 
     def _pause_current_queue(self):
@@ -507,10 +523,10 @@ class MainWindow(QMainWindow):
         self._update_queue_buttons()
 
         if paused > 0:
-            self.tray.showMessage("DL Manager", f"Paused {paused} download(s)",
+            self.tray.showMessage("FelfelDM", f"Paused {paused} download(s)",
                                 QSystemTrayIcon.MessageIcon.Information, 2000)
         else:
-            self.tray.showMessage("DL Manager", "No active downloads to pause",
+            self.tray.showMessage("FelfelDM", "No active downloads to pause",
                                 QSystemTrayIcon.MessageIcon.Information, 2000)
 
     def _clear_completed_downloads(self):
@@ -562,7 +578,7 @@ class MainWindow(QMainWindow):
         self._refresh_table()
         self._update_progress_bar()
         
-        self.tray.showMessage("DL Manager", f"Removed {removed} completed download(s) from queue and aria2",
+        self.tray.showMessage("FelfelDM", f"Removed {removed} completed download(s) from queue and aria2",
                             QSystemTrayIcon.MessageIcon.Information, 2000)
 
     def _update_progress_bar(self):
@@ -709,10 +725,10 @@ class MainWindow(QMainWindow):
                         self.aria2.resume(gid)
                         self._all_downloads[gid]["status"] = "active"
                 self._refresh_table()
-                self.tray.showMessage("DL Manager", f"✅ Added {added} download(s) to running queue",
+                self.tray.showMessage("FelfelDM", f"✅ Added {added} download(s) to running queue",
                                     QSystemTrayIcon.MessageIcon.Information, 2000)
             elif added > 0:
-                self.tray.showMessage("DL Manager", f"✅ Added {added} download(s) in paused state",
+                self.tray.showMessage("FelfelDM", f"✅ Added {added} download(s) in paused state",
                                     QSystemTrayIcon.MessageIcon.Information, 2000)
             
             self._refresh_table()
@@ -775,10 +791,10 @@ class MainWindow(QMainWindow):
                         self.aria2.resume(gid)
                         self._all_downloads[gid]["status"] = "active"
                 self._refresh_table()
-                self.tray.showMessage("DL Manager", f"✅ Added {added} download(s) to running queue",
+                self.tray.showMessage("FelfelDM", f"✅ Added {added} download(s) to running queue",
                                     QSystemTrayIcon.MessageIcon.Information, 2000)
             elif added > 0:
-                self.tray.showMessage("DL Manager", f"✅ Added {added} download(s) in paused state",
+                self.tray.showMessage("FelfelDM", f"✅ Added {added} download(s) in paused state",
                                     QSystemTrayIcon.MessageIcon.Information, 2000)
 
             self._refresh_table()
@@ -898,7 +914,7 @@ class MainWindow(QMainWindow):
             self._update_queue_buttons()
 
             if removed > 0:
-                self.tray.showMessage("DL Manager", f"Removed {removed} download(s)",
+                self.tray.showMessage("FelfelDM", f"Removed {removed} download(s)",
                                      QSystemTrayIcon.MessageIcon.Information, 2000)
 
     def _selected_gid(self):
@@ -1161,7 +1177,7 @@ class MainWindow(QMainWindow):
             if not self._apply_settings_to_aria2():
                 self._restart_aria2()
             else:
-                self.tray.showMessage("DL Manager", "Settings applied successfully",
+                self.tray.showMessage("FelfelDM", "Settings applied successfully",
                                      QSystemTrayIcon.MessageIcon.Information, 2000)
 
     def _start_backend(self):
@@ -1182,7 +1198,7 @@ class MainWindow(QMainWindow):
         stat = result["stat"]
         self._last_calculated_global_speed = int(stat.get("downloadSpeed", 0))
         self.speed_lbl.setText(f"↓ {format_speed(self._last_calculated_global_speed)}")
-        self.tray.setToolTip(f"DL Manager — ↓ {format_speed(self._last_calculated_global_speed)}")
+        self.tray.setToolTip(f"FelfelDM — ↓ {format_speed(self._last_calculated_global_speed)}")
 
         self._apply_settings_to_aria2()
 
@@ -1222,7 +1238,7 @@ class MainWindow(QMainWindow):
                                     all_done = False
                                     break
                 if all_done:
-                    self.tray.showMessage("DL Manager", "All downloads complete! Shutting down...",
+                    self.tray.showMessage("FelfelDM", "All downloads complete! Shutting down...",
                                         QSystemTrayIcon.MessageIcon.Information, 3000)
                     os.system("systemctl poweroff")
 
