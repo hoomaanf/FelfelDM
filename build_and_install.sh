@@ -50,10 +50,17 @@ $PYINSTALLER_BIN \
     --add-data "ui:ui" \
     --add-data "core:core" \
     --add-data "utils:utils" \
-    --collect-all PyQt6 \
-    --hidden-import=PyQt6.QtWidgets \
+    --exclude-module PyQt6.QtWebEngineCore \
+    --exclude-module PyQt6.QtWebEngineWidgets \
+    --exclude-module PyQt6.Qt3DCore \
+    --exclude-module PyQt6.QtQuick \
+    --exclude-module PyQt6.QtNetworkWidgets \
+    --exclude-module PyQt6.QtBluetooth \
     --hidden-import=PyQt6.QtCore \
     --hidden-import=PyQt6.QtGui \
+    --hidden-import=PyQt6.QtWidgets \
+    --hidden-import=PyQt6.QtNetwork \
+    --hidden-import=requests \
     main.py 2>&1 | grep -v "WARNING:" | grep -v "already satisfies"
 
 if [ ! -f "dist/FelfelDM" ]; then
