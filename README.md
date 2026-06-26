@@ -1,4 +1,3 @@
-```markdown
 # 🌶️ FelfelDM
 
 <div align="center">
