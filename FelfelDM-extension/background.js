@@ -1,5 +1,12 @@
+// FelfelDM Extension - Background Script
+// Compatible with both Firefox and Chrome
+
 const SERVER = "http://localhost:8765";
 const ICON_URL = browser.runtime.getURL("icons/icon128.png");
+
+// ============================================
+// Ping & Send
+// ============================================
 
 async function ping() {
   try {
@@ -11,6 +18,8 @@ async function ping() {
 }
 
 async function send(urls) {
+  if (!urls || urls.length === 0) return false;
+
   const ok = await ping();
 
   if (!ok) {
@@ -20,7 +29,6 @@ async function send(urls) {
       title: "🌶️ FelfelDM",
       message: "FelfelDM is not running. Please open the app.",
     });
-
     return false;
   }
 
@@ -34,25 +42,34 @@ async function send(urls) {
     });
 
     if (r.ok) {
+      const data = await r.json();
       browser.notifications.create({
         type: "basic",
         iconUrl: ICON_URL,
         title: "🌶️ FelfelDM",
         message: `✅ Added ${urls.length} download(s)`,
       });
+      return true;
     }
-
-    return r.ok;
+    return false;
   } catch (e) {
     console.error(e);
     return false;
   }
 }
 
+// ============================================
+// Download Interception
+// ============================================
+
 const ignored = new Set();
 
 browser.downloads.onCreated.addListener(async (item) => {
-  if (!item.url.startsWith("http")) return;
+  if (!item.url || !item.url.startsWith("http")) return;
+
+  // Get storage setting
+  const data = await browser.storage.local.get("catchDownloads");
+  if (data.catchDownloads === false) return;
 
   if (ignored.has(item.url)) {
     ignored.delete(item.url);
@@ -65,12 +82,9 @@ browser.downloads.onCreated.addListener(async (item) => {
 
   try {
     await browser.downloads.cancel(item.id);
-
     setTimeout(async () => {
       try {
-        await browser.downloads.erase({
-          id: item.id,
-        });
+        await browser.downloads.erase({ id: item.id });
       } catch {}
     }, 300);
   } catch (e) {
@@ -78,7 +92,16 @@ browser.downloads.onCreated.addListener(async (item) => {
   }
 });
 
+// ============================================
+// Context Menus
+// ============================================
+
 browser.runtime.onInstalled.addListener(() => {
+  // Clear existing menus first (for Chrome)
+  if (browser.contextMenus.removeAll) {
+    browser.contextMenus.removeAll();
+  }
+
   browser.contextMenus.create({
     id: "download-link",
     title: "Download with FelfelDM",
@@ -108,67 +131,89 @@ browser.runtime.onInstalled.addListener(() => {
     title: "Download Current Page with FelfelDM",
     contexts: ["page"],
   });
+
+  browser.contextMenus.create({
+    id: "download-selected-links",
+    title: "Download Selected Links",
+    contexts: ["selection"],
+  });
 });
+
+// ============================================
+// Context Menu Handler
+// ============================================
 
 browser.contextMenus.onClicked.addListener(async (info, tab) => {
-  switch (info.menuItemId) {
-    case "download-link":
-      ignored.add(info.linkUrl);
-      await send([info.linkUrl]);
-      break;
+  try {
+    switch (info.menuItemId) {
+      case "download-link":
+        ignored.add(info.linkUrl);
+        await send([info.linkUrl]);
+        break;
 
-    case "download-image":
-      ignored.add(info.srcUrl);
-      await send([info.srcUrl]);
-      break;
+      case "download-image":
+      case "download-video":
+      case "download-audio":
+        ignored.add(info.srcUrl);
+        await send([info.srcUrl]);
+        break;
 
-    case "download-video":
-      ignored.add(info.srcUrl);
-      await send([info.srcUrl]);
-      break;
+      case "download-page":
+        ignored.add(tab.url);
+        await send([tab.url]);
+        break;
 
-    case "download-audio":
-      ignored.add(info.srcUrl);
-      await send([info.srcUrl]);
-      break;
+      case "download-selected-links": {
+        try {
+          // For Firefox: sendMessage, For Chrome: scripting
+          let links = [];
+          if (typeof browser.tabs.sendMessage === "function") {
+            links = await browser.tabs.sendMessage(tab.id, {
+              type: "getSelectedLinks",
+            });
+          } else {
+            // Chrome uses scripting.executeScript
+            const results = await browser.scripting.executeScript({
+              target: { tabId: tab.id },
+              func: () => {
+                const selection = window.getSelection();
+                if (!selection || selection.rangeCount === 0) return [];
+                const fragment = selection.getRangeAt(0).cloneContents();
+                return [
+                  ...new Set(
+                    [...fragment.querySelectorAll("a[href]")]
+                      .map((a) => a.href)
+                      .filter(Boolean),
+                  ),
+                ];
+              },
+            });
+            links = results[0]?.result || [];
+          }
 
-    case "download-page":
-      ignored.add(tab.url);
-      await send([tab.url]);
-      break;
-    case "download-selected-links": {
-      try {
-        const links = await browser.tabs.sendMessage(tab.id, {
-          type: "getSelectedLinks",
-        });
-
-        if (links && links.length) {
-          await send(links);
-        } else {
+          if (links && links.length) {
+            await send(links);
+          } else {
+            browser.notifications.create({
+              type: "basic",
+              iconUrl: ICON_URL,
+              title: "🌶️ FelfelDM",
+              message: "No links found in selection.",
+            });
+          }
+        } catch (e) {
+          console.error(e);
           browser.notifications.create({
             type: "basic",
-            iconUrl: "icon.png",
-            title: "FelfelDM",
-            message: "No links found in selection.",
+            iconUrl: ICON_URL,
+            title: "🌶️ FelfelDM",
+            message: "Error getting selected links.",
           });
         }
-      } catch (e) {
-        console.error(e);
+        break;
       }
-
-      break;
     }
+  } catch (e) {
+    console.error(e);
   }
-});
-
-browser.contextMenus.create({
-  id: "download-link",
-  title: "Download with FelfelDM",
-  contexts: ["link"],
-});
-
-browser.contextMenus.create({
-  id: "download-selected-links",
-  title: "Download Selected Links",
-  contexts: ["selection"],
 });
