@@ -23,15 +23,14 @@
 
 ## 📋 Table of Contents
 - [Features](#-features)
-- [Screenshots](#-screenshots)
 - [Installation](#-installation)
   - [Quick Install](#quick-install)
   - [Manual Install](#manual-install)
   - [Uninstall](#uninstall)
 - [Usage](#-usage)
 - [Browser Extension](#-browser-extension)
+- [Building from Source](#-building-from-source)
 - [Configuration](#-configuration)
-- [Development](#-development)
 - [Contributing](#-contributing)
 - [License](#-license)
 
@@ -57,22 +56,6 @@
 
 ---
 
-## 📸 Screenshots
-
-<div align="center">
-  <img src="screenshots/main-window.png" alt="Main Window" width="80%">
-  <br>
-  <em>Main Window</em>
-  <br><br>
-  <img src="screenshots/extension-popup.png" alt="Extension Popup" width="30%">
-  &nbsp;&nbsp;
-  <img src="screenshots/queue-settings.png" alt="Queue Settings" width="30%">
-  <br>
-  <em>Browser Extension & Queue Settings</em>
-</div>
-
----
-
 ## 🛠️ Installation
 
 ### Prerequisites
@@ -92,25 +75,20 @@ sudo dnf install python3 python3-pip aria2 git
 
 **One-line installation:**
 ```bash
-bash <(curl -s https://raw.githubusercontent.com/hoomaanf/FelfelDM/main/install.sh)
+bash <(curl -s https://raw.githubusercontent.com/hoomaanf/FelfelDM/main/build_and_install.sh)
 ```
 
 **Or manually:**
 ```bash
 # 1. Clone the repository
-git clone https://github.com/hoomaanf/FelfelDM.git ~/.local/share/felfeldm
-cd ~/.local/share/felfeldm
+git clone https://github.com/hoomaanf/FelfelDM.git
+cd FelfelDM
 
 # 2. Install dependencies
-pip install --user -r requirements.txt
+pip install -r requirements.txt
 
-# 3. Create launcher
-mkdir -p ~/.local/bin
-ln -sf ~/.local/share/felfeldm/main.py ~/.local/bin/felfeldm
-chmod +x ~/.local/bin/felfeldm
-
-# 4. Run
-felfeldm
+# 3. Run
+python3 main.py
 ```
 
 ### Uninstall
@@ -126,10 +104,10 @@ bash <(curl -s https://raw.githubusercontent.com/hoomaanf/FelfelDM/main/uninstal
 ### Running the Application
 ```bash
 # From terminal
-felfeldm
+python3 main.py
 
-# Or from application menu
-# Search for "FelfelDM"
+# Or after installation
+FelfelDM
 ```
 
 ### Adding Downloads
@@ -183,6 +161,34 @@ felfeldm
 
 ---
 
+## 🔧 Building from Source
+
+### With PyInstaller
+```bash
+# Install dependencies
+pip install pyinstaller
+
+# Build
+pyinstaller --onefile --windowed --name FelfelDM --icon=logo/icon256.png --add-data "logo:logo" --add-data "icons:icons" --add-data "ui:ui" --add-data "core:core" --add-data "utils:utils" --hidden-import=PyQt6 --collect-all PyQt6 main.py
+
+# Run
+./dist/FelfelDM
+```
+
+### With Nuitka
+```bash
+# Install Nuitka
+pip install nuitka
+
+# Build
+python -m nuitka --standalone --onefile --enable-plugin=pyqt6 --include-package=PyQt6 --include-data-dir=logo=logo --include-data-dir=icons=icons --include-data-dir=ui=ui --include-data-dir=core=core --include-data-dir=utils=utils --linux-onefile-icon=logo/icon256.png --lto=yes --output-dir=dist_nuitka --output-filename=FelfelDM main.py
+
+# Run
+./dist_nuitka/FelfelDM
+```
+
+---
+
 ## ⚙️ Configuration
 
 ### Application Settings
@@ -223,7 +229,8 @@ FelfelDM/
 ├── FelfelDM-extension/ # Browser extension
 ├── main.py            # Entry point
 ├── requirements.txt   # Python dependencies
-└── install.sh         # Installation script
+├── install.sh         # Installation script
+└── uninstall.sh       # Uninstallation script
 ```
 
 ---
@@ -239,14 +246,9 @@ sudo pacman -S aria2
 sudo apt install aria2
 ```
 
-### Permission denied
-```bash
-chmod +x ~/.local/bin/felfeldm
-```
-
 ### Module not found
 ```bash
-pip install --user -r requirements.txt
+pip install -r requirements.txt
 ```
 
 ### Extension not connecting
@@ -254,34 +256,9 @@ pip install --user -r requirements.txt
 2. Check local server: `curl http://localhost:8765/ping`
 3. Restart the application
 
----
-
-## 🔧 Development
-
-### Setup Development Environment
+### Permission denied
 ```bash
-# Clone
-git clone https://github.com/hoomaanf/FelfelDM.git
-cd FelfelDM
-
-# Create virtual environment
-python3 -m venv venv
-source venv/bin/activate
-
-# Install dependencies
-pip install -r requirements.txt
-
-# Run
-python3 main.py
-```
-
-### Building from Source
-```bash
-# Install PyInstaller
-pip install pyinstaller
-
-# Build
-pyinstaller --onefile --windowed --name FelfelDM --icon=logo/icon256.png main.py
+chmod +x main.py
 ```
 
 ---
@@ -315,4 +292,11 @@ MIT License - see [LICENSE](LICENSE) file for details
 - 🐛 **Issues**: [GitHub Issues](https://github.com/hoomaanf/FelfelDM/issues)
 - 💬 **Discussions**: [GitHub Discussions](https://github.com/hoomaanf/FelfelDM/discussions)
 
+---
+
+<div align="center">
+  <sub>Built with ❤️ and 🌶️</sub>
+  <br>
+  <sub>© 2026 FelfelDM Contributors</sub>
+</div>
 ```
