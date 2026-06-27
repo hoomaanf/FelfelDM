@@ -9,7 +9,7 @@ from PyQt6.QtCore import *
 from PyQt6.QtGui import *
 
 from core import Aria2RPC, DataStore, Queue, BackendWorker
-from ui.dialogs import AddDownloadDialog, SingleDownloadDialog, QueueSettingsDialog, SettingsDialog
+from ui.dialogs import AddDownloadDialog, SingleDownloadDialog, QueueSettingsDialog, SettingsDialog, DownloadProgressDialog
 from ui.table_model import DownloadTableModel
 from ui.delegates import ProgressDelegate
 from utils.helpers import format_size, format_speed, get_category, get_icon
@@ -185,8 +185,12 @@ class MainWindow(QMainWindow):
         tb_lay.setContentsMargins(8, 4, 8, 4)
         tb_lay.setSpacing(4)
 
-        self.btn_add = QPushButton(get_icon('list-add'), "Add")
-        self.btn_add.clicked.connect(self._add_download)
+        self.btn_add = QPushButton(get_icon('list-add'), "Download")
+        self.btn_add.clicked.connect(self._quick_download)
+
+        self.btn_add_queue = QPushButton(get_icon('list-add'), "Add to Queue")
+        self.btn_add_queue.clicked.connect(self._add_download)
+        tb_lay.addWidget(self.btn_add_queue)
         tb_lay.addWidget(self.btn_add)
 
 
@@ -373,7 +377,7 @@ class MainWindow(QMainWindow):
     def _update_queue_buttons(self):
         q = self._current_queue()
 
-        if not q or len(q.downloads) == 0:
+        if not q or len(q.downloads) == 0 or q.name == "__direct__":
             self.start_queue_btn.setEnabled(False)
             self.pause_queue_btn.setEnabled(False)
             return
@@ -397,7 +401,12 @@ class MainWindow(QMainWindow):
                         del self._all_downloads[gid]
                 q.downloads.clear()
 
-            item = QListWidgetItem(q.name)
+            if q.name == "__direct__":
+                item = QListWidgetItem(get_icon('media-playback-start'), "Direct Downloads")
+                item.setForeground(QColor("#3498db"))
+            else:
+                item = QListWidgetItem(q.name)
+                
             if q.paused:
                 item.setIcon(get_icon('media-playback-pause'))
                 item.setForeground(QColor("#f39c12"))
@@ -421,6 +430,13 @@ class MainWindow(QMainWindow):
             self.queue_status_lbl.setStyleSheet("color: #95a5a6; font-weight: bold;")
             self.schedule_status_lbl.setText("")
             self.status_label.setText("Ready")
+            return
+        
+        if q.name == "__direct__":
+            self.queue_status_lbl.setText("Direct Downloads")
+            self.queue_status_lbl.setStyleSheet("color: #3498db; font-weight: bold;")
+            self.schedule_status_lbl.setText("")
+            self.status_label.setText("Direct")
             return
 
         now = datetime.now().time().replace(second=0, microsecond=0)
@@ -586,6 +602,10 @@ class MainWindow(QMainWindow):
         q = self._current_queue()
         total_size = 0
         completed_size = 0
+        if not q or q.name == "__direct__":
+            self.progress_bar.setValue(0)
+            self.progress_bar.setFormat("Direct Downloads — no queue")
+            return
         
         if q:
             for gid in q.downloads:
@@ -659,21 +679,67 @@ class MainWindow(QMainWindow):
         if not urls:
             return
         
-        
         self.show()
         self.raise_()
         self.activateWindow()
-        
+
+        # اگه تک لینک بود، quick download کن
+        if len(urls) == 1:
+            from ui.dialogs import QuickDownloadDialog
+            dlg = QuickDownloadDialog(self)
+            dlg.url_edit.setText(urls[0])
+            
+            if dlg.exec():
+                d = dlg.get_data()
+                if not d["urls"]:
+                    return
+                
+                direct_queue = None
+                for q in self.store.queues:
+                    if q.name == "__direct__":
+                        direct_queue = q
+                        break
+                if not direct_queue:
+                    direct_queue = Queue("__direct__", paused=False, max_concurrent=99)
+                    self.store.queues.insert(0, direct_queue)
+                
+                options = {
+                    "dir": d["path"],
+                    "split": str(d["connections"]),
+                    "max-connection-per-server": str(d["connections"]),
+                    "min-split-size": "1M",
+                    "continue": "true",
+                    "always-resume": "true",
+                    "header": ["User-Agent: Mozilla/5.0 (X11; Linux x86_64; rv:125.0) Gecko/20100101 Firefox/125.0"]
+                }
+                
+                added_gids = []
+                for url in d["urls"]:
+                    gid = self.aria2.add_url(url, options)
+                    if gid:
+                        direct_queue.downloads.append(gid)
+                        self.aria2.resume(gid)
+                        added_gids.append(gid)
+                
+                self.store.save()
+                self._refresh_queue_list()
+                self._refresh_table()
+                
+                if len(added_gids) == 1:
+                    QTimer.singleShot(500, lambda: self._open_progress_dialog(added_gids[0]))
+            return
+
+        # چند تا لینک → add to queue
+        visible_queues = [q for q in self.store.queues if q.name != "__direct__"]
         
         default_idx = 0
-        for i, q in enumerate(self.store.queues):
+        for i, q in enumerate(visible_queues):
             if q.name == "Default":
                 default_idx = i
                 break
         
-        
-        dlg = AddDownloadDialog(self.store.queues, default_idx, self)
-        dlg.url_edit.setPlainText("\n".join(urls))  
+        dlg = AddDownloadDialog(visible_queues, default_idx, self)
+        dlg.url_edit.setPlainText("\n".join(urls))
         
         if dlg.exec():
             d = dlg.get_data()
@@ -681,11 +747,11 @@ class MainWindow(QMainWindow):
                 return
             
             queue_index = d["queue"]
-            if queue_index < 0 or queue_index >= len(self.store.queues):
+            if queue_index < 0 or queue_index >= len(visible_queues):
                 QMessageBox.warning(self, "Error", "Selected queue does not exist.")
                 return
             
-            q = self.store.queues[queue_index]
+            q = visible_queues[queue_index]
             self._apply_settings_to_aria2()
             
             options = {
@@ -732,7 +798,17 @@ class MainWindow(QMainWindow):
             
             self._refresh_table()
     def _add_download(self):
-        dlg = AddDownloadDialog(self.store.queues, self._current_queue_idx, self)
+        visible_queues = [q for q in self.store.queues if q.name != "__direct__"]
+        
+        current_idx = 0
+        current_q = self._current_queue()
+        if current_q and current_q.name != "__direct__":
+            for i, q in enumerate(visible_queues):
+                if q.name == current_q.name:
+                    current_idx = i
+                    break
+        
+        dlg = AddDownloadDialog(visible_queues, current_idx, self)
 
         clip = QApplication.clipboard().text().strip()
         if clip:
@@ -746,11 +822,11 @@ class MainWindow(QMainWindow):
                 return
 
             queue_index = d["queue"]
-            if queue_index < 0 or queue_index >= len(self.store.queues):
+            if queue_index < 0 or queue_index >= len(visible_queues):
                 QMessageBox.warning(self, "Error", "Selected queue does not exist.")
                 return
 
-            q = self.store.queues[queue_index]
+            q = visible_queues[queue_index]
 
             self._apply_settings_to_aria2()
 
@@ -797,7 +873,6 @@ class MainWindow(QMainWindow):
                                     QSystemTrayIcon.MessageIcon.Information, 2000)
 
             self._refresh_table()
-
     def _add_single_download(self):
         dlg = SingleDownloadDialog(self)
 
@@ -870,7 +945,7 @@ class MainWindow(QMainWindow):
         gid = self._selected_gid()
         if gid:
             q = self._current_queue()
-            if q and q.paused:
+            if q and q.paused and q.name != "__direct__":
                 QMessageBox.warning(self, "Queue Paused",
                     "This queue is paused. Please click 'Start Queue' to begin all downloads.")
                 return
@@ -890,13 +965,11 @@ class MainWindow(QMainWindow):
             return
 
         count = len(selected)
-        
-        
+
         msg = QMessageBox(self)
         msg.setWindowTitle("Remove Downloads")
         msg.setText(f"Remove {count} download(s)?")
         msg.setInformativeText("Choose what to do with the downloaded files:")
-        
         
         btn_remove_only = msg.addButton("Remove from List Only", QMessageBox.ButtonRole.ActionRole)
         btn_remove_files = msg.addButton("Remove & Delete Files", QMessageBox.ButtonRole.DestructiveRole)
@@ -906,7 +979,6 @@ class MainWindow(QMainWindow):
         msg.exec()
         
         clicked = msg.clickedButton()
-        
         if clicked == btn_cancel:
             return
         
@@ -920,30 +992,30 @@ class MainWindow(QMainWindow):
                 gids_to_remove.append(gid)
         
         for gid in gids_to_remove:
-            
             file_paths = []
+            aria2_files = []
+            
             if delete_files and gid in self._all_downloads:
                 files = self._all_downloads[gid].get("files", [])
                 for f in files:
                     path = f.get("path")
                     if path and os.path.exists(path):
                         file_paths.append(path)
-            
+                        aria2_path = path + ".aria2"
+                        if os.path.exists(aria2_path):
+                            aria2_files.append(aria2_path)
             
             try:
                 self.aria2.remove(gid)
             except Exception as e:
                 print(f"⚠ Could not remove GID {gid} from aria2: {e}")
             
-            
             for q in self.store.queues:
                 if gid in q.downloads:
                     q.downloads.remove(gid)
             
-            
             if gid in self._all_downloads:
                 del self._all_downloads[gid]
-            
             
             if delete_files:
                 for path in file_paths:
@@ -957,6 +1029,15 @@ class MainWindow(QMainWindow):
                             print(f"🗑 Deleted folder: {path}")
                     except Exception as e:
                         print(f"⚠ Could not delete {path}: {e}")
+                
+                # حذف فایل‌های .aria2
+                for aria2_path in aria2_files:
+                    try:
+                        if os.path.exists(aria2_path):
+                            os.remove(aria2_path)
+                            print(f"🗑 Deleted aria2 file: {aria2_path}")
+                    except Exception as e:
+                        print(f"⚠ Could not delete {aria2_path}: {e}")
             
             removed += 1
         
@@ -968,10 +1049,9 @@ class MainWindow(QMainWindow):
         if removed > 0:
             msg_text = f"Removed {removed} download(s)"
             if delete_files:
-                msg_text += " (files deleted)"
+                msg_text += " (files and .aria2 files deleted)"
             self.tray.showMessage("FelfelDM", msg_text,
                                 QSystemTrayIcon.MessageIcon.Information, 2000)
-
     def _selected_gid(self):
         idx = self.table.currentIndex()
         return self.model.get_gid(idx.row()) if idx.isValid() else None
@@ -1047,29 +1127,21 @@ class MainWindow(QMainWindow):
                 row = self._all_downloads[gid].copy()
                 current_status = row.get('status')
             
-                if not q.paused:
+                if q.name == "__direct__":
+                    pass
+                elif not q.paused:
                     if current_status == 'paused' and current_status not in ['complete', 'removed']:
                         row['status'] = 'waiting'
                         row['downloadSpeed'] = 0
-                    
-                    elif current_status == 'active':
-                        
-                        pass
                     elif current_status == 'error':
                         row['status'] = 'waiting'
                         row['downloadSpeed'] = 0
-                        pass
-                    elif current_status == 'waiting':
-                        pass
-                    elif current_status in ['complete', 'removed']:
-                        pass
                 else:
                     if current_status not in ['complete', 'removed']:
                         row['status'] = 'paused'
                         row['downloadSpeed'] = 0
                 
                 all_rows.append(row)
-            
             
             else:
                 try:
@@ -1396,6 +1468,7 @@ class MainWindow(QMainWindow):
             gid = self._progress_dialog.gid
             if gid in self._all_downloads:
                 self._progress_dialog.update_data(self._all_downloads[gid])
+                
         self._refresh_table()
         self._update_queue_status()
         self._refresh_queue_list()
@@ -1435,3 +1508,85 @@ class MainWindow(QMainWindow):
         self.tray.showMessage("FelfelDM ⚠", message,
                             QSystemTrayIcon.MessageIcon.Warning, 3000)
         self.status_label.setText(f"⚠ {message}")
+        
+    def _open_progress_dialog(self, gid):
+        dl_data = self._all_downloads.get(gid, {})
+        self._progress_dialog = DownloadProgressDialog(gid, dl_data, self)
+        self._progress_dialog.pause_requested.connect(self._pause_from_dialog)
+        self._progress_dialog.resume_requested.connect(self._resume_from_dialog)
+        self._progress_dialog.cancel_requested.connect(self._cancel_from_dialog)
+        self._progress_dialog.show()
+
+    def _pause_from_dialog(self, gid):
+        real_status = self.aria2.get_status(gid)
+        if real_status in ["active", "waiting"]:
+            self.aria2.force_pause(gid)
+            if gid in self._all_downloads:
+                self._all_downloads[gid]["status"] = "paused"
+                self._all_downloads[gid]["downloadSpeed"] = 0
+            self._refresh_table()
+
+    def _resume_from_dialog(self, gid):
+        real_status = self.aria2.get_status(gid)
+        if real_status == "paused":
+            self.aria2.resume(gid)
+            if gid in self._all_downloads:
+                self._all_downloads[gid]["status"] = "active"
+            self._refresh_table()
+
+    def _cancel_from_dialog(self, gid):
+        self.aria2.remove(gid)
+        for q in self.store.queues:
+            if gid in q.downloads:
+                q.downloads.remove(gid)
+        if gid in self._all_downloads:
+            del self._all_downloads[gid]
+        self.store.save()
+        self._refresh_table()
+        self._refresh_queue_list()
+        if hasattr(self, '_progress_dialog'):
+            self._progress_dialog.close()
+
+    def _quick_download(self):
+        from ui.dialogs import QuickDownloadDialog
+        dlg = QuickDownloadDialog(self)
+
+        clip = QApplication.clipboard().text().strip()
+        if clip and clip.startswith(("http", "magnet:", "ftp")):
+            dlg.url_edit.setText(clip)
+
+        if dlg.exec():
+            d = dlg.get_data()
+            if not d["urls"]:
+                return
+
+            direct_queue = None
+            for q in self.store.queues:
+                if q.name == "__direct__":
+                    direct_queue = q
+                    break
+            if not direct_queue:
+                direct_queue = Queue("__direct__", paused=False, max_concurrent=99)
+                self.store.queues.insert(0, direct_queue)
+
+            options = {
+                "dir": d["path"],
+                "split": str(d["connections"]),
+                "max-connection-per-server": str(d["connections"]),
+                "min-split-size": "1M",
+                "continue": "true",
+                "always-resume": "true",
+                "header": ["User-Agent: Mozilla/5.0 (X11; Linux x86_64; rv:125.0) Gecko/20100101 Firefox/125.0"]
+            }
+            added_gids = []
+            for url in d["urls"]:
+                gid = self.aria2.add_url(url, options)
+                if gid:
+                    direct_queue.downloads.append(gid)
+                    self.aria2.resume(gid)
+                    added_gids.append(gid) 
+            self.store.save()
+            self._refresh_queue_list()
+            self._refresh_table()
+            if len(added_gids) == 1:
+                 QTimer.singleShot(500, lambda: self._open_progress_dialog(added_gids[0]))

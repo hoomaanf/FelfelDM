@@ -1,7 +1,5 @@
 # core/worker.py
-
 from PyQt6.QtCore import QThread, pyqtSignal
-from datetime import datetime
 
 class BackendWorker(QThread):
     stats_updated = pyqtSignal(dict)
@@ -19,56 +17,16 @@ class BackendWorker(QThread):
                 self.msleep(1000)
                 continue
 
-            try:
-                max_concurrent = self.store.settings.get("max_concurrent", 5)
-                self.aria2.change_global_option({"max-concurrent-downloads": str(max_concurrent)})
-            except:
-                pass
-
             stat = self.aria2.get_global_stat() or {}
             active = self.aria2.tell_active() or []
             waiting = self.aria2.tell_waiting() or []
             stopped = self.aria2.tell_stopped() or []
 
-            all_server_states = {d['gid']: d['status'] for d in (active + waiting + stopped)}
-
-            now_time = datetime.now().time().replace(second=0, microsecond=0)
-            now_day = datetime.now().weekday()
-
-            status_changed = False
-
-            for queue in self.store.queues:
-                current_gids = set(queue.downloads)
-                server_gids = set(all_server_states.keys())       
-                
-                queue.downloads = [g for g in queue.downloads if g in all_server_states]
-                
-                is_scheduled_time = queue.is_scheduled_now()
-                
-                if queue.paused or not is_scheduled_time:
-                    for g in queue.downloads:
-                        if all_server_states.get(g) == 'active':
-                            self.aria2.pause(g)
-                            status_changed = True
-                    continue
-
-                q_active = sum(1 for g in queue.downloads if all_server_states.get(g) == 'active')
-                if q_active < queue.max_concurrent:
-                    slots = queue.max_concurrent - q_active
-                    for g in queue.downloads:
-                        if slots <= 0:
-                            break
-                        if all_server_states.get(g) == 'paused':
-                            self.aria2.resume(g)
-                            status_changed = True
-                            slots -= 1
-
             self.stats_updated.emit({
-                "connected": True, 
+                "connected": True,
                 "stat": stat,
-                "active": active, 
-                "waiting": waiting, 
+                "active": active,
+                "waiting": waiting,
                 "stopped": stopped,
-                "status_changed": status_changed
             })
             self.msleep(1000)

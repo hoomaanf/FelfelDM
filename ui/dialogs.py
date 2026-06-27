@@ -41,7 +41,8 @@ class AddDownloadDialog(QDialog):
 
         self.queue_cb = QComboBox()
         for q in queues:
-            self.queue_cb.addItem(q.name)
+            if q.name != "__direct__":
+                self.queue_cb.addItem(q.name)
         self.queue_cb.setCurrentIndex(default_queue)
         options_layout.addRow("Queue:", self.queue_cb)
 
@@ -287,3 +288,142 @@ class SettingsDialog(QDialog):
             "max_concurrent": self.max_concurrent.value(),
             "auto_clear_completed": self.auto_clear_completed.isChecked(),
         }
+        
+class QuickDownloadDialog(QDialog):
+     def __init__(self, parent=None):
+         super().__init__(parent)
+         self.setWindowTitle("Download")
+         self.setMinimumWidth(500)
+         lay = QVBoxLayout(self)
+         url_group = QGroupBox("URLs")
+         url_layout = QVBoxLayout(url_group)
+         self.url_edit = QTextEdit()
+         self.url_edit.setPlaceholderText("Enter URLs (one per line)...")
+         self.url_edit.setMinimumHeight(80)
+         url_layout.addWidget(self.url_edit)
+         lay.addWidget(url_group)
+         path_group = QGroupBox("Save Location")
+         path_layout = QHBoxLayout(path_group)
+         self.path_edit = QLineEdit(os.path.expanduser("~/Downloads"))
+         path_layout.addWidget(self.path_edit)
+         browse = QPushButton(get_icon('folder-open'), "Browse")
+         browse.clicked.connect(self._browse)
+         path_layout.addWidget(browse)
+         lay.addWidget(path_group)
+         self.conn_spin = QSpinBox()
+         self.conn_spin.setRange(1, 16)
+         self.conn_spin.setValue(8)
+         form = QFormLayout()
+         form.addRow("Connections:", self.conn_spin)
+         lay.addLayout(form)
+         btn_box = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
+         btn_box.accepted.connect(self.accept)
+         btn_box.rejected.connect(self.reject)
+         lay.addWidget(btn_box)
+     def _browse(self):
+         d = QFileDialog.getExistingDirectory(self, "Select Directory", self.path_edit.text())
+         if d:
+             self.path_edit.setText(d)
+     def get_data(self):
+         raw = self.url_edit.toPlainText()
+         urls = [l.strip() for l in raw.split('\n') if l.strip()]
+         return {
+             "urls": urls,
+             "path": self.path_edit.text().strip(),
+             "connections": self.conn_spin.value(),
+         }
+         
+class DownloadProgressDialog(QDialog):
+    pause_requested = pyqtSignal(str)
+    resume_requested = pyqtSignal(str)
+    cancel_requested = pyqtSignal(str)
+
+    def __init__(self, gid, dl_data, parent=None):
+        super().__init__(parent)
+        self.gid = gid
+        self.setWindowTitle("Download")
+        self.setMinimumWidth(480)
+        self.setWindowFlags(self.windowFlags() & ~Qt.WindowType.WindowContextHelpButtonHint)
+
+        lay = QVBoxLayout(self)
+        lay.setSpacing(10)
+
+        self.name_lbl = QLabel(dl_data.get("name", "Unknown"))
+        self.name_lbl.setWordWrap(True)
+        self.name_lbl.setStyleSheet("font-weight: bold; font-size: 13px;")
+        lay.addWidget(self.name_lbl)
+
+        self.progress_bar = QProgressBar()
+        self.progress_bar.setMinimum(0)
+        self.progress_bar.setMaximum(100)
+        self.progress_bar.setTextVisible(True)
+        lay.addWidget(self.progress_bar)
+
+        info_group = QGroupBox("Info")
+        info_lay = QFormLayout(info_group)
+        self.size_lbl = QLabel("—")
+        self.speed_lbl = QLabel("—")
+        self.eta_lbl = QLabel("—")
+        self.conn_lbl = QLabel("—")
+        self.status_lbl = QLabel("—")
+        info_lay.addRow("Size:", self.size_lbl)
+        info_lay.addRow("Speed:", self.speed_lbl)
+        info_lay.addRow("ETA:", self.eta_lbl)
+        info_lay.addRow("Connections:", self.conn_lbl)
+        info_lay.addRow("Status:", self.status_lbl)
+        lay.addWidget(info_group)
+
+        btn_lay = QHBoxLayout()
+        self.pause_btn = QPushButton(get_icon('media-playback-pause'), "Pause")
+        self.resume_btn = QPushButton(get_icon('media-playback-start'), "Resume")
+        self.cancel_btn = QPushButton(get_icon('edit-delete'), "Cancel")
+        self.pause_btn.clicked.connect(lambda: self.pause_requested.emit(self.gid))
+        self.resume_btn.clicked.connect(lambda: self.resume_requested.emit(self.gid))
+        self.cancel_btn.clicked.connect(lambda: self.cancel_requested.emit(self.gid))
+        btn_lay.addWidget(self.pause_btn)
+        btn_lay.addWidget(self.resume_btn)
+        btn_lay.addStretch()
+        btn_lay.addWidget(self.cancel_btn)
+        lay.addLayout(btn_lay)
+
+        close_btn = QDialogButtonBox(QDialogButtonBox.StandardButton.Close)
+        close_btn.rejected.connect(self.reject)
+        lay.addWidget(close_btn)
+
+        self.update_data(dl_data)
+
+    def update_data(self, dl_data):
+        from utils.helpers import format_size, format_speed
+
+        total = int(dl_data.get("totalLength", 0))
+        completed = int(dl_data.get("completedLength", 0))
+        speed = int(dl_data.get("downloadSpeed", 0))
+        status = dl_data.get("status", "unknown")
+        name = dl_data.get("name", "")
+        if name:
+            self.name_lbl.setText(name)
+
+        if total > 0:
+            pct = int((completed / total) * 100)
+            self.progress_bar.setValue(pct)
+            self.progress_bar.setFormat(f"{pct}%")
+            self.size_lbl.setText(f"{format_size(completed)} / {format_size(total)}")
+        else:
+            self.progress_bar.setValue(0)
+            self.progress_bar.setFormat("—")
+            self.size_lbl.setText(f"{format_size(completed)} / Unknown")
+
+        self.speed_lbl.setText(format_speed(speed) if speed > 0 else "—")
+        self.conn_lbl.setText(str(dl_data.get("connections", 0)))
+        self.status_lbl.setText(status.capitalize())
+
+        if speed > 0 and total > completed:
+            eta_sec = (total - completed) // speed
+            h, m, s = eta_sec // 3600, (eta_sec % 3600) // 60, eta_sec % 60
+            self.eta_lbl.setText(f"{h:02d}:{m:02d}:{s:02d}")
+        else:
+            self.eta_lbl.setText("—")
+
+        self.pause_btn.setEnabled(status == "active")
+        self.resume_btn.setEnabled(status == "paused")
+        self.cancel_btn.setEnabled(status not in ["complete", "removed"])
