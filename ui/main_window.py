@@ -226,6 +226,7 @@ class MainWindow(QMainWindow):
 
         
         self.table = QTableView()
+        self.table.doubleClicked.connect(self._on_table_double_click)
         
         self.table.setTextElideMode(Qt.TextElideMode.ElideRight)
         self.table.setWordWrap(False)   
@@ -1590,3 +1591,9 @@ class MainWindow(QMainWindow):
             self._refresh_table()
             if len(added_gids) == 1:
                  QTimer.singleShot(500, lambda: self._open_progress_dialog(added_gids[0]))
+                 
+                 
+    def _on_table_double_click(self, index):
+        gid = self.model.get_gid(index.row())
+        if gid:
+            self._open_progress_dialog(gid)
