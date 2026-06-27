@@ -61,6 +61,10 @@ $PYINSTALLER_BIN \
     --hidden-import=PyQt6.QtWidgets \
     --hidden-import=PyQt6.QtNetwork \
     --hidden-import=requests \
+    --hidden-import=appdirs \
+    --hidden-import=keyring \
+    --hidden-import=jeepney \
+    --hidden-import=secretstorage \
     main.py 2>&1 | grep -v "WARNING:" | grep -v "already satisfies"
 
 if [ ! -f "dist/FelfelDM" ]; then
