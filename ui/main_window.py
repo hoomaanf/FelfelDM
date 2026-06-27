@@ -41,6 +41,7 @@ class MainWindow(QMainWindow):
             self.store.settings["aria2_port"],
             self.store.settings["aria2_secret"],
         )
+        self.aria2.on_error = self._on_aria2_error
         self._current_queue_idx = 0
         self._all_downloads = {}
         self._last_calculated_global_speed = 0
@@ -221,6 +222,7 @@ class MainWindow(QMainWindow):
 
         
         self.table = QTableView()
+        
         self.table.setTextElideMode(Qt.TextElideMode.ElideRight)
         self.table.setWordWrap(False)   
         self.table.setAlternatingRowColors(True)
@@ -1280,19 +1282,19 @@ class MainWindow(QMainWindow):
             total_active = int(stat.get("numActive", 0))
             total_waiting = int(stat.get("numWaiting", 0))
             if total_active == 0 and total_waiting == 0:
-                all_done = True
-                for q in self.store.queues:
-                    if q.downloads:
-                        for gid in q.downloads:
-                            if gid in self._all_downloads:
-                                status = self._all_downloads[gid].get("status")
-                                if status not in ["complete", "error", "removed"]:
-                                    all_done = False
-                                    break
-                if all_done:
-                    self.tray.showMessage("FelfelDM", "All downloads complete! Shutting down...",
-                                        QSystemTrayIcon.MessageIcon.Information, 3000)
-                    os.system("systemctl poweroff")
+                has_any_download = any(q.downloads for q in self.store.queues)
+                if not has_any_download:
+                    pass
+                else:
+                    all_done = all(
+                        self._all_downloads.get(gid, {}).get("status") in ["complete", "error", "removed"]
+                        for q in self.store.queues
+                        for gid in q.downloads
+                    )
+                    if all_done:
+                        self.tray.showMessage("FelfelDM", "All downloads complete! Shutting down...",
+                                            QSystemTrayIcon.MessageIcon.Information, 3000)
+                        os.system("systemctl poweroff")
 
         
         all_downloads_dict = {}
@@ -1365,25 +1367,38 @@ class MainWindow(QMainWindow):
         self._all_downloads = all_downloads_dict
 
         for q in self.store.queues:
-            if q.paused:
+            if not q.paused and q.downloads:
+                has_any_download = any(gid in self._all_downloads for gid in q.downloads)
+                if has_any_download:
+                    all_done = all(
+                        self._all_downloads.get(gid, {}).get("status") in ["complete", "error", "removed"]
+                        for gid in q.downloads
+                        if gid in self._all_downloads
+                    )
+                    if all_done:
+                        q.paused = True
+                        self.tray.showMessage("FelfelDM", f"✅ Queue '{q.name}' finished!",
+                        QSystemTrayIcon.MessageIcon.Information, 4000)
+                        self.store.save()
+
+        for q in self.store.queues:
+            if not q.paused and q.schedule_enabled and not q.is_scheduled_now():
+                q.paused = True
                 for gid in q.downloads:
                     if gid in self._all_downloads:
-                        status = self._all_downloads[gid].get("status")
-                        
-                        if status in ["active", "waiting"]:
+                        if self._all_downloads[gid].get("status") == "active":
                             self.aria2.pause(gid)
                             self._all_downloads[gid]["status"] = "paused"
                             self._all_downloads[gid]["downloadSpeed"] = 0
-                        
-                        elif status in ["complete", "error", "removed"]:
-                            
-                            pass
-
-        
+                self.store.save()
+                
+        if hasattr(self, '_progress_dialog') and self._progress_dialog.isVisible():
+            gid = self._progress_dialog.gid
+            if gid in self._all_downloads:
+                self._progress_dialog.update_data(self._all_downloads[gid])
         self._refresh_table()
-        
-        
         self._update_queue_status()
+        self._refresh_queue_list()
     
     def _start_aria2_if_needed(self):
         if self.aria2.is_connected():
@@ -1414,3 +1429,9 @@ class MainWindow(QMainWindow):
         except FileNotFoundError:
             QMessageBox.critical(self, "aria2 Not Found",
                 "aria2 is not installed.\nRun: sudo pacman -S aria2")
+    def _on_aria2_error(self, message):
+        if "disconnected" in message:
+            return
+        self.tray.showMessage("FelfelDM ⚠", message,
+                            QSystemTrayIcon.MessageIcon.Warning, 3000)
+        self.status_label.setText(f"⚠ {message}")

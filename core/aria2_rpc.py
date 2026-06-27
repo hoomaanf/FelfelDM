@@ -5,6 +5,7 @@ class Aria2RPC:
         self.url = f"{host}:{port}/jsonrpc"
         self.secret = secret
         self._id = 0
+        self.on_error = None 
 
     def _call(self, method, params=None):
         self._id += 1
@@ -15,9 +16,29 @@ class Aria2RPC:
             r = requests.post(self.url, json=payload, timeout=1.5)
             result = r.json()
             if "error" in result:
+                err = result["error"]
+                msg = f"aria2 error: {err.get('message', err)}"
+                print(f"⚠ [{method}]: {msg}")
+                if self.on_error:
+                    self.on_error(msg)
                 return None
             return result.get("result")
-        except Exception:
+        except requests.exceptions.ConnectionError:
+            msg = "aria2 disconnected"
+            if self.on_error:
+                self.on_error(msg)
+            return None
+        except requests.exceptions.Timeout:
+            msg = f"aria2 timeout [{method}]"
+            print(f"⚠ {msg}")
+            if self.on_error:
+                self.on_error(msg)
+            return None
+        except Exception as e:
+            msg = f"aria2 error: {e}"
+            print(f"⚠ [{method}]: {msg}")
+            if self.on_error:
+                self.on_error(msg)
             return None
 
     def add_url(self, url, options=None):
@@ -56,3 +77,11 @@ class Aria2RPC:
 
     def is_connected(self):
         return self.get_global_stat() is not None
+    
+    def get_status(self, gid):
+        result = self.tell_status(gid, ["gid", "status"])
+        if result:
+            return result.get("status")
+        return None
+    def force_pause(self, gid):
+        return self._call("aria2.forcePause", [gid])

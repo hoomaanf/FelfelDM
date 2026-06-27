@@ -88,7 +88,7 @@ fi
 echo ""
 echo -e "${YELLOW}🗑️  Removing user data...${NC}"
 
-CONFIG_DIR="$HOME/.config/dlmanager"
+CONFIG_DIR="$HOME/.config/felfelDM"
 if [ -d "$CONFIG_DIR" ]; then
     read -p "Remove configuration and download history? (y/N): " remove_config
     if [[ "$remove_config" =~ ^[Yy]$ ]]; then

@@ -3,6 +3,11 @@
 import os
 import json
 from datetime import datetime, time as dtime
+from appdirs import user_config_dir
+import keyring
+
+KEYRING_SERVICE = "felfelDM"
+KEYRING_KEY = "aria2_secret"
 
 class Queue:
     def __init__(self, name, max_concurrent=3, save_path="", schedule_enabled=False,
@@ -44,7 +49,6 @@ class Queue:
         q.schedule_end = dtime(int(en[0]), int(en[1]))
         q.days = d.get("days", [0, 1, 2, 3, 4, 5, 6])
         
-        # 🔥 مهم: لیست رو کپی کن
         q.downloads = list(d.get("downloads", []))
         q.paused = d.get("paused", True)
         return q
@@ -65,11 +69,12 @@ class Queue:
 
 
 class DataStore:
-    PATH = os.path.expanduser("~/.config/felfelDM/data.json")
+    PATH = os.path.join(user_config_dir("felfelDM"), "data.json")
 
     def __init__(self):
         os.makedirs(os.path.dirname(self.PATH), exist_ok=True)
         self.queues = []
+       
         self.settings = {
             "aria2_host": "http://localhost",
             "aria2_port": 6800,
@@ -107,10 +112,17 @@ class DataStore:
         except Exception as e:
             print(f"⚠ Error loading data: {e}")
             pass
-
+        secret = keyring.get_password(KEYRING_SERVICE, KEYRING_KEY)
+        if secret is not None:
+            self.settings["aria2_secret"] = secret
     def save(self):
+        secret = self.settings.pop("aria2_secret", "")
+        keyring.set_password(KEYRING_SERVICE, KEYRING_KEY, secret)
+        
         with open(self.PATH, "w") as f:
             json.dump({
                 "queues": [q.to_dict() for q in self.queues],
                 "settings": self.settings,
             }, f, indent=2)
+        
+        self.settings["aria2_secret"] = secret
