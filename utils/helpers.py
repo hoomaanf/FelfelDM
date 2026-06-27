@@ -1,52 +1,59 @@
-# utils/helpers.py
+# Requires: PyQt6>=6.4.0
+
+"""
+Helper functions for formatting, disk space, etc.
+"""
+
+import os
+import shutil
+from pathlib import Path
+from typing import Union
 
 from PyQt6.QtGui import QIcon
-from PyQt6.QtCore import Qt
-import sys
-import os
 
-def format_size(b):
-    b = int(b)
-    for u in ["B", "KB", "MB", "GB"]:
-        if b < 1024: return f"{b:.1f} {u}"
-        b /= 1024
-    return f"{b:.1f} TB"
 
-def format_speed(b):
-    return f"{format_size(b)}/s"
-
-def format_eta(total, completed, speed):
-    speed = int(speed)
-    if speed <= 0: return "—"
-    remaining = int(total) - int(completed)
-    if remaining <= 0: return "0s"
-    secs = remaining // speed
-    if secs < 60: return f"{secs}s"
-    if secs < 3600: return f"{secs//60}m {secs%60}s"
-    return f"{secs//3600}h {(secs%3600)//60}m"
-
-def get_category(filename):
-    ext = filename.split('.')[-1].lower() if '.' in filename else ''
-    if ext in ['mp4', 'mkv', 'avi', 'flv', 'mov']: return '🎬 Video'
-    if ext in ['mp3', 'wav', 'flac', 'm4a', 'aac']: return '🎵 Audio'
-    if ext in ['zip', 'rar', '7z', 'tar', 'gz']: return '📦 Archive'
-    if ext in ['pdf', 'epub', 'docx', 'txt', 'xlsx']: return '📄 Document'
-    if ext in ['iso', 'img']: return '💿 Image'
-    return '📁 Other'
-
-def get_icon(name, fallback=None):
+def get_icon(name: str) -> QIcon:
+    """Fallback icon from theme."""
     icon = QIcon.fromTheme(name)
-    if icon.isNull() and fallback:
-        icon = QIcon.fromTheme(fallback)
-    if icon.isNull():
-        icon = QIcon()
-    return icon
+    if not icon.isNull():
+        return icon
+    return QIcon()
 
 
-def get_resource_path(relative_path):
-    if getattr(sys, 'frozen', False) and hasattr(sys, '_MEIPASS'):
-        base_path = sys._MEIPASS
-    else:
-        base_path = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    
-    return os.path.join(base_path, relative_path)
+def format_size(size: int) -> str:
+    if size < 0:
+        return "0 B"
+    for unit in ['B', 'KB', 'MB', 'GB']:
+        if size < 1024.0:
+            return f"{size:.1f} {unit}"
+        size /= 1024.0
+    return f"{size:.1f} TB"
+
+
+def format_speed(speed: int) -> str:
+    if speed == 0:
+        return "0 B/s"
+    for unit in ['B/s', 'KB/s', 'MB/s', 'GB/s']:
+        if speed < 1024.0:
+            return f"{speed:.1f} {unit}"
+        speed /= 1024.0
+    return f"{speed:.1f} TB/s"
+
+
+def ensure_dir(path: Union[str, Path]) -> bool:
+    try:
+        Path(path).mkdir(parents=True, exist_ok=True)
+        return True
+    except Exception:
+        return False
+
+
+def check_disk_space(path: str, required_bytes: int = 0) -> bool:
+    """Check if there is enough free space on the device containing path."""
+    try:
+        stat = shutil.disk_usage(path)
+        if required_bytes == 0:
+            return True
+        return stat.free >= required_bytes
+    except Exception:
+        return True

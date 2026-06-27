@@ -1,145 +1,173 @@
-# ui/table_model.py
+# Requires: PyQt6>=6.4.0
 
-from PyQt6.QtCore import QAbstractTableModel, QModelIndex, Qt
-from PyQt6.QtGui import QColor
-from utils.helpers import format_size, format_speed, format_eta
+"""
+Table model for displaying download information with ETA and speed columns.
+"""
+
+import os
+from typing import List, Dict, Any, Optional
+
+from PyQt6.QtCore import QAbstractTableModel, Qt, QModelIndex
+
+from core.data_store import DataStore
+
 
 class DownloadTableModel(QAbstractTableModel):
-    COLS = ["Name", "Size", "Progress", "Speed", "ETA", "Status", "Category"]
+    """Table model for downloads with ETA and speed."""
 
-    def __init__(self, parent=None):
-        super().__init__(parent)
-        self.rows = []
-        self.sort_column = -1
-        self.sort_order = Qt.SortOrder.AscendingOrder
+    def __init__(self, store: DataStore) -> None:
+        super().__init__()
+        self.store = store
+        self._downloads: List[Dict[str, Any]] = []
+        self._headers = [
+            "GID",
+            "Name",
+            "Size",
+            "Progress",
+            "Status",
+            "Speed",
+            "ETA",
+            "Connections",
+            "Queue",
+        ]
 
-    def rowCount(self, p=QModelIndex()): 
-        return len(self.rows)
-    
-    def columnCount(self, p=QModelIndex()): 
-        return len(self.COLS)
+    def update_downloads(
+        self,
+        active: List[Dict[str, Any]],
+        waiting: List[Dict[str, Any]],
+        stopped: List[Dict[str, Any]],
+    ) -> None:
+        combined = []
+        seen = set()
+        for dl in active + waiting + stopped:
+            gid = dl.get("gid")
+            if not gid or gid in seen:
+                continue
+            seen.add(gid)
+            total = int(dl.get("totalLength", 0))
+            completed = int(dl.get("completedLength", 0))
+            progress = (completed / total * 100) if total > 0 else 0
 
-    def headerData(self, s, o, r=Qt.ItemDataRole.DisplayRole):
-        if r == Qt.ItemDataRole.DisplayRole and o == Qt.Orientation.Horizontal:
-            return self.COLS[s]
+            name = dl.get("files", [{}])[0].get("path", "Unknown")
+            if name and "/" in name:
+                name = os.path.basename(name)
+            elif not name:
+                name = "Unknown"
 
-    def data(self, index, role=Qt.ItemDataRole.DisplayRole):
-        if not index.isValid() or index.row() >= len(self.rows):
+            status = dl.get("status", "unknown")
+            speed = int(dl.get("downloadSpeed", 0))
+            connections = int(dl.get("connections", 0))
+            eta = int(dl.get("eta", 0))
+
+            # Determine queue from store (if we stored it)
+            queue_name = "Default"
+            for q in self.store.queues:
+                if gid in q.downloads:
+                    queue_name = q.name
+                    break
+
+            combined.append({
+                "gid": gid,
+                "name": name,
+                "total": total,
+                "completed": completed,
+                "progress": progress,
+                "status": status,
+                "speed": speed,
+                "connections": connections,
+                "eta": eta,
+                "queue": queue_name,
+                "raw": dl,
+            })
+
+        self.beginResetModel()
+        self._downloads = combined
+        self.endResetModel()
+
+    def refresh(self) -> None:
+        pass
+
+    def rowCount(self, parent: QModelIndex = QModelIndex()) -> int:
+        return len(self._downloads)
+
+    def columnCount(self, parent: QModelIndex = QModelIndex()) -> int:
+        return len(self._headers)
+
+    def data(self, index: QModelIndex, role: int = Qt.ItemDataRole.DisplayRole) -> Optional[Any]:
+        if not index.isValid() or index.row() >= len(self._downloads):
             return None
-        row = self.rows[index.row()]
+        row = index.row()
         col = index.column()
-        
+        dl = self._downloads[row]
+
+        if role == Qt.ItemDataRole.UserRole:
+            if col == 0:
+                return dl.get("gid")
+            return None
+
         if role == Qt.ItemDataRole.DisplayRole:
-            if col == 0: return row.get("name", "—")
-            if col == 1:
-                t = int(row.get("totalLength", 0))
-                if t == 0:
-                    status = row.get("status", "")
-                    if status in ["waiting", "active"]:
-                        return "⏳ Getting size..."         
-                return format_size(t) if t > 0 else "—"
-            if col == 2:
-                t = int(row.get("totalLength", 0))
-                c = int(row.get("completedLength", 0))
-                return f"{100*c//t}%" if t > 0 else "0%"
-            if col == 3: 
-                speed = row.get("downloadSpeed", 0)
-                try:
-                    speed = int(speed)
-                except (ValueError, TypeError):
-                    speed = 0
-                return format_speed(speed) if speed > 0 else "0 B/s"
-            if col == 4:
-                total = int(row.get("totalLength", 0))
-                completed = int(row.get("completedLength", 0))
-                speed = row.get("downloadSpeed", 0)
-                try:
-                    speed = int(speed)
-                except (ValueError, TypeError):
-                    speed = 0
-                return format_eta(total, completed, speed)
-            if col == 5: 
-                status = row.get("status", "—")
-                status_map = {
-                    "active": "⬇ Downloading",
-                    "waiting": "⏳ Waiting",
-                    "paused": "⏸ Paused",
-                    "complete": "✅ Complete",
-                    "error": "❌ Error",
-                    "removed": "🗑 Removed"
-                }
-                return status_map.get(status, status)
-            if col == 6: return row.get("category", "📁 Other")
-            
-        if role == Qt.ItemDataRole.ForegroundRole and col == 5:
-            status = row.get("status", "")
-            if status == "complete": return QColor("#27ae60")
-            if status == "error": return QColor("#e74c3c")
-            if status == "active": return QColor("#3daee9")
-            if status == "paused": return QColor("#f39c12")
-            if status == "waiting": return QColor("#95a5a6")
+            if col == 0:
+                return dl.get("gid", "")[:8]
+            elif col == 1:
+                return dl.get("name", "Unknown")
+            elif col == 2:
+                total = dl.get("total", 0)
+                return self._format_size(total)
+            elif col == 3:
+                progress = dl.get("progress", 0)
+                return f"{progress:.1f}%"
+            elif col == 4:
+                status = dl.get("status", "unknown")
+                return self._translate_status(status)
+            elif col == 5:
+                speed = dl.get("speed", 0)
+                return self._format_speed(speed)
+            elif col == 6:
+                eta = dl.get("eta", 0)
+                if eta > 0:
+                    hours = eta // 3600
+                    minutes = (eta % 3600) // 60
+                    seconds = eta % 60
+                    return f"{hours:02d}:{minutes:02d}:{seconds:02d}"
+                return "--"
+            elif col == 7:
+                return dl.get("connections", 0)
+            elif col == 8:
+                return dl.get("queue", "Default")
         return None
 
-    def update_rows(self, new_rows):
-        if len(self.rows) == 0 and len(new_rows) == 0:
-            return
-        
-        sort_col = self.sort_column
-        sort_order = self.sort_order
-        
-        if len(self.rows) != len(new_rows):
-            self.beginResetModel()
-            self.rows = new_rows
-            self.endResetModel()
-        else:
-            self.rows = new_rows
-            if len(self.rows) > 0:
-                top_left = self.index(0, 0)
-                bottom_right = self.index(len(self.rows) - 1, len(self.COLS) - 1)
-                self.dataChanged.emit(top_left, bottom_right)
-    
-        if sort_col >= 0:
-            self.sort(sort_col, sort_order)
+    def headerData(self, section: int, orientation: Qt.Orientation, role: int = Qt.ItemDataRole.DisplayRole) -> Optional[str]:
+        if orientation == Qt.Orientation.Horizontal and role == Qt.ItemDataRole.DisplayRole:
+            if section < len(self._headers):
+                return self._headers[section]
+        return None
 
-    def get_gid(self, row_idx):
-        return self.rows[row_idx].get("gid") if 0 <= row_idx < len(self.rows) else None
+    @staticmethod
+    def _format_size(size: int) -> str:
+        for unit in ['B', 'KB', 'MB', 'GB']:
+            if size < 1024.0:
+                return f"{size:.1f} {unit}"
+            size /= 1024.0
+        return f"{size:.1f} TB"
 
-    def sort(self, column, order=Qt.SortOrder.AscendingOrder):
-        if column < 0 or column >= len(self.COLS):
-            return
-        
-        self.sort_column = column
-        self.sort_order = order
-        
-        sort_keys = {
-            0: lambda x: x.get("name", "").lower(),           # Name
-            1: lambda x: int(x.get("totalLength", 0)),         # Size
-            2: lambda x: self._get_progress_value(x),          # Progress
-            3: lambda x: int(x.get("downloadSpeed", 0)),       # Speed
-            4: lambda x: self._get_eta_value(x),               # ETA
-            5: lambda x: x.get("status", ""),                  # Status
-            6: lambda x: x.get("category", ""),                # Category
+    @staticmethod
+    def _format_speed(speed: int) -> str:
+        if speed == 0:
+            return "0 B/s"
+        for unit in ['B/s', 'KB/s', 'MB/s', 'GB/s']:
+            if speed < 1024.0:
+                return f"{speed:.1f} {unit}"
+            speed /= 1024.0
+        return f"{speed:.1f} TB/s"
+
+    @staticmethod
+    def _translate_status(status: str) -> str:
+        mapping = {
+            "active": "Downloading",
+            "waiting": "Waiting",
+            "paused": "Paused",
+            "error": "Error",
+            "complete": "Complete",
+            "removed": "Removed",
         }
-        
-        key_func = sort_keys.get(column, lambda x: x.get("name", "").lower())
-        
-        self.rows.sort(key=key_func, reverse=(order == Qt.SortOrder.DescendingOrder))
-        
-        self.dataChanged.emit(self.index(0, 0), self.index(max(0, len(self.rows) - 1), len(self.COLS) - 1))
-        self.layoutChanged.emit()
-    
-    def _get_progress_value(self, row):
-        total = int(row.get("totalLength", 0))
-        completed = int(row.get("completedLength", 0))
-        if total > 0:
-            return (completed / total) * 100
-        return 0
-    
-    def _get_eta_value(self, row):
-        total = int(row.get("totalLength", 0))
-        completed = int(row.get("completedLength", 0))
-        speed = int(row.get("downloadSpeed", 0))
-        if speed > 0:
-            remaining = total - completed
-            return remaining // speed
-        return 999999999
+        return mapping.get(status, status)
