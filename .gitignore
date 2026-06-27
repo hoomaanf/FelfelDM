@@ -34,12 +34,12 @@ Thumbs.db
 *.log
 *.backup
 *.pyc
+__pycache__
 
 # Extension
 *.xpi
 *.crx
 *.zip
-dl_manager_extension.zip
 FelfelDM-extension.zip
 
 # Data
