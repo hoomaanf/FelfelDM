@@ -33,8 +33,7 @@ Thumbs.db
 *.sqlite
 *.log
 *.backup
-*.pyc
-__pycache__
+
 
 # Extension
 *.xpi
