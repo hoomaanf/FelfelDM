@@ -4,6 +4,7 @@ aria2 RPC client with batch call support via system.multicall,
 SSL validation, and connection caching.
 """
 
+import base64
 import logging
 from typing import Any, Dict, List, Optional
 
@@ -13,10 +14,7 @@ logger = logging.getLogger(__name__)
 
 
 class Aria2RPC:
-    """
-    aria2 RPC client with batch call support via system.multicall and SSL validation.
-    Uses a persistent requests.Session with keep-alive for connection caching.
-    """
+    """aria2 RPC client with batch call support and connection caching."""
 
     DEFAULT_TIMEOUT: int = 15
 
@@ -35,13 +33,10 @@ class Aria2RPC:
         self.verify_ssl = verify_ssl
         self.timeout = timeout
 
-        # Use a persistent session with keep-alive
         self._session = requests.Session()
         self._session.verify = verify_ssl
-        # Enable keep-alive
         self._session.headers.update({"Connection": "keep-alive"})
 
-        # Do NOT disable urllib3 warnings - we want users to see SSL issues
         if not verify_ssl:
             logger.warning(
                 "SSL verification is disabled. This is insecure and should only be used for testing."
@@ -94,16 +89,7 @@ class Aria2RPC:
             return None
 
     def batch_call(self, calls: List[Dict[str, Any]]) -> List[Any]:
-        """
-        Execute multiple RPC calls in a single request using system.multicall.
-
-        Args:
-            calls: List of dicts with 'method' and optional 'params'
-
-        Returns:
-            List of results from each call, in the same order as calls.
-            If a sub‑call fails, its entry will be None.
-        """
+        """Execute multiple RPC calls in a single request using system.multicall."""
         if not calls:
             return []
 
@@ -156,7 +142,6 @@ class Aria2RPC:
                 else:
                     processed.append(None)
 
-            # If we got fewer results than calls, pad with None
             while len(processed) < len(calls):
                 processed.append(None)
 
@@ -197,15 +182,53 @@ class Aria2RPC:
         result = self._call("aria2.addUri", params)
         return result
 
-    def add_torrent(self, torrent_file: str, options: Optional[Dict] = None) -> Optional[str]:
-        """Add a torrent file and return the GID."""
+    def add_torrent(
+        self,
+        torrent_file: str,
+        options: Optional[Dict] = None,
+        selected_files: Optional[List[int]] = None,
+    ) -> Optional[str]:
+        """
+        Add a torrent file and return the GID.
+
+        Args:
+            torrent_file: Path to the .torrent file.
+            options: Additional aria2 options.
+            selected_files: List of file indices to download (1-based).
+                            If None, all files are downloaded.
+        """
+        with open(torrent_file, "rb") as f:
+            torrent_data = base64.b64encode(f.read()).decode("utf-8")
+
+        params = [torrent_data]
+        if options:
+            # If selected_files is provided, add to options
+            if selected_files:
+                options["select-file"] = ",".join(str(i) for i in selected_files)
+            params.append(options)
+        else:
+            if selected_files:
+                params.append({"select-file": ",".join(str(i) for i in selected_files)})
+
+        result = self._call("aria2.addTorrent", params)
+        return result
+
+    def get_torrent_info(self, torrent_file: str) -> Optional[Dict[str, Any]]:
+        """
+        Get information about a torrent file without starting the download.
+
+        Args:
+            torrent_file: Path to the .torrent file.
+
+        Returns:
+            Dictionary containing torrent info including files list.
+        """
         import base64
         with open(torrent_file, "rb") as f:
             torrent_data = base64.b64encode(f.read()).decode("utf-8")
+
         params = [torrent_data]
-        if options:
-            params.append(options)
-        result = self._call("aria2.addTorrent", params)
+        result = self._call("aria2.getTorrentInfo", params)
         return result
 
     def remove(self, gid: str) -> Optional[Any]:
@@ -221,16 +244,7 @@ class Aria2RPC:
         return self._call("aria2.unpause", [gid])
 
     def tell_status(self, gid: str, fields: Optional[List[str]] = None) -> Optional[Dict]:
-        """
-        Get status of a download by GID.
-
-        Args:
-            gid: The GID of the download.
-            fields: Optional list of fields to return. If None, returns all fields.
-
-        Returns:
-            Dictionary containing the download status, or None on error.
-        """
+        """Get status of a download by GID."""
         params = [gid]
         if fields:
             params.append(fields)
@@ -265,33 +279,16 @@ class Aria2RPC:
         return self._call("aria2.changeGlobalOption", [options])
 
     def set_secret(self, secret: str) -> None:
-        """
-        Update the RPC secret.
-
-        Args:
-            secret: The new RPC secret.
-        """
+        """Update the RPC secret."""
         self.secret = secret
         logger.debug("RPC secret updated")
 
     def get_certificate_fingerprint(self) -> Optional[str]:
-        """
-        Get the certificate fingerprint from the current SSL context.
-
-        Returns:
-            The SHA-256 fingerprint as a hex string, or None if not available.
-        """
-        # This is a placeholder. In a real implementation, you would extract
-        # the fingerprint from the SSL context of the session.
-        # For now, we return None as the fingerprint is managed by Aria2Manager.
-        return None
+        """Get the certificate fingerprint."""
+        return None  # Placeholder - managed by Aria2Manager
 
     def _ensure_session(self) -> None:
-        """
-        Ensure the session is valid and recreate it if necessary.
-        Called after the secret or certificate changes.
-        """
-        # Recreate the session to pick up new SSL settings
+        """Ensure the session is valid and recreate it if necessary."""
         old_verify = self._session.verify
         old_headers = self._session.headers.copy()
 
