@@ -1,6 +1,10 @@
 # core/aria2_rpc.py
+"""
+aria2 RPC client with batch call support via system.multicall,
+SSL validation, and connection caching.
+"""
+
 import logging
-import ssl
 from typing import Any, Dict, List, Optional
 
 import requests
@@ -9,20 +13,39 @@ logger = logging.getLogger(__name__)
 
 
 class Aria2RPC:
-    """aria2 RPC client with batch call support via system.multicall and SSL validation."""
+    """
+    aria2 RPC client with batch call support via system.multicall and SSL validation.
+    Uses a persistent requests.Session with keep-alive for connection caching.
+    """
 
-    def __init__(self, host: str = "http://localhost", port: int = 6800, secret: str = "",
-                 verify_ssl: bool = True):
+    DEFAULT_TIMEOUT: int = 15
+
+    def __init__(
+        self,
+        host: str = "http://localhost",
+        port: int = 6800,
+        secret: str = "",
+        verify_ssl: bool = True,
+        timeout: int = DEFAULT_TIMEOUT,
+    ) -> None:
         self.url = f"{host}:{port}/jsonrpc"
         self.secret = secret
         self._id = 0
         self.on_error = None
         self.verify_ssl = verify_ssl
+        self.timeout = timeout
+
+        # Use a persistent session with keep-alive
         self._session = requests.Session()
+        self._session.verify = verify_ssl
+        # Enable keep-alive
+        self._session.headers.update({"Connection": "keep-alive"})
+
+        # Do NOT disable urllib3 warnings - we want users to see SSL issues
         if not verify_ssl:
-            self._session.verify = False
-            import urllib3
-            urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+            logger.warning(
+                "SSL verification is disabled. This is insecure and should only be used for testing."
+            )
 
     def _call(self, method: str, params: Optional[List] = None) -> Optional[Any]:
         """Execute a single RPC call."""
@@ -37,16 +60,16 @@ class Aria2RPC:
             "jsonrpc": "2.0",
             "id": str(self._id),
             "method": method,
-            "params": p
+            "params": p,
         }
 
         try:
-            r = self._session.post(self.url, json=payload, timeout=15)
+            r = self._session.post(self.url, json=payload, timeout=self.timeout)
             result = r.json()
             if "error" in result:
                 err = result["error"]
                 msg = f"aria2 error: {err.get('message', err)}"
-                logger.warning(f"[{method}]: {msg}")
+                logger.warning("[%s]: %s", method, msg)
                 if self.on_error:
                     self.on_error(msg)
                 return None
@@ -65,7 +88,7 @@ class Aria2RPC:
             return None
         except Exception as e:
             msg = f"aria2 error: {e}"
-            logger.warning(f"[{method}]: {msg}")
+            logger.warning("[%s]: %s", method, msg)
             if self.on_error:
                 self.on_error(msg)
             return None
@@ -92,7 +115,7 @@ class Aria2RPC:
                 params_list = [f"token:{self.secret}"] + params_list
             params.append({
                 "methodName": method,
-                "params": params_list
+                "params": params_list,
             })
 
         self._id += 1
@@ -100,11 +123,11 @@ class Aria2RPC:
             "jsonrpc": "2.0",
             "id": str(self._id),
             "method": "system.multicall",
-            "params": [params]
+            "params": [params],
         }
 
         try:
-            r = self._session.post(self.url, json=payload, timeout=15)
+            r = self._session.post(self.url, json=payload, timeout=self.timeout)
             result = r.json()
             if "error" in result:
                 err = result["error"]
@@ -116,7 +139,7 @@ class Aria2RPC:
 
             raw_results = result.get("result")
             if not isinstance(raw_results, list):
-                logger.warning(f"Unexpected multicall response type: {type(raw_results)}")
+                logger.warning("Unexpected multicall response type: %s", type(raw_results))
                 return [None] * len(calls)
 
             processed = []
@@ -126,64 +149,109 @@ class Aria2RPC:
                         processed.append(item["result"])
                     elif "error" in item:
                         err = item["error"]
-                        msg = f"subcall error at index {idx}: {err.get('message', err)}"
-                        logger.warning(msg)
+                        logger.warning("Sub-call %d failed: %s", idx, err.get("message", err))
                         processed.append(None)
                     else:
-                        processed.append(item)
+                        processed.append(None)
                 else:
-                    processed.append(item)
+                    processed.append(None)
 
-            if len(processed) < len(calls):
-                processed.extend([None] * (len(calls) - len(processed)))
+            # If we got fewer results than calls, pad with None
+            while len(processed) < len(calls):
+                processed.append(None)
 
             return processed
+
+        except requests.exceptions.ConnectionError:
+            msg = "aria2 disconnected during batch call"
+            logger.warning(msg)
+            if self.on_error:
+                self.on_error(msg)
+            return [None] * len(calls)
+        except requests.exceptions.Timeout:
+            msg = f"aria2 timeout during batch call"
+            logger.warning(msg)
+            if self.on_error:
+                self.on_error(msg)
+            return [None] * len(calls)
         except Exception as e:
-            logger.warning(f"batch_call error: {e}")
+            msg = f"aria2 batch error: {e}"
+            logger.warning(msg)
+            if self.on_error:
+                self.on_error(msg)
             return [None] * len(calls)
 
-    def add_url(self, url: str, options: Optional[Dict] = None) -> Optional[Any]:
-        return self._call("aria2.addUri", [[url], options or {}])
+    def is_connected(self) -> bool:
+        """Check if aria2 is reachable."""
+        try:
+            response = self._session.get(self.url, timeout=5)
+            return response.status_code == 200
+        except Exception:
+            return False
+
+    def add_url(self, url: str, options: Optional[Dict] = None) -> Optional[str]:
+        """Add a download URL and return the GID."""
+        params = [url]
+        if options:
+            params.append(options)
+        result = self._call("aria2.addUri", params)
+        return result
+
+    def add_torrent(self, torrent_file: str, options: Optional[Dict] = None) -> Optional[str]:
+        """Add a torrent file and return the GID."""
+        import base64
+        with open(torrent_file, "rb") as f:
+            torrent_data = base64.b64encode(f.read()).decode("utf-8")
+        params = [torrent_data]
+        if options:
+            params.append(options)
+        result = self._call("aria2.addTorrent", params)
+        return result
+
+    def remove(self, gid: str) -> Optional[Any]:
+        """Remove a download by GID."""
+        return self._call("aria2.remove", [gid])
 
     def pause(self, gid: str) -> Optional[Any]:
+        """Pause a download by GID."""
         return self._call("aria2.pause", [gid])
 
     def resume(self, gid: str) -> Optional[Any]:
+        """Resume a download by GID."""
         return self._call("aria2.unpause", [gid])
 
-    def remove(self, gid: str) -> None:
-        self._call("aria2.remove", [gid])
-        self._call("aria2.removeDownloadResult", [gid])
-
-    def change_global_option(self, options: Dict) -> Optional[Any]:
-        return self._call("aria2.changeGlobalOption", [options])
+    def tell_status(self, gid: str) -> Optional[Dict]:
+        """Get status of a download by GID."""
+        return self._call("aria2.tellStatus", [gid])
 
     def get_global_stat(self) -> Optional[Dict]:
+        """Get global statistics."""
         return self._call("aria2.getGlobalStat")
 
-    def tell_status(self, gid: str, keys: Optional[List[str]] = None) -> Optional[Dict]:
-        if keys is None:
-            keys = ["gid", "status", "totalLength", "completedLength",
-                    "downloadSpeed", "connections", "files", "errorMessage"]
-        return self._call("aria2.tellStatus", [gid, keys])
+    def tell_active(self) -> Optional[List[Dict]]:
+        """Get active downloads."""
+        return self._call("aria2.tellActive")
 
-    def tell_active(self) -> List[Dict]:
-        return self._call("aria2.tellActive") or []
+    def tell_waiting(self, offset: int = 0, num: int = 1000) -> Optional[List[Dict]]:
+        """Get waiting downloads."""
+        return self._call("aria2.tellWaiting", [offset, num])
 
-    def tell_waiting(self, offset: int = 0, num: int = 1000) -> List[Dict]:
-        return self._call("aria2.tellWaiting", [offset, num]) or []
+    def tell_stopped(self, offset: int = 0, num: int = 1000) -> Optional[List[Dict]]:
+        """Get stopped downloads."""
+        return self._call("aria2.tellStopped", [offset, num])
 
-    def tell_stopped(self, offset: int = 0, num: int = 1000) -> List[Dict]:
-        return self._call("aria2.tellStopped", [offset, num]) or []
+    def purge_download_result(self) -> Optional[Any]:
+        """Purge completed/removed downloads from memory."""
+        return self._call("aria2.purgeDownloadResult")
 
-    def is_connected(self) -> bool:
-        return self.get_global_stat() is not None
+    def get_global_option(self) -> Optional[Dict]:
+        """Get global options."""
+        return self._call("aria2.getGlobalOption")
 
-    def get_status(self, gid: str) -> Optional[str]:
-        result = self.tell_status(gid, ["gid", "status"])
-        if result:
-            return result.get("status")
-        return None
+    def change_global_option(self, options: Dict) -> Optional[Any]:
+        """Change global options."""
+        return self._call("aria2.changeGlobalOption", [options])
 
-    def force_pause(self, gid: str) -> Optional[Any]:
-        return self._call("aria2.forcePause", [gid])
+    def close(self) -> None:
+        """Close the session."""
+        self._session.close()
