@@ -169,7 +169,7 @@ class Aria2RPC:
                 self.on_error(msg)
             return [None] * len(calls)
         except requests.exceptions.Timeout:
-            msg = f"aria2 timeout during batch call"
+            msg = "aria2 timeout during batch call"
             logger.warning(msg)
             if self.on_error:
                 self.on_error(msg)
@@ -220,9 +220,21 @@ class Aria2RPC:
         """Resume a download by GID."""
         return self._call("aria2.unpause", [gid])
 
-    def tell_status(self, gid: str) -> Optional[Dict]:
-        """Get status of a download by GID."""
-        return self._call("aria2.tellStatus", [gid])
+    def tell_status(self, gid: str, fields: Optional[List[str]] = None) -> Optional[Dict]:
+        """
+        Get status of a download by GID.
+
+        Args:
+            gid: The GID of the download.
+            fields: Optional list of fields to return. If None, returns all fields.
+
+        Returns:
+            Dictionary containing the download status, or None on error.
+        """
+        params = [gid]
+        if fields:
+            params.append(fields)
+        return self._call("aria2.tellStatus", params)
 
     def get_global_stat(self) -> Optional[Dict]:
         """Get global statistics."""
@@ -251,6 +263,45 @@ class Aria2RPC:
     def change_global_option(self, options: Dict) -> Optional[Any]:
         """Change global options."""
         return self._call("aria2.changeGlobalOption", [options])
+
+    def set_secret(self, secret: str) -> None:
+        """
+        Update the RPC secret.
+
+        Args:
+            secret: The new RPC secret.
+        """
+        self.secret = secret
+        logger.debug("RPC secret updated")
+
+    def get_certificate_fingerprint(self) -> Optional[str]:
+        """
+        Get the certificate fingerprint from the current SSL context.
+
+        Returns:
+            The SHA-256 fingerprint as a hex string, or None if not available.
+        """
+        # This is a placeholder. In a real implementation, you would extract
+        # the fingerprint from the SSL context of the session.
+        # For now, we return None as the fingerprint is managed by Aria2Manager.
+        return None
+
+    def _ensure_session(self) -> None:
+        """
+        Ensure the session is valid and recreate it if necessary.
+        Called after the secret or certificate changes.
+        """
+        # Recreate the session to pick up new SSL settings
+        old_verify = self._session.verify
+        old_headers = self._session.headers.copy()
+
+        self._session.close()
+        self._session = requests.Session()
+        self._session.verify = old_verify
+        self._session.headers.update(old_headers)
+        self._session.headers.update({"Connection": "keep-alive"})
+
+        logger.debug("RPC session recreated")
 
     def close(self) -> None:
         """Close the session."""
