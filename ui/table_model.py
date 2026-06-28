@@ -2,6 +2,7 @@
 from typing import Any, Dict, List, Optional
 
 from PyQt6.QtCore import QAbstractTableModel, QModelIndex, Qt
+from PyQt6.QtGui import QColor
 
 from utils.helpers import format_eta, format_size, format_speed
 
@@ -93,9 +94,11 @@ class DownloadTableModel(QAbstractTableModel):
 
     @staticmethod
     def _safe_int(value: Any, default: int = 0) -> int:
-        """Safely convert value to int, handling None and invalid types."""
+        """Safely convert value to int, handling None, TypeError and ValueError."""
+        if value is None:
+            return default
         try:
-            return int(value) if value is not None else default
+            return int(value)
         except (ValueError, TypeError):
             return default
 
