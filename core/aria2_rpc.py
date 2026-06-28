@@ -1,18 +1,11 @@
 # Requires: requests>=2.28.0
+"""Aria2 RPC client with certificate pinning and batch operations."""
 
-"""
-Aria2 RPC client using JSON-RPC over HTTPS with certificate pinning,
-retry with exponential backoff, and robust error handling.
-"""
-
-import os
 import logging
 import uuid
 import json
-import time
-import ssl
 from pathlib import Path
-from typing import List, Dict, Any, Optional, Union, cast
+from typing import List, Dict, Any, Optional
 from threading import Lock
 
 import requests
@@ -27,10 +20,6 @@ logger: logging.Logger = logging.getLogger(__name__)
 
 
 class Aria2RPC(QObject):
-    """
-    RPC client for aria2 using HTTPS with certificate pinning.
-    """
-
     error_occurred = pyqtSignal(str)
     connection_changed = pyqtSignal(bool)
 
@@ -45,7 +34,7 @@ class Aria2RPC(QObject):
         cert_file: Optional[Path] = None,
     ) -> None:
         super().__init__()
-        self.host: str = host.rstrip('/')
+        self.host: str = host.rstrip("/")
         self.port: int = port
         self.secret: str = secret
         self.timeout: float = max(1.0, timeout)
@@ -53,42 +42,30 @@ class Aria2RPC(QObject):
         self.fingerprint: Optional[str] = fingerprint
         self.cert_file: Optional[Path] = cert_file
         self._lock: Lock = Lock()
-        self._connected: bool = False
         self._session: Optional[requests.Session] = None
         self._error_handler = ErrorHandler()
         self._ensure_session()
 
     def _ensure_session(self) -> None:
-        """Create or recreate the requests session with proper SSL context."""
         if self._session is not None:
             self._session.close()
 
         session = requests.Session()
         session.headers.update({"Content-Type": "application/json"})
 
-        # Create SSL context with certificate pinning
+        if not self.cert_file or not self.cert_file.exists():
+            raise RuntimeError("Certificate file is required for secure communication.")
+
         try:
             ssl_context = create_ssl_context(
                 cert_file=self.cert_file,
                 fingerprint=self.fingerprint,
             )
-            # Apply the SSL context to the session's adapter
-            session.verify = False  # Always verify
-            # We need to mount a custom adapter with our SSL context
-            # requests doesn't directly support custom SSL context per session
-            # We'll use the verify parameter with the cert file
-            if self.cert_file and self.cert_file.exists():
-                session.verify = str(self.cert_file)
-            else:
-                # Fall back to system CA bundles
-                session.verify = True
+            session.verify = str(self.cert_file)
         except Exception as e:
             logger.error("Failed to configure SSL context: %s", e)
-            # Fall back to insecure mode as last resort (but we avoid this)
-            session.verify = False
-            logger.warning("SSL verification disabled due to configuration error.")
+            raise RuntimeError(f"SSL configuration failed: {e}")
 
-        # Retry strategy with exponential backoff
         retry_strategy = Retry(
             total=self.max_retries,
             backoff_factor=1.0,
@@ -100,194 +77,208 @@ class Aria2RPC(QObject):
             pool_maxsize=20,
             max_retries=retry_strategy,
         )
-        session.mount('http://', adapter)
-        session.mount('https://', adapter)
+        session.mount("http://", adapter)
+        session.mount("https://", adapter)
 
         self._session = session
 
-    def set_timeout(self, timeout: float) -> None:
-        with self._lock:
-            self.timeout = max(1.0, timeout)
-            logger.info("Aria2RPC timeout updated to %s s", self.timeout)
-
     def set_secret(self, secret: str) -> None:
-        """Update the RPC secret."""
         with self._lock:
             self.secret = secret
-            logger.info("Aria2RPC secret updated")
+        logger.info("Aria2RPC secret updated")
 
     def close(self) -> None:
         if self._session:
             self._session.close()
             self._session = None
 
-    def _emit_error(self, msg: str) -> None:
-        logger.error(msg)
-        self.error_occurred.emit(msg)
+    def _emit_error(self, error_msg: str) -> None:
+        self.error_occurred.emit(error_msg)
 
-    def _set_connected(self, state: bool) -> None:
-        if state != self._connected:
-            self._connected = state
-            self.connection_changed.emit(state)
-
-    def _call(self, method: str, params: Optional[List[Any]] = None) -> Optional[Any]:
-        with self._lock:
+    def _request(self, method: str, params: List[Any]) -> Optional[Dict[str, Any]]:
+        if self._session is None:
             self._ensure_session()
-            request_id: str = str(uuid.uuid4())
-            token: Optional[str] = f"token:{self.secret}" if self.secret else None
-            p: List[Any] = [token] + (params or []) if token else (params or [])
 
-            payload: Dict[str, Any] = {
-                "jsonrpc": "2.0",
-                "id": request_id,
-                "method": method,
-                "params": p,
-            }
+        request_id = str(uuid.uuid4())
+        payload = {
+            "jsonrpc": "2.0",
+            "id": request_id,
+            "method": method,
+            "params": [f"token:{self.secret}"] + params,
+        }
 
-            try:
-                response = self._session.post(
-                    f"{self.host}:{self.port}/jsonrpc",
-                    json=payload,
-                    timeout=self.timeout,
-                )
-                response.raise_for_status()
-                result = response.json()
+        url = f"{self.host}:{self.port}/jsonrpc"
 
-                if "error" in result:
-                    err = result["error"]
-                    error_code = err.get("code", 0)
-                    error_msg = err.get("message", str(err))
-                    user_msg = self._error_handler.translate(error_code, error_msg, method)
-                    self._emit_error(user_msg)
-                    self._set_connected(True)
-                    return None
-
-                self._set_connected(True)
-                return result.get("result")
-
-            except requests.exceptions.ConnectionError:
-                self._set_connected(False)
-                self._emit_error("اتصال به aria2 برقرار نیست. لطفاً aria2 را اجرا کنید.")
+        try:
+            response = self._session.post(url, json=payload, timeout=self.timeout)
+            response.raise_for_status()
+            data = response.json()
+            if "error" in data:
+                error_code = data["error"].get("code", -1)
+                error_msg = data["error"].get("message", "Unknown error")
+                friendly_msg = self._error_handler.translate(error_code, error_msg, method)
+                self._emit_error(friendly_msg)
                 return None
-            except requests.exceptions.Timeout:
-                self._set_connected(False)
-                self._emit_error(f"زمان پاسخ‌دهی aria2 به پایان رسید (متد: {method})")
-                return None
-            except requests.exceptions.HTTPError as e:
-                self._set_connected(False)
-                self._emit_error(f"خطای HTTP: {e.response.status_code} - {e.response.reason}")
-                return None
-            except Exception as e:
-                self._set_connected(False)
-                self._emit_error(f"خطای غیرمنتظره در ارتباط با aria2: {str(e)}")
-                return None
+            return data.get("result")
 
-    # ---------- Public API ----------
+        except requests.exceptions.SSLError as e:
+            logger.error("SSL error: %s", e)
+            self._emit_error(f"SSL error: {e}")
+            self.connection_changed.emit(False)
+            return None
+        except requests.exceptions.ConnectionError as e:
+            logger.error("Connection error: %s", e)
+            self.connection_changed.emit(False)
+            return None
+        except Exception as e:
+            logger.error("Unexpected error: %s", e)
+            return None
 
-    def add_url(self, url: str, options: Optional[Dict[str, Any]] = None) -> Optional[str]:
-        """Add a single download URL. Returns GID or None."""
-        return self._call("aria2.addUri", [[url], options or {}])
+    def _batch_request(self, calls: List[Dict[str, Any]]) -> Optional[List[Any]]:
+        if self._session is None:
+            self._ensure_session()
 
-    def add_torrent(self, torrent_file: bytes, options: Optional[Dict[str, Any]] = None) -> Optional[str]:
-        """Add a torrent download using torrent file content. Returns GID or None."""
-        import base64
-        torrent_b64 = base64.b64encode(torrent_file).decode('ascii')
-        return self._call("aria2.addTorrent", [torrent_b64, options or {}])
-
-    def add_magnet(self, magnet_uri: str, options: Optional[Dict[str, Any]] = None) -> Optional[str]:
-        """Add a magnet link. Returns GID or None."""
-        return self._call("aria2.addUri", [[magnet_uri], options or {}])
-
-    def add_urls(self, urls: List[str], options: Optional[Dict[str, Any]] = None) -> List[Optional[str]]:
-        """Add multiple URLs using multicall. Returns list of GIDs (or None)."""
-        if not urls:
-            return []
-        calls = []
-        for url in urls:
-            calls.append({
-                "methodName": "aria2.addUri",
-                "params": [[url], options or {}],
+        multicall_params = []
+        for call in calls:
+            method = call.get("methodName")
+            params = call.get("params", [])
+            multicall_params.append({
+                "methodName": method,
+                "params": [f"token:{self.secret}"] + params,
             })
-        result = self._call("system.multicall", [calls])
-        if isinstance(result, list):
-            gids = []
-            for resp in result:
-                if isinstance(resp, dict) and "result" in resp:
-                    gids.append(resp["result"])
-                else:
-                    gids.append(None)
-            return gids
-        return []
 
-    def pause(self, gid: str) -> bool:
-        return self._call("aria2.pause", [gid]) is not None
+        request_id = str(uuid.uuid4())
+        payload = {
+            "jsonrpc": "2.0",
+            "id": request_id,
+            "method": "system.multicall",
+            "params": multicall_params,
+        }
 
-    def resume(self, gid: str) -> bool:
-        return self._call("aria2.unpause", [gid]) is not None
+        url = f"{self.host}:{self.port}/jsonrpc"
 
-    def remove(self, gid: str, delete_files: bool = False) -> bool:
-        """Remove download. If delete_files is True, remove the incomplete files."""
-        result = self._call("aria2.remove", [gid])
-        if result is not None:
-            self._call("aria2.removeDownloadResult", [gid])
-            if delete_files:
-                # Get file paths from tellStatus
-                status = self.tell_status(gid, ["files"])
-                if status and "files" in status:
-                    for file_info in status["files"]:
-                        path = file_info.get("path")
-                        if path and os.path.exists(path):
-                            try:
-                                os.remove(path)
-                                logger.info("Deleted file: %s", path)
-                            except Exception as e:
-                                logger.error("Failed to delete file %s: %s", path, e)
-            return True
-        return False
+        try:
+            response = self._session.post(url, json=payload, timeout=self.timeout)
+            response.raise_for_status()
+            data = response.json()
+            if "error" in data:
+                error_code = data["error"].get("code", -1)
+                error_msg = data["error"].get("message", "Unknown error")
+                friendly_msg = self._error_handler.translate(error_code, error_msg, "system.multicall")
+                self._emit_error(friendly_msg)
+                return None
+            return data.get("result", [])
+        except Exception as e:
+            logger.error("Batch request error: %s", e)
+            return None
 
-    def change_option(self, gid: str, options: Dict[str, Any]) -> bool:
-        """Change options for a specific download (e.g., max-connection-per-server)."""
-        return self._call("aria2.changeOption", [gid, options]) is not None
+    # --- Core methods ---
+    def add_url(self, urls: List[str], options: Optional[Dict[str, Any]] = None, position: Optional[int] = None) -> Optional[str]:
+        params: List[Any] = [urls]
+        if options:
+            params.append(options)
+        if position is not None:
+            params.append(position)
+        result = self._request("aria2.addUrl", params)
+        return result if isinstance(result, str) else None
 
-    def change_global_option(self, options: Dict[str, Any]) -> bool:
-        return self._call("aria2.changeGlobalOption", [options]) is not None
+    def remove(self, gid: str) -> Optional[str]:
+        result = self._request("aria2.remove", [gid])
+        return result if isinstance(result, str) else None
 
-    def get_global_stat(self) -> Optional[Dict[str, Any]]:
-        return self._call("aria2.getGlobalStat")
+    def force_remove(self, gid: str) -> Optional[str]:
+        result = self._request("aria2.forceRemove", [gid])
+        return result if isinstance(result, str) else None
+
+    def pause(self, gid: str) -> Optional[str]:
+        result = self._request("aria2.pause", [gid])
+        return result if isinstance(result, str) else None
+
+    def pause_all(self) -> Optional[str]:
+        result = self._request("aria2.pauseAll", [])
+        return result if isinstance(result, str) else None
+
+    def unpause(self, gid: str) -> Optional[str]:
+        result = self._request("aria2.unpause", [gid])
+        return result if isinstance(result, str) else None
+
+    def unpause_all(self) -> Optional[str]:
+        result = self._request("aria2.unpauseAll", [])
+        return result if isinstance(result, str) else None
 
     def tell_status(self, gid: str, keys: Optional[List[str]] = None) -> Optional[Dict[str, Any]]:
-        if keys is None:
-            keys = [
-                "gid", "status", "totalLength", "completedLength",
-                "downloadSpeed", "uploadSpeed", "connections", "files",
-                "errorMessage", "eta", "dir"
-            ]
-        return self._call("aria2.tellStatus", [gid, keys])
+        params: List[Any] = [gid]
+        if keys:
+            params.append(keys)
+        result = self._request("aria2.tellStatus", params)
+        return result if isinstance(result, dict) else None
 
-    def tell_active(self) -> List[Dict[str, Any]]:
-        result = self._call("aria2.tellActive")
-        return result or []
+    def get_options(self, gid: str) -> Optional[Dict[str, Any]]:
+        result = self._request("aria2.getOptions", [gid])
+        return result if isinstance(result, dict) else None
 
-    def tell_waiting(self, offset: int = 0, num: int = 1000) -> List[Dict[str, Any]]:
-        result = self._call("aria2.tellWaiting", [offset, num])
-        return result or []
+    def change_option(self, gid: str, options: Dict[str, Any]) -> Optional[str]:
+        result = self._request("aria2.changeOption", [gid, options])
+        return result if isinstance(result, str) else None
 
-    def tell_stopped(self, offset: int = 0, num: int = 1000) -> List[Dict[str, Any]]:
-        result = self._call("aria2.tellStopped", [offset, num])
-        return result or []
+    def get_global_stat(self) -> Optional[Dict[str, Any]]:
+        result = self._request("aria2.getGlobalStat", [])
+        return result if isinstance(result, dict) else None
 
-    def is_connected(self) -> bool:
-        result = self.get_global_stat()
-        connected = result is not None
-        self._set_connected(connected)
-        return connected
+    def get_active_downloads(self) -> Optional[List[Dict[str, Any]]]:
+        result = self._request("aria2.tellActive", [])
+        return result if isinstance(result, list) else None
 
-    def get_status(self, gid: str) -> Optional[str]:
-        result = self.tell_status(gid, ["gid", "status"])
-        return result.get("status") if result else None
+    def get_waiting_downloads(self, offset: int = 0, num: int = 100) -> Optional[List[Dict[str, Any]]]:
+        result = self._request("aria2.tellWaiting", [offset, num])
+        return result if isinstance(result, list) else None
 
-    def force_pause(self, gid: str) -> bool:
-        return self._call("aria2.forcePause", [gid]) is not None
+    def get_stopped_downloads(self, offset: int = 0, num: int = 100) -> Optional[List[Dict[str, Any]]]:
+        result = self._request("aria2.tellStopped", [offset, num])
+        return result if isinstance(result, list) else None
 
-    def multicall(self, calls: List[Dict[str, Any]]) -> Optional[List[Any]]:
-        return self._call("system.multicall", [calls])
+    # --- Batch operations ---
+    def pause_batch(self, gids: List[str]) -> Optional[List[str]]:
+        if not gids:
+            return []
+        calls = [{"methodName": "aria2.pause", "params": [gid]} for gid in gids]
+        results = self._batch_request(calls)
+        if results is None:
+            return None
+        parsed = []
+        for r in results:
+            if isinstance(r, list) and len(r) > 0:
+                parsed.append(r[0] if isinstance(r[0], str) else None)
+            else:
+                parsed.append(None)
+        return parsed
+
+    def unpause_batch(self, gids: List[str]) -> Optional[List[str]]:
+        if not gids:
+            return []
+        calls = [{"methodName": "aria2.unpause", "params": [gid]} for gid in gids]
+        results = self._batch_request(calls)
+        if results is None:
+            return None
+        parsed = []
+        for r in results:
+            if isinstance(r, list) and len(r) > 0:
+                parsed.append(r[0] if isinstance(r[0], str) else None)
+            else:
+                parsed.append(None)
+        return parsed
+
+    def remove_batch(self, gids: List[str]) -> Optional[List[str]]:
+        if not gids:
+            return []
+        calls = [{"methodName": "aria2.remove", "params": [gid]} for gid in gids]
+        results = self._batch_request(calls)
+        if results is None:
+            return None
+        parsed = []
+        for r in results:
+            if isinstance(r, list) and len(r) > 0:
+                parsed.append(r[0] if isinstance(r[0], str) else None)
+            else:
+                parsed.append(None)
+        return parsed

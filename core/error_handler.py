@@ -1,15 +1,15 @@
-"""
-Error translation for aria2 error codes to user-friendly messages.
-"""
+"""Error translation for aria2 error codes to user-friendly messages
+and auto-recovery strategies."""
 
-from typing import Dict, Any
+from typing import Dict, Any, List, Optional
 
 
 class ErrorHandler:
-    """Translate aria2 error codes to user-friendly Persian messages."""
+    """Translate aria2 error codes to user-friendly Persian messages
+    with auto-recovery strategies."""
 
     ERROR_MAP: Dict[int, str] = {
-        1: "خطای عمومی aria2. لطفاً لاگ‌ها را بررسی کنید.",
+        1: "خطای عمومی aria2. لطفاً لاگها را بررسی کنید.",
         2: "پارامترهای ارسالی به aria2 نامعتبر است.",
         3: "aria2 قادر به اتصال به سرور مقصد نیست.",
         4: "aria2 از سرور پاسخ غیرمنتظره دریافت کرد.",
@@ -36,9 +36,56 @@ class ErrorHandler:
         25: "درخواست aria2 معتبر نیست (Bad Request).",
     }
 
+    # HIGH FIX: Auto-recovery strategies for common errors
+    RECOVERY_STRATEGIES: Dict[int, str] = {
+        3: "retry_connection",
+        10: "check_disk_space",
+        14: "retry_chunk",
+        17: "retry_request",
+        20: "retry_dns",
+        22: "retry_connection",
+    }
+
     def translate(self, code: int, message: str, method: str = "") -> str:
-        """Return a user-friendly error message."""
-        base = self.ERROR_MAP.get(code, f"خطای aria2: {message} (کد: {code})")
+        base = self.ERROR_MAP.get(
+            code,
+            f"خطای aria2: {message} (کد: {code})"
+        )
         if method:
             base += f" (در متد {method})"
         return base
+
+    def get_recovery_strategy(self, code: int) -> Optional[str]:
+        return self.RECOVERY_STRATEGIES.get(code)
+
+    def should_retry(self, code: int, attempt: int, max_attempts: int = 5) -> bool:
+        if attempt >= max_attempts:
+            return False
+        retryable_codes = {3, 14, 17, 20, 22}
+        return code in retryable_codes
+
+    def get_retry_delay(self, attempt: int, base_delay: float = 1.0) -> float:
+        return min(base_delay * (2 ** attempt), 30.0)
+
+    def get_recovery_action(self, code: int, context: Dict[str, Any]) -> Dict[str, Any]:
+        strategy = self.get_recovery_strategy(code)
+        action: Dict[str, Any] = {
+            "strategy": strategy or "none",
+            "retry": False,
+            "delay": 0,
+            "message": self.translate(code, "", ""),
+        }
+
+        if strategy in ("retry_connection", "retry_request", "retry_dns"):
+            action["retry"] = True
+            action["delay"] = 2.0
+            action["message"] = "تلاش مجدد برای اتصال..."
+        elif strategy == "check_disk_space":
+            action["retry"] = False
+            action["message"] = "فضای دیسک کافی نیست. لطفاً حداقل ۱۰۰ مگابایت فضا آزاد کنید."
+        elif strategy == "retry_chunk":
+            action["retry"] = True
+            action["delay"] = 5.0
+            action["message"] = "خطا در دانلود قطعه. تلاش مجدد..."
+
+        return action

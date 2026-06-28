@@ -1,22 +1,14 @@
 # Requires: PyQt6>=6.4.0
-
-"""
-Custom item delegates for progress bar and status rendering.
-"""
+"""Custom delegates for progress bar and status rendering with system palette."""
 
 from typing import Dict
 
-from PyQt6.QtWidgets import QStyledItemDelegate, QStyle, QApplication
+from PyQt6.QtWidgets import QStyledItemDelegate
 from PyQt6.QtCore import Qt, QRect, QSize
 from PyQt6.QtGui import QColor, QPalette, QPainter
 
 
 class ProgressDelegate(QStyledItemDelegate):
-    """Delegate that renders a progress bar for the Progress column."""
-
-    def __init__(self, parent=None) -> None:
-        super().__init__(parent)
-
     def paint(self, painter: QPainter, option, index) -> None:
         progress_data = index.data(Qt.ItemDataRole.DisplayRole)
         if progress_data is None:
@@ -28,7 +20,7 @@ class ProgressDelegate(QStyledItemDelegate):
                 value = float(progress_data[:-1])
             else:
                 value = float(progress_data)
-        except (ValueError, TypeError):
+        except Exception:
             value = 0
 
         rect = option.rect
@@ -39,6 +31,7 @@ class ProgressDelegate(QStyledItemDelegate):
 
         painter.save()
         palette = option.palette
+
         bg_color = palette.color(QPalette.ColorRole.Window)
         painter.fillRect(rect, bg_color)
 
@@ -46,7 +39,10 @@ class ProgressDelegate(QStyledItemDelegate):
             fill_rect = QRect(rect)
             fill_width = int((value / 100) * rect.width())
             fill_rect.setWidth(fill_width)
-            color = QColor(52, 152, 219)
+
+            highlight = palette.color(QPalette.ColorRole.Highlight)
+            color = QColor(highlight)
+            color = color.darker(120) if color.lightness() > 128 else color.lighter(120)
             painter.fillRect(fill_rect, color)
 
         painter.setPen(palette.color(QPalette.ColorRole.Text))
@@ -58,8 +54,6 @@ class ProgressDelegate(QStyledItemDelegate):
 
 
 class StatusDelegate(QStyledItemDelegate):
-    """Delegate that renders status as colored rounded labels."""
-
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
         self.status_colors: Dict[str, QColor] = {
@@ -78,7 +72,6 @@ class StatusDelegate(QStyledItemDelegate):
             return
 
         color = self.status_colors.get(status, QColor(149, 165, 166))
-
         rect = option.rect
         rect.setLeft(rect.left() + 4)
         rect.setRight(rect.right() - 4)
@@ -90,7 +83,8 @@ class StatusDelegate(QStyledItemDelegate):
         painter.setPen(Qt.PenStyle.NoPen)
         painter.drawRoundedRect(rect, 4, 4)
 
-        painter.setPen(QColor(255, 255, 255))
+        text_color = QColor(255, 255, 255) if color.lightness() < 128 else QColor(0, 0, 0)
+        painter.setPen(text_color)
         painter.drawText(rect, Qt.AlignmentFlag.AlignCenter, status)
         painter.restore()
 

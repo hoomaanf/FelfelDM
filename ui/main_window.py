@@ -1,20 +1,16 @@
 # Requires: PyQt6>=6.4.0
+"""Main window with search, progress, context menu, and auto-update."""
 
-"""
-Main application window with enhanced UI: search, progress, context menu, auto-update.
-"""
-
-import os
 import logging
-from typing import Optional, Dict, Any, List, cast
+from typing import Optional, Dict, Any
 
 from PyQt6.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QToolBar, QTableView,
     QAbstractItemView, QMenu, QMessageBox, QDialog, QLabel,
-    QStatusBar, QHeaderView, QLineEdit, QHBoxLayout, QPushButton,
+    QStatusBar, QHeaderView, QLineEdit, QHBoxLayout,
 )
-from PyQt6.QtCore import Qt, QSize, QModelIndex, pyqtSlot, QSortFilterProxyModel, pyqtSignal
-from PyQt6.QtGui import QAction, QIcon
+from PyQt6.QtCore import Qt, QSize, QSortFilterProxyModel, pyqtSignal
+from PyQt6.QtGui import QAction
 
 from core.data_store import DataStore
 from core.aria2_rpc import Aria2RPC
@@ -24,27 +20,28 @@ from core.session_manager import SessionManager
 from core.updater import Updater
 from ui.dialogs import (
     AddDownloadDialog, SingleDownloadDialog, QuickDownloadDialog,
-    SettingsDialog, DownloadProgressDialog, TorrentDialog,
+    SettingsDialog, DownloadProgressDialog,
 )
 from ui.table_model import DownloadTableModel
 from ui.delegates import ProgressDelegate, StatusDelegate
 from ui.icons import get_icon
-from utils.helpers import format_speed, check_disk_space
+from utils.helpers import format_speed
+
+from main import __version__
 
 logger: logging.Logger = logging.getLogger(__name__)
 
 
 class MainWindow(QMainWindow):
-    """Main window for FelfelDM download manager."""
-
-    update_available = pyqtSignal(str)  # Signal for update availability
+    update_available = pyqtSignal(str)
 
     def __init__(self, aria2_manager: Aria2Manager, store: DataStore, session_mgr: SessionManager) -> None:
         super().__init__()
         self.aria2_manager = aria2_manager
         self.store = store
         self.session_mgr = session_mgr
-        self.setWindowTitle("FelfelDM")
+
+        self.setWindowTitle(f"FelfelDM v{__version__}")
         self.setMinimumSize(1000, 600)
 
         self.aria2 = Aria2RPC(
@@ -63,14 +60,10 @@ class MainWindow(QMainWindow):
 
         self.worker: Optional[BackendWorker] = None
         self._start_backend()
-
         self.progress_dialogs: Dict[str, DownloadProgressDialog] = {}
 
-        # Restore session on startup
         self._restore_session()
-
-        # Auto-update check (daily)
-        self.updater = Updater("1.0.0")  # version should be defined centrally
+        self.updater = Updater(__version__)
         self._check_updates()
 
     def _setup_ui(self) -> None:
@@ -80,7 +73,6 @@ class MainWindow(QMainWindow):
         main_layout.setContentsMargins(6, 6, 6, 6)
         main_layout.setSpacing(6)
 
-        # Search bar
         search_layout = QHBoxLayout()
         search_label = QLabel("Search:")
         self.search_edit = QLineEdit()
@@ -94,431 +86,261 @@ class MainWindow(QMainWindow):
         toolbar.setIconSize(QSize(24, 24))
         self.addToolBar(toolbar)
 
-        add_action = QAction(get_icon('list-add'), "Add Downloads", self)
+        add_action = QAction(get_icon("list-add"), "Add Downloads", self)
         add_action.triggered.connect(self._add_downloads)
         toolbar.addAction(add_action)
 
-        single_action = QAction(get_icon('document-new'), "Single Download", self)
+        single_action = QAction(get_icon("document-new"), "Single Download", self)
         single_action.triggered.connect(self._single_download)
         toolbar.addAction(single_action)
 
-        torrent_action = QAction(get_icon('torrent'), "Add Torrent", self)
-        torrent_action.triggered.connect(self._add_torrent)
-        toolbar.addAction(torrent_action)
-
-        quick_action = QAction(get_icon('insert-link'), "Quick Download", self)
+        quick_action = QAction(get_icon("insert-link"), "Quick Download", self)
         quick_action.triggered.connect(self._quick_download)
         toolbar.addAction(quick_action)
 
         toolbar.addSeparator()
 
-        pause_all = QAction(get_icon('media-playback-pause'), "Pause All", self)
-        pause_all.triggered.connect(self._pause_all)
-        toolbar.addAction(pause_all)
+        pause_action = QAction(get_icon("media-playback-pause"), "Pause All", self)
+        pause_action.triggered.connect(self._pause_all)
+        toolbar.addAction(pause_action)
 
-        resume_all = QAction(get_icon('media-playback-start'), "Resume All", self)
-        resume_all.triggered.connect(self._resume_all)
-        toolbar.addAction(resume_all)
+        resume_action = QAction(get_icon("media-playback-start"), "Resume All", self)
+        resume_action.triggered.connect(self._resume_all)
+        toolbar.addAction(resume_action)
 
         toolbar.addSeparator()
 
-        settings_action = QAction(get_icon('preferences-system'), "Settings", self)
-        settings_action.triggered.connect(self._open_settings)
+        settings_action = QAction(get_icon("preferences-system"), "Settings", self)
+        settings_action.triggered.connect(self._show_settings)
         toolbar.addAction(settings_action)
 
-        self.table = QTableView()
-        self.model = DownloadTableModel(self.store)
+        self.table_view = QTableView()
+        self.table_model = DownloadTableModel(self.store, self.aria2)
         self.proxy_model = QSortFilterProxyModel()
-        self.proxy_model.setSourceModel(self.model)
-        self.proxy_model.setFilterKeyColumn(-1)  # all columns
+        self.proxy_model.setSourceModel(self.table_model)
+        self.proxy_model.setFilterKeyColumn(-1)
         self.proxy_model.setFilterCaseSensitivity(Qt.CaseSensitivity.CaseInsensitive)
-        self.table.setModel(self.proxy_model)
-        self.table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
-        self.table.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
-        self.table.setAlternatingRowColors(True)
 
-        self.table.setItemDelegateForColumn(3, ProgressDelegate(self.table))
-        self.table.setItemDelegateForColumn(4, StatusDelegate(self.table))
+        self.table_view.setModel(self.proxy_model)
+        self.table_view.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+        self.table_view.setAlternatingRowColors(True)
+        self.table_view.setSortingEnabled(True)
+        self.table_view.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
 
-        self.table.setColumnWidth(0, 200)
-        self.table.setColumnWidth(1, 80)
-        self.table.setColumnWidth(2, 100)
-        self.table.setColumnWidth(3, 200)
-        self.table.setColumnWidth(4, 100)
-        self.table.setColumnWidth(5, 80)
-        self.table.setColumnWidth(6, 80)
-        self.table.setColumnWidth(7, 80)
-        self.table.setColumnWidth(8, 100)
+        self.table_view.setItemDelegateForColumn(3, ProgressDelegate(self.table_view))
+        self.table_view.setItemDelegateForColumn(4, StatusDelegate(self.table_view))
 
-        self.table.verticalHeader().setVisible(False)
-        self.table.setSortingEnabled(True)
+        self.table_view.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self.table_view.customContextMenuRequested.connect(self._show_context_menu)
 
-        main_layout.addWidget(self.table)
-
-        self.table.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
-        self.table.customContextMenuRequested.connect(self._show_context_menu)
-        self.table.doubleClicked.connect(self._show_progress_dialog)
+        main_layout.addWidget(self.table_view)
 
     def _setup_menu(self) -> None:
         menubar = self.menuBar()
-
         file_menu = menubar.addMenu("File")
-        exit_action = QAction("Exit", self)
-        exit_action.triggered.connect(self.close)
-        file_menu.addAction(exit_action)
+        add_action = file_menu.addAction("Add Downloads...")
+        add_action.triggered.connect(self._add_downloads)
+        file_menu.addSeparator()
+        file_menu.addAction("Exit").triggered.connect(self.close)
 
         download_menu = menubar.addMenu("Download")
-        add_action = QAction("Add Downloads", self)
-        add_action.triggered.connect(self._add_downloads)
-        download_menu.addAction(add_action)
-        single_action = QAction("Single Download", self)
-        single_action.triggered.connect(self._single_download)
-        download_menu.addAction(single_action)
-        torrent_action = QAction("Add Torrent", self)
-        torrent_action.triggered.connect(self._add_torrent)
-        download_menu.addAction(torrent_action)
-        quick_action = QAction("Quick Download", self)
-        quick_action.triggered.connect(self._quick_download)
-        download_menu.addAction(quick_action)
-        download_menu.addSeparator()
-        pause_all = QAction("Pause All", self)
-        pause_all.triggered.connect(self._pause_all)
-        download_menu.addAction(pause_all)
-        resume_all = QAction("Resume All", self)
-        resume_all.triggered.connect(self._resume_all)
-        download_menu.addAction(resume_all)
+        download_menu.addAction("Pause All").triggered.connect(self._pause_all)
+        download_menu.addAction("Resume All").triggered.connect(self._resume_all)
 
-        view_menu = menubar.addMenu("View")
-        refresh_action = QAction("Refresh", self)
-        refresh_action.triggered.connect(self._refresh)
-        view_menu.addAction(refresh_action)
-
-        settings_menu = menubar.addMenu("Settings")
-        settings_action = QAction("Preferences", self)
-        settings_action.triggered.connect(self._open_settings)
-        settings_menu.addAction(settings_action)
+        tools_menu = menubar.addMenu("Tools")
+        tools_menu.addAction("Settings...").triggered.connect(self._show_settings)
+        tools_menu.addSeparator()
+        tools_menu.addAction("Check for Updates...").triggered.connect(self._check_updates)
 
         help_menu = menubar.addMenu("Help")
-        about_action = QAction("About", self)
-        about_action.triggered.connect(self._show_about)
-        help_menu.addAction(about_action)
-        update_action = QAction("Check for Updates", self)
-        update_action.triggered.connect(self._check_updates_manual)
-        help_menu.addAction(update_action)
+        help_menu.addAction("About").triggered.connect(self._show_about)
 
     def _setup_statusbar(self) -> None:
-        self.statusbar = self.statusBar()
-
-        self.status_lbl = QLabel("● Connected")
-        self.status_lbl.setStyleSheet("color: #2ecc71; font-weight: bold;")
-        self.statusbar.addWidget(self.status_lbl)
-
-        self.statusbar.addPermanentWidget(QLabel("   "))
-
-        self.download_count_lbl = QLabel("0 active")
-        self.statusbar.addPermanentWidget(self.download_count_lbl)
-
-        self.speed_lbl = QLabel("0 B/s")
-        self.statusbar.addPermanentWidget(self.speed_lbl)
+        self.status_bar = QStatusBar()
+        self.setStatusBar(self.status_bar)
+        self.status_label = QLabel("Ready")
+        self.status_bar.addWidget(self.status_label)
+        self.speed_label = QLabel("Speed: 0 B/s")
+        self.status_bar.addPermanentWidget(self.speed_label)
+        self.download_count_label = QLabel("Downloads: 0")
+        self.status_bar.addPermanentWidget(self.download_count_label)
 
     def _setup_connections(self) -> None:
-        self.aria2.error_occurred.connect(self._on_aria2_error)
-        self.aria2.connection_changed.connect(self._on_connection_changed)
+        self.table_model.dataChanged.connect(lambda: None)
 
     def _start_backend(self) -> None:
-        if self.worker:
-            self.worker.stop()
-            self.worker.wait()
         self.worker = BackendWorker(self.aria2, self.store, self.session_mgr, self.aria2_manager)
         self.worker.stats_updated.connect(self._on_stats_updated)
         self.worker.connection_changed.connect(self._on_connection_changed)
         self.worker.start()
 
-    @pyqtSlot(dict)
-    def _on_stats_updated(self, data: Dict[str, Any]) -> None:
-        if not data.get("connected", False):
-            return
-        stat = data.get("stat", {})
-        active = data.get("active", [])
-        waiting = data.get("waiting", [])
-        stopped = data.get("stopped", [])
-
-        active_count = len(active)
-        self.download_count_lbl.setText(f"{active_count} active")
-
-        speed = int(stat.get("downloadSpeed", 0))
-        self.speed_lbl.setText(format_speed(speed))
-
-        self.model.update_downloads(active, waiting, stopped)
-
-        all_downloads = {dl.get("gid"): dl for dl in active + waiting + stopped}
-        for gid, dlg in list(self.progress_dialogs.items()):
-            if gid in all_downloads:
-                dlg.update_status(all_downloads[gid])
-            else:
-                dlg.update_status({"status": "removed"})
-
-    @pyqtSlot(str)
-    def _on_aria2_error(self, msg: str) -> None:
-        display_msg = msg[:50] + "..." if len(msg) > 50 else msg
-        self.status_lbl.setText(f"⚠ {display_msg}")
-        self.status_lbl.setStyleSheet("color: #e74c3c; font-weight: bold;")
-        if any(k in msg for k in ["اتصال", "aria2 را اجرا", "احراز هویت", "فضای کافی"]):
-            QMessageBox.critical(self, "Error", msg)
-
-    @pyqtSlot(bool)
-    def _on_connection_changed(self, connected: bool) -> None:
-        if connected:
-            self.status_lbl.setText("● Connected")
-            self.status_lbl.setStyleSheet("color: #2ecc71; font-weight: bold;")
-        else:
-            self.status_lbl.setText("● Disconnected")
-            self.status_lbl.setStyleSheet("color: #e74c3c; font-weight: bold;")
-
-    def _filter_table(self, text: str) -> None:
-        # Use filterRegularExpression instead of deprecated setFilterFixedString
-        self.proxy_model.setFilterRegularExpression(text)
-
-    def _add_downloads(self) -> None:
-        queues = [q for q in self.store.queues if q.name != "__direct__"]
-        dlg = AddDownloadDialog(queues, self.store, parent=self)
-        if dlg.exec() == QDialog.DialogCode.Accepted:
-            data = dlg.get_data()
-            if data:
-                self._perform_add_urls(data)
-
-    def _single_download(self) -> None:
-        queues = [q for q in self.store.queues if q.name != "__direct__"]
-        dlg = SingleDownloadDialog(queues, self.store, self)
-        if dlg.exec() == QDialog.DialogCode.Accepted:
-            data = dlg.get_data()
-            if data:
-                self._perform_add_urls(data, single=True)
-
-    def _quick_download(self) -> None:
-        queues = [q for q in self.store.queues if q.name != "__direct__"]
-        dlg = QuickDownloadDialog(queues, self.store, self)
-        if dlg.exec() == QDialog.DialogCode.Accepted:
-            data = dlg.get_data()
-            if data:
-                self._perform_add_urls(data)
-
-    def _add_torrent(self) -> None:
-        queues = [q for q in self.store.queues if q.name != "__direct__"]
-        dlg = TorrentDialog(queues, self.store, self)
-        if dlg.exec() == QDialog.DialogCode.Accepted:
-            data = dlg.get_data()
-            if data:
-                self._perform_add_torrent(data)
-
-    def _perform_add_urls(self, data: Dict[str, Any], single: bool = False) -> None:
-        urls = data.get("urls", [])
-        if not urls:
-            return
-        start_immediately = data.get("start_immediately", False)
-        path = data["path"]
-        if not check_disk_space(path, 0):
-            QMessageBox.warning(self, "Disk Space", "Not enough free disk space.")
-            return
-        opts = {
-            "dir": path,
-            "max-connection-per-server": str(data.get("connections", 16)),
-            "pause": not start_immediately,
-            "min-split-size": "1M",
-            "split": str(data.get("connections", 16)),
-        }
-        cookies = self.store.get_cookies()
-        headers = self.store.get_headers()
-        if cookies:
-            opts["cookie"] = cookies
-        if headers:
-            opts["header"] = [h.strip() for h in headers.split('\n') if h.strip()]
-        queue_name = "Default"
-        if "queue" in data:
-            q_idx = data["queue"]
-            if q_idx < len(self.store.queues):
-                queue_name = self.store.queues[q_idx].name
-        if single:
-            gid = self.aria2.add_url(urls[0], opts)
-            if gid:
-                self.store.add_gid_to_queue(queue_name, gid)
-                if start_immediately:
-                    self.aria2.resume(gid)
-        else:
-            gids = self.aria2.add_urls(urls, opts)
-            for gid in gids:
-                if gid:  # Check for None
-                    self.store.add_gid_to_queue(queue_name, gid)
-                    if start_immediately:
-                        self.aria2.resume(gid)
-
-    def _perform_add_torrent(self, data: Dict[str, Any]) -> None:
-        torrent_file = data.get("torrent_file")
-        magnet = data.get("magnet")
-        start_immediately = data.get("start_immediately", False)
-        path = data["path"]
-        if not check_disk_space(path, 0):
-            QMessageBox.warning(self, "Disk Space", "Not enough free disk space.")
-            return
-        opts = {
-            "dir": path,
-            "pause": not start_immediately,
-        }
-        if torrent_file:
-            gid = self.aria2.add_torrent(torrent_file, opts)
-        elif magnet:
-            gid = self.aria2.add_magnet(magnet, opts)
-        else:
-            QMessageBox.warning(self, "Error", "No torrent source provided.")
-            return
-        if gid:
-            queue_name = "Default"
-            if "queue" in data:
-                q_idx = data["queue"]
-                if q_idx < len(self.store.queues):
-                    queue_name = self.store.queues[q_idx].name
-            self.store.add_gid_to_queue(queue_name, gid)
-            if start_immediately:
-                self.aria2.resume(gid)
-
-    def _pause_all(self) -> None:
-        active = self.aria2.tell_active()
-        for dl in active:
-            gid = dl.get("gid")
-            if gid:
-                self.aria2.pause(gid)
-
-    def _resume_all(self) -> None:
-        waiting = self.aria2.tell_waiting()
-        for dl in waiting:
-            gid = dl.get("gid")
-            if gid:
-                self.aria2.resume(gid)
-
-    def _open_settings(self) -> None:
-        dlg = SettingsDialog(self.store, self.aria2, self)
-        if dlg.exec() == QDialog.DialogCode.Accepted:
-            dlg.save_settings()
-            # Restart backend to apply new settings
-            self._start_backend()
-
-    def _refresh(self) -> None:
-        self.model.refresh()
-
-    def _show_about(self) -> None:
-        QMessageBox.about(
-            self,
-            "About FelfelDM",
-            "FelfelDM - Download Manager\n\n"
-            "Built with PyQt6 and aria2.\n"
-            "Licensed under MIT License.\n"
-            "Version 1.0.0"
-        )
-
-    def _show_context_menu(self, pos) -> None:
-        index = self.table.indexAt(pos)
-        if not index.isValid():
-            return
-        source_index = self.proxy_model.mapToSource(index)
-        gid = self.model.data(self.model.index(source_index.row(), 0), Qt.ItemDataRole.UserRole)
-        if not gid:
-            return
-        menu = QMenu(self)
-        resume_action = QAction("Resume", self)
-        resume_action.triggered.connect(lambda: self.aria2.resume(gid))
-        menu.addAction(resume_action)
-        pause_action = QAction("Pause", self)
-        pause_action.triggered.connect(lambda: self.aria2.pause(gid))
-        menu.addAction(pause_action)
-        menu.addSeparator()
-        remove_action = QAction("Remove (keep files)", self)
-        remove_action.triggered.connect(lambda: self.aria2.remove(gid, delete_files=False))
-        menu.addAction(remove_action)
-        remove_files_action = QAction("Remove and delete files", self)
-        remove_files_action.triggered.connect(lambda: self.aria2.remove(gid, delete_files=True))
-        menu.addAction(remove_files_action)
-        menu.exec(self.table.viewport().mapToGlobal(pos))
-
-    def _show_progress_dialog(self, index: QModelIndex) -> None:
-        source_index = self.proxy_model.mapToSource(index)
-        gid = self.model.data(self.model.index(source_index.row(), 0), Qt.ItemDataRole.UserRole)
-        if not gid:
-            return
-        url = self.model.data(self.model.index(source_index.row(), 1), Qt.ItemDataRole.DisplayRole) or ""
-        if gid in self.progress_dialogs:
-            dlg = self.progress_dialogs[gid]
-            dlg.raise_()
-            dlg.activateWindow()
-            return
-        dlg = DownloadProgressDialog(gid, url, self)
-        dlg.pause_requested.connect(self._on_progress_pause)
-        dlg.cancel_requested.connect(self._on_progress_cancel)
-        dlg.finished.connect(lambda: self._on_progress_closed(gid))
-        self.progress_dialogs[gid] = dlg
-        dlg.show()
-
-    @pyqtSlot(str, bool)
-    def _on_progress_pause(self, gid: str, pause: bool) -> None:
-        if pause:
-            self.aria2.pause(gid)
-        else:
-            self.aria2.resume(gid)
-
-    @pyqtSlot(str)
-    def _on_progress_cancel(self, gid: str) -> None:
-        self.aria2.remove(gid, delete_files=True)
-
-    @pyqtSlot(str)
-    def _on_progress_closed(self, gid: str) -> None:
-        if gid in self.progress_dialogs:
-            del self.progress_dialogs[gid]
-
     def _restore_session(self) -> None:
         gids = self.session_mgr.load_session()
         if gids:
-            logger.info("Restoring session with %d downloads", len(gids))
-            for gid in gids:
-                # Check if GID exists in aria2 before resuming
-                status = self.aria2.tell_status(gid, ["gid"])
-                if status and status.get("gid"):
-                    self.aria2.resume(gid)
-                else:
-                    logger.warning("GID %s not found in aria2, skipping", gid)
+            logger.info("Restoring %d downloads", len(gids))
+            self._refresh_table()
 
     def _check_updates(self) -> None:
-        """Check for updates silently (e.g., on startup)."""
-        new_version = self.updater.check_for_updates()
-        if new_version:
-            self.update_available.emit(new_version)
-            reply = QMessageBox.question(
-                self,
-                "Update Available",
-                f"Version {new_version} is available. Do you want to download and install it?",
-                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
-            )
-            if reply == QMessageBox.StandardButton.Yes:
-                # For demo, we just show a message
-                QMessageBox.information(self, "Update", "Update download would start. (Not implemented)")
+        import threading
 
-    def _check_updates_manual(self) -> None:
-        """Check for updates on user request."""
-        new_version = self.updater.check_for_updates()
-        if new_version:
-            QMessageBox.information(self, "Update Available", f"Version {new_version} is available.")
+        def check_thread() -> None:
+            new_version = self.updater.check_for_updates()
+            if new_version:
+                self.update_available.emit(new_version)
+
+        thread = threading.Thread(target=check_thread, daemon=True)
+        thread.start()
+        self.update_available.connect(self._on_update_available)
+
+    def _on_update_available(self, new_version: str) -> None:
+        reply = QMessageBox.question(
+            self,
+            "Update Available",
+            f"Version {new_version} is available. Download now?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+        )
+        if reply == QMessageBox.StandardButton.Yes:
+            self._download_update(new_version)
+
+    def _download_update(self, new_version: str) -> None:
+        download_url = f"https://felfeldm.example.com/download/FelfelDM-{new_version}.exe"
+        if self.updater.download_update(new_version, download_url):
+            QMessageBox.information(self, "Update Downloaded", "Update verified. Installing...")
+            self.updater.install_update()
+            self.close()
         else:
-            QMessageBox.information(self, "No Updates", "You are running the latest version.")
+            QMessageBox.critical(self, "Update Failed", "Download or verification failed.")
+
+    def _on_stats_updated(self, data: Dict[str, Any]) -> None:
+        self.table_model.refresh()
+        if "global_stat" in data:
+            stat = data["global_stat"]
+            speed = int(stat.get("downloadSpeed", 0))
+            self.speed_label.setText(f"Speed: {format_speed(speed)}")
+            count = int(stat.get("numActive", 0))
+            self.download_count_label.setText(f"Downloads: {count}")
+
+    def _on_connection_changed(self, connected: bool) -> None:
+        if connected:
+            self.status_label.setText("Connected to aria2")
+            self.status_label.setStyleSheet("color: green;")
+        else:
+            self.status_label.setText("Disconnected - reconnecting...")
+            self.status_label.setStyleSheet("color: red;")
+
+    def _filter_table(self, text: str) -> None:
+        self.proxy_model.setFilterFixedString(text)
+
+    def _refresh_table(self) -> None:
+        self.table_model.refresh()
+
+    def _add_downloads(self) -> None:
+        dialog = AddDownloadDialog(self.store, self)
+        if dialog.exec() == QDialog.DialogCode.Accepted:
+            urls = dialog.get_urls()
+            options = dialog.get_options()
+            queue_name = dialog.get_queue()
+            start_immediately = dialog.start_immediately()
+
+            for url in urls:
+                gid = self.aria2.add_url([url], options)
+                if gid:
+                    self.store.add_gid_to_queue(queue_name, gid)
+                    if start_immediately:
+                        self.aria2.unpause(gid)
+            self._refresh_table()
+
+    def _single_download(self) -> None:
+        dialog = SingleDownloadDialog(self.store, self)
+        if dialog.exec() == QDialog.DialogCode.Accepted:
+            url = dialog.get_url()
+            if url:
+                gid = self.aria2.add_url([url], dialog.get_options())
+                if gid:
+                    self.store.add_gid_to_queue("default", gid)
+                    self._refresh_table()
+
+    def _quick_download(self) -> None:
+        dialog = QuickDownloadDialog(self)
+        if dialog.exec() == QDialog.DialogCode.Accepted:
+            url = dialog.get_url()
+            if url:
+                gid = self.aria2.add_url([url], {})
+                if gid:
+                    self.store.add_gid_to_queue("default", gid)
+                    self._refresh_table()
+
+    def _pause_all(self) -> None:
+        self.aria2.pause_all()
+        self._refresh_table()
+
+    def _resume_all(self) -> None:
+        self.aria2.unpause_all()
+        self._refresh_table()
+
+    def _show_settings(self) -> None:
+        dialog = SettingsDialog(self.store, self)
+        if dialog.exec() == QDialog.DialogCode.Accepted:
+            self.store.reload()
+            self._refresh_table()
+
+    def _show_context_menu(self, pos) -> None:
+        index = self.table_view.indexAt(pos)
+        if not index.isValid():
+            return
+        source_index = self.proxy_model.mapToSource(index)
+        row = source_index.row()
+        gid = self.table_model.get_gid(row)
+        if not gid:
+            return
+
+        menu = QMenu(self)
+        menu.addAction("Pause").triggered.connect(lambda: self._pause_download(gid))
+        menu.addAction("Resume").triggered.connect(lambda: self._resume_download(gid))
+        menu.addSeparator()
+        menu.addAction("Remove").triggered.connect(lambda: self._remove_download(gid))
+        menu.addAction("Force Remove").triggered.connect(lambda: self._force_remove_download(gid))
+        menu.addSeparator()
+        menu.addAction("Show Details").triggered.connect(lambda: self._show_download_details(gid))
+        menu.exec(self.table_view.viewport().mapToGlobal(pos))
+
+    def _pause_download(self, gid: str) -> None:
+        self.aria2.pause(gid)
+        self._refresh_table()
+
+    def _resume_download(self, gid: str) -> None:
+        self.aria2.unpause(gid)
+        self._refresh_table()
+
+    def _remove_download(self, gid: str) -> None:
+        reply = QMessageBox.question(self, "Remove", "Are you sure?",
+                                     QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
+        if reply == QMessageBox.StandardButton.Yes:
+            self.aria2.remove(gid)
+            self.store.remove_gid(gid)
+            self._refresh_table()
+
+    def _force_remove_download(self, gid: str) -> None:
+        reply = QMessageBox.question(self, "Force Remove", "Are you sure?",
+                                     QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
+        if reply == QMessageBox.StandardButton.Yes:
+            self.aria2.force_remove(gid)
+            self.store.remove_gid(gid)
+            self._refresh_table()
+
+    def _show_download_details(self, gid: str) -> None:
+        if gid not in self.progress_dialogs:
+            self.progress_dialogs[gid] = DownloadProgressDialog(gid, self.aria2, self)
+        self.progress_dialogs[gid].show()
+        self.progress_dialogs[gid].raise_()
+
+    def _show_about(self) -> None:
+        QMessageBox.about(self, "About FelfelDM", f"FelfelDM v{__version__}\n\nA modern download manager.")
 
     def closeEvent(self, event) -> None:
-        # Save active GIDs
-        active = self.aria2.tell_active()
-        active_gids = [dl.get("gid") for dl in active if dl.get("gid")]
-        self.session_mgr.save_session(active_gids)
-
+        gids = self.store.get_all_gids()
+        self.session_mgr.save_session(gids)
         if self.worker:
             self.worker.stop()
-            self.worker.wait()
-        self.aria2.close()
         self.aria2_manager.stop()
-        for dlg in list(self.progress_dialogs.values()):
-            dlg.close()
         event.accept()
