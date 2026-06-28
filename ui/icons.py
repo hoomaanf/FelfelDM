@@ -7,8 +7,6 @@ from PyQt6.QtCore import QByteArray, Qt
 from PyQt6.QtGui import QIcon, QPixmap, QPainter
 from PyQt6.QtSvg import QSvgRenderer
 
-# Simple SVG icons for common actions
-# All icons use currentColor to adapt to theme.
 ICON_DATA = {
     "list-add": """<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="24" height="24">
         <path d="M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6v2z" fill="currentColor"/>
@@ -43,10 +41,7 @@ ICON_DATA = {
 
 
 def get_icon(name: str) -> QIcon:
-    """
-    Return a QIcon from embedded SVG data or fallback to theme.
-    """
-    # Try embedded SVG first
+    """Return a QIcon from embedded SVG data or fallback to theme."""
     svg_data = ICON_DATA.get(name)
     if svg_data:
         try:
@@ -59,13 +54,10 @@ def get_icon(name: str) -> QIcon:
                 painter.end()
                 return QIcon(pixmap)
         except Exception:
-            # Fall through to theme fallback
             pass
 
-    # Fallback to theme
     icon = QIcon.fromTheme(name)
     if not icon.isNull():
         return icon
 
-    # Final fallback: empty icon
     return QIcon()
