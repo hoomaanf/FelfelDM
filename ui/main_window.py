@@ -1,6 +1,7 @@
 # ui/main_window.py
 """
 Main application window - now acts as UI coordinator.
+Includes modern UI, search, torrent support, theme switching, and system tray.
 """
 
 import logging
@@ -12,7 +13,7 @@ from PyQt6.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QPushButton, QTableView, QHeaderView, QComboBox,
     QLabel, QToolBar, QMenu, QSystemTrayIcon, QMenuBar,
-    QMessageBox, QLineEdit, QFileDialog,
+    QMessageBox, QLineEdit, QFileDialog, QApplication,
 )
 
 from core import Aria2RPC, BackendWorker, DataStore, LocalServer
@@ -21,7 +22,8 @@ from core.aria2_manager import Aria2Manager
 from ui.delegates import ProgressDelegate
 from ui.dialogs import AddDownloadDialog, SettingsDialog, AddTorrentDialog, TorrentFileSelectionDialog
 from ui.table_model import DownloadTableModel
-from utils.helpers import format_speed, get_icon
+from ui.icons import get_icon
+from utils.helpers import format_speed
 from utils.style import apply_theme, detect_theme
 
 logger = logging.getLogger(__name__)
@@ -171,7 +173,8 @@ class TrayController(QObject):
         if reason == QSystemTrayIcon.ActivationReason.DoubleClick:
             self.show_window_requested.emit()
 
-    def show_message(self, title: str, message: str, icon: QSystemTrayIcon.MessageIcon = QSystemTrayIcon.MessageIcon.Information) -> None:
+    def show_message(self, title: str, message: str,
+                     icon: QSystemTrayIcon.MessageIcon = QSystemTrayIcon.MessageIcon.Information) -> None:
         self.tray.showMessage(title, message, icon)
 
     def set_icon(self, icon) -> None:
@@ -202,7 +205,7 @@ class SearchProxyModel(QSortFilterProxyModel):
 
 
 class MainWindow(QMainWindow):
-    """Main application window - UI coordinator."""
+    """Main application window - UI coordinator with modern design."""
 
     def __init__(self) -> None:
         super().__init__()
@@ -282,16 +285,11 @@ class MainWindow(QMainWindow):
         central = QWidget()
         self.setCentralWidget(central)
         main_layout = QVBoxLayout(central)
-        main_layout.setContentsMargins(0, 0, 0, 0)
-        main_layout.setSpacing(0)
+        main_layout.setContentsMargins(12, 12, 12, 12)
+        main_layout.setSpacing(12)
 
         # Toolbar
         self._build_toolbar(main_layout)
-
-        # Main content
-        content = QWidget()
-        content_layout = QVBoxLayout(content)
-        content_layout.setContentsMargins(10, 10, 10, 10)
 
         # Queue selector and controls
         queue_layout = QHBoxLayout()
@@ -316,7 +314,7 @@ class MainWindow(QMainWindow):
         delete_queue_btn.clicked.connect(self._delete_current_queue)
         queue_layout.addWidget(delete_queue_btn)
 
-        content_layout.addLayout(queue_layout)
+        main_layout.addLayout(queue_layout)
 
         # Search bar
         search_layout = QHBoxLayout()
@@ -325,7 +323,7 @@ class MainWindow(QMainWindow):
         self.search_edit.setPlaceholderText("Filter downloads by name...")
         self.search_edit.textChanged.connect(self._on_search_text_changed)
         search_layout.addWidget(self.search_edit)
-        content_layout.addLayout(search_layout)
+        main_layout.addLayout(search_layout)
 
         # Table view with proxy model
         self.table = QTableView()
@@ -359,13 +357,11 @@ class MainWindow(QMainWindow):
 
         self.table.setItemDelegateForColumn(2, ProgressDelegate(self.table))
 
-        content_layout.addWidget(self.table)
+        main_layout.addWidget(self.table)
 
         # Status bar
         self.status_label = QLabel("Ready")
-        content_layout.addWidget(self.status_label)
-
-        main_layout.addWidget(content)
+        main_layout.addWidget(self.status_label)
 
         self._update_queue_ui()
 
@@ -393,7 +389,7 @@ class MainWindow(QMainWindow):
         pause_action.triggered.connect(self._pause_selected)
         toolbar.addAction(pause_action)
 
-        remove_action = QAction("Remove", self)
+        remove_action = QAction(get_icon("edit-delete"), "Remove", self)
         remove_action.triggered.connect(self._remove_selected)
         toolbar.addAction(remove_action)
 
@@ -476,7 +472,8 @@ class MainWindow(QMainWindow):
                     if file_dialog.exec():
                         selected_files = file_dialog.get_selected_files()
                         if not selected_files:
-                            QMessageBox.warning(self, "No Files Selected", "Please select at least one file to download.")
+                            QMessageBox.warning(self, "No Files Selected",
+                                                "Please select at least one file to download.")
                             return
                         # Add torrent with selected files
                         gid = self.download_controller.add_torrent(
@@ -580,8 +577,13 @@ class MainWindow(QMainWindow):
         pass
 
     def _update_tray_icon(self) -> None:
-        from PyQt6.QtGui import QIcon
-        self.tray_controller.set_icon(QIcon.fromTheme("download"))
+        # Use a default icon from theme or fallback
+        icon = get_icon("download")
+        if not icon.isNull():
+            self.tray_controller.set_icon(icon)
+        else:
+            from PyQt6.QtGui import QIcon
+            self.tray_controller.set_icon(QIcon.fromTheme("download"))
 
     def _on_search_text_changed(self, text: str) -> None:
         self._search_timer.start(300)
@@ -614,5 +616,4 @@ class MainWindow(QMainWindow):
         if hasattr(self, 'local_server'):
             self.local_server.stop()
         self.aria2_manager.stop()
-        from PyQt6.QtWidgets import QApplication
         QApplication.quit()
