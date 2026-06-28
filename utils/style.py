@@ -139,6 +139,32 @@ def _detect_theme_fallback() -> bool:
     except Exception:
         pass
 
+    # Cinnamon
+    try:
+        result = subprocess.run(
+            ['gsettings', 'get', 'org.cinnamon.desktop.interface', 'gtk-theme'],
+            capture_output=True, text=True, timeout=1
+        )
+        if result.stdout:
+            theme = result.stdout.strip().lower()
+            if 'dark' in theme:
+                return True
+    except Exception:
+        pass
+
+    # MATE
+    try:
+        result = subprocess.run(
+            ['gsettings', 'get', 'org.mate.interface', 'gtk-theme'],
+            capture_output=True, text=True, timeout=1
+        )
+        if result.stdout:
+            theme = result.stdout.strip().lower()
+            if 'dark' in theme:
+                return True
+    except Exception:
+        pass
+
     # Windows
     if sys.platform == 'win32':
         try:
