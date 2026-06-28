@@ -1,3 +1,4 @@
+# ui/icons.py
 """
 Embedded icons as SVG data with fallback to theme.
 """
@@ -5,22 +6,63 @@ Embedded icons as SVG data with fallback to theme.
 from PyQt6.QtGui import QIcon
 from PyQt6.QtCore import QSize
 
-# Simplified SVG icons
+# SVG icons for common actions
 ICON_DATA = {
-    "list-add": """<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24"><path fill="currentColor" d="M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6v2z"/></svg>""",
-    "document-new": """<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24"><path fill="currentColor" d="M14 2H6c-1.1 0-1.99.9-1.99 2L4 20c0 1.1.89 2 1.99 2H18c1.1 0 2-.9 2-2V8l-6-6zm2 16H8v-2h8v2zm0-4H8v-2h8v2zm-3-5V3.5L18.5 9H13z"/></svg>""",
-    "insert-link": """<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24"><path fill="currentColor" d="M3.9 12c0-1.71 1.39-3.1 3.1-3.1h4V7H7c-2.76 0-5 2.24-5 5s2.24 5 5 5h4v-1.9H7c-1.71 0-3.1-1.39-3.1-3.1zM8 13h8v-2H8v2zm9-6h-4v1.9h4c1.71 0 3.1 1.39 3.1 3.1s-1.39 3.1-3.1 3.1h-4V17h4c2.76 0 5-2.24 5-5s-2.24-5-5-5z"/></svg>""",
-    "media-playback-pause": """<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24"><path fill="currentColor" d="M6 19h4V5H6v14zm8-14v14h4V5h-4z"/></svg>""",
-    "media-playback-start": """<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24"><path fill="currentColor" d="M8 5v14l11-7z"/></svg>""",
-    "preferences-system": """<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24"><path fill="currentColor" d="M19.14 12.94a7.07 7.07 0 0 0 0-1.88l2.03-1.58a.49.49 0 0 0 .12-.61l-1.92-3.32a.49.49 0 0 0-.59-.22l-2.39.96a7.04 7.04 0 0 0-1.62-.94l-.36-2.54a.484.484 0 0 0-.48-.41h-3.84c-.24 0-.43.17-.47.41l-.36 2.54c-.59.24-1.13.57-1.62.94l-2.39-.96a.49.49 0 0 0-.59.22L2.74 8.87a.49.49 0 0 0 .12.61l2.03 1.58a7.07 7.07 0 0 0 0 1.88l-2.03 1.58a.49.49 0 0 0-.12.61l1.92 3.32c.12.22.37.29.59.22l2.39-.96c.49.37 1.03.7 1.62.94l.36 2.54c.05.24.24.41.48.41h3.84c.24 0 .44-.17.47-.41l.36-2.54c.59-.24 1.13-.57 1.62-.94l2.39.96c.22.08.47 0 .59-.22l1.92-3.32a.49.49 0 0 0-.12-.61l-2.03-1.58zM12 15.6A3.6 3.6 0 1 1 15.6 12 3.6 3.6 0 0 1 12 15.6z"/></svg>""",
-    "folder-open": """<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24"><path fill="currentColor" d="M20 6h-8l-2-2H4c-1.1 0-1.99.9-1.99 2L2 18c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V8c0-1.1-.9-2-2-2zm0 12H4V8h16v10z"/></svg>""",
-    "torrent": """<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24"><path fill="currentColor" d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-1 14H9V8h2v8zm4 0h-2V8h2v8z"/></svg>""",
+    "list-add": """<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" width="16" height="16">
+        <path d="M14 7H9V2H7v5H2v2h5v5h2V9h5z" fill="currentColor"/>
+    </svg>""",
+    "document-new": """<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" width="16" height="16">
+        <path d="M3 1h8l4 4v9a1 1 0 0 1-1 1H3a1 1 0 0 1-1-1V2a1 1 0 0 1 1-1zm7 4h4l-4-4v4z" fill="currentColor"/>
+    </svg>""",
+    "insert-link": """<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" width="16" height="16">
+        <path d="M6.5 3.5a3.5 3.5 0 0 1 0 7H4a3.5 3.5 0 0 1 0-7h2.5zM4 2.5a4.5 4.5 0 0 0 0 9h2.5a4.5 4.5 0 0 0 0-9H4zm7.5 0a4.5 4.5 0 0 0 0 9H9a4.5 4.5 0 0 0 0-9h2.5zM9 2.5a3.5 3.5 0 0 1 0 7h-2.5a3.5 3.5 0 0 1 0-7H9z" fill="currentColor"/>
+    </svg>""",
+    "media-playback-pause": """<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" width="16" height="16">
+        <path d="M5 2a1 1 0 0 1 1 1v10a1 1 0 0 1-2 0V3a1 1 0 0 1 1-1zm6 0a1 1 0 0 1 1 1v10a1 1 0 0 1-2 0V3a1 1 0 0 1 1-1z" fill="currentColor"/>
+    </svg>""",
+    "media-playback-start": """<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" width="16" height="16">
+        <path d="M4.5 2.5a1 1 0 0 1 1.5-.9l8 5.5a1 1 0 0 1 0 1.8l-8 5.5a1 1 0 0 1-1.5-.9V2.5z" fill="currentColor"/>
+    </svg>""",
+    "preferences-system": """<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" width="16" height="16">
+        <path d="M8 1a7 7 0 1 0 0 14A7 7 0 0 0 8 1zm0 12.5A5.5 5.5 0 1 1 8 2.5a5.5 5.5 0 0 1 0 11zM7 4h2v5H7V4zm0 6h2v2H7v-2z" fill="currentColor"/>
+    </svg>""",
+    "folder-open": """<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" width="16" height="16">
+        <path d="M1.5 3A1.5 1.5 0 0 0 0 4.5v7A1.5 1.5 0 0 0 1.5 13h12a1.5 1.5 0 0 0 1.5-1.5v-7A1.5 1.5 0 0 0 13.5 3H8.5L7 1.5H1.5z" fill="currentColor"/>
+    </svg>""",
+    "torrent": """<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" width="16" height="16">
+        <path d="M8 0a8 8 0 1 0 0 16A8 8 0 0 0 8 0zm0 14.5A6.5 6.5 0 1 1 8 1.5a6.5 6.5 0 0 1 0 13zM7 4h2v5H7V4zm0 6h2v2H7v-2z" fill="currentColor"/>
+    </svg>""",
+    "download": """<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" width="16" height="16">
+        <path d="M8 1a1 1 0 0 1 1 1v6h3.5a.5.5 0 0 1 .354.854l-4.5 4.5a.5.5 0 0 1-.708 0l-4.5-4.5A.5.5 0 0 1 3.5 8H7V2a1 1 0 0 1 1-1z" fill="currentColor"/>
+        <path d="M1 14a1 1 0 0 1 1-1h12a1 1 0 0 1 0 2H2a1 1 0 0 1-1-1z" fill="currentColor"/>
+    </svg>""",
 }
 
 
 def get_icon(name: str) -> QIcon:
-    """Return a QIcon from embedded SVG data or fallback to theme."""
+    """
+    Return a QIcon from embedded SVG data or fallback to theme.
+    """
+    # Try embedded SVG first
+    svg_data = ICON_DATA.get(name)
+    if svg_data:
+        from PyQt6.QtCore import QByteArray
+        from PyQt6.QtGui import QIcon, QPixmap
+        from PyQt6.QtSvg import QSvgRenderer
+
+        renderer = QSvgRenderer(QByteArray(svg_data.encode()))
+        if renderer.isValid():
+            pixmap = QPixmap(24, 24)
+            pixmap.fill(Qt.GlobalColor.transparent)
+            painter = QPainter(pixmap)
+            renderer.render(painter)
+            painter.end()
+            return QIcon(pixmap)
+
+    # Fallback to theme
     icon = QIcon.fromTheme(name)
     if not icon.isNull():
         return icon
+
+    # Final fallback: empty icon
     return QIcon()
