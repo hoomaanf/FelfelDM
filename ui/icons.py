@@ -8,55 +8,36 @@ from PyQt6.QtGui import QIcon, QPixmap, QPainter
 from PyQt6.QtSvg import QSvgRenderer
 
 # Simple SVG icons for common actions
-# These are minimal but valid SVGs that provide visual feedback
+# All icons use currentColor to adapt to theme.
 ICON_DATA = {
-    "list-add": """<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" width="16" height="16">
-        <rect x="2" y="2" width="12" height="12" rx="2" fill="#4a6a9a" stroke="white" stroke-width="1"/>
-        <line x1="5" y1="8" x2="11" y2="8" stroke="white" stroke-width="2"/>
-        <line x1="8" y1="5" x2="8" y2="11" stroke="white" stroke-width="2"/>
+    "list-add": """<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="24" height="24">
+        <path d="M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6v2z" fill="currentColor"/>
     </svg>""",
-    "document-new": """<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" width="16" height="16">
-        <rect x="2" y="2" width="12" height="12" rx="1" fill="#4a6a9a" stroke="white" stroke-width="1"/>
-        <line x1="5" y1="5" x2="11" y2="5" stroke="white" stroke-width="1.5"/>
-        <line x1="5" y1="8" x2="11" y2="8" stroke="white" stroke-width="1.5"/>
-        <line x1="5" y1="11" x2="9" y2="11" stroke="white" stroke-width="1.5"/>
+    "document-new": """<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="24" height="24">
+        <path d="M6 2h9l5 5v13a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2zm8 5h5l-5-5v5z" fill="currentColor"/>
     </svg>""",
-    "insert-link": """<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" width="16" height="16">
-        <circle cx="5" cy="8" r="3" fill="none" stroke="#4a6a9a" stroke-width="2"/>
-        <circle cx="11" cy="8" r="3" fill="none" stroke="#4a6a9a" stroke-width="2"/>
-        <line x1="7" y1="6" x2="9" y2="6" stroke="#4a6a9a" stroke-width="2"/>
-        <line x1="7" y1="10" x2="9" y2="10" stroke="#4a6a9a" stroke-width="2"/>
+    "insert-link": """<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="24" height="24">
+        <path d="M9.5 14.5a4.5 4.5 0 0 1 0-9h2.5a4.5 4.5 0 0 1 0 9H9.5zM9.5 7.5a3.5 3.5 0 0 0 0 7h2.5a3.5 3.5 0 0 0 0-7H9.5zm5 0a4.5 4.5 0 0 1 0 9H12a4.5 4.5 0 0 1 0-9h2.5zM12 7.5a3.5 3.5 0 0 0 0 7h2.5a3.5 3.5 0 0 0 0-7H12z" fill="currentColor"/>
     </svg>""",
-    "media-playback-pause": """<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" width="16" height="16">
-        <rect x="2" y="3" width="12" height="10" rx="2" fill="#f1c40f"/>
-        <rect x="5" y="5" width="2" height="6" fill="white"/>
-        <rect x="9" y="5" width="2" height="6" fill="white"/>
+    "media-playback-pause": """<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="24" height="24">
+        <path d="M6 4h4v16H6V4zm8 0h4v16h-4V4z" fill="currentColor"/>
     </svg>""",
-    "media-playback-start": """<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" width="16" height="16">
-        <rect x="2" y="3" width="12" height="10" rx="2" fill="#2ecc71"/>
-        <polygon points="6,5 6,11 11,8" fill="white"/>
+    "media-playback-start": """<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="24" height="24">
+        <path d="M8 5v14l11-7L8 5z" fill="currentColor"/>
     </svg>""",
-    "preferences-system": """<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" width="16" height="16">
-        <circle cx="8" cy="8" r="6" fill="none" stroke="#4a6a9a" stroke-width="2"/>
-        <circle cx="8" cy="8" r="2" fill="#4a6a9a"/>
-        <line x1="8" y1="1" x2="8" y2="3" stroke="#4a6a9a" stroke-width="2"/>
-        <line x1="8" y1="13" x2="8" y2="15" stroke="#4a6a9a" stroke-width="2"/>
-        <line x1="1" y1="8" x2="3" y2="8" stroke="#4a6a9a" stroke-width="2"/>
-        <line x1="13" y1="8" x2="15" y2="8" stroke="#4a6a9a" stroke-width="2"/>
+    "preferences-system": """<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="24" height="24">
+        <path d="M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6zm0-4a1 1 0 1 1 0 2 1 1 0 0 1 0-2zm0-7a1 1 0 0 1 1 1v1.5a1 1 0 0 1-2 0V5a1 1 0 0 1 1-1zm0 13a1 1 0 0 1 1 1v1.5a1 1 0 0 1-2 0V19a1 1 0 0 1 1-1zm6-6h-1.5a1 1 0 0 1 0-2H18a1 1 0 0 1 0 2zM7.5 12a1 1 0 0 1-1 1H5a1 1 0 0 1 0-2h1.5a1 1 0 0 1 1 1zm11.2-4.9a1 1 0 0 1-1.4 0L15.4 5.2a1 1 0 0 1 1.4-1.4l1.8 1.8a1 1 0 0 1 0 1.4zm-9.9 9.9a1 1 0 0 1-1.4 0L5.1 14.7a1 1 0 0 1 1.4-1.4l1.8 1.8a1 1 0 0 1 0 1.4zm9.9 0a1 1 0 0 1 0-1.4l1.8-1.8a1 1 0 0 1 1.4 1.4l-1.8 1.8a1 1 0 0 1-1.4 0zM5.1 6.4a1 1 0 0 1 1.4 0l1.8 1.8a1 1 0 0 1-1.4 1.4L5.1 7.8a1 1 0 0 1 0-1.4z" fill="currentColor"/>
     </svg>""",
-    "folder-open": """<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" width="16" height="16">
-        <path d="M2 3a1 1 0 0 0-1 1v8a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1V5a1 1 0 0 0-1-1H8L6 3H2z" fill="#f39c12" stroke="#e67e22" stroke-width="1"/>
-        <rect x="1" y="5" width="14" height="6" rx="1" fill="#f1c40f" stroke="#e67e22" stroke-width="0.5"/>
+    "folder-open": """<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="24" height="24">
+        <path d="M4 5a1 1 0 0 0-1 1v12a1 1 0 0 0 1 1h16a1 1 0 0 0 1-1V9a1 1 0 0 0-1-1h-8l-2-2H4z" fill="currentColor"/>
     </svg>""",
-    "torrent": """<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" width="16" height="16">
-        <circle cx="8" cy="8" r="7" fill="none" stroke="#e74c3c" stroke-width="2"/>
-        <path d="M5 5l6 6M11 5l-6 6" stroke="#e74c3c" stroke-width="2"/>
-        <circle cx="8" cy="8" r="1.5" fill="#e74c3c"/>
+    "torrent": """<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="24" height="24">
+        <circle cx="12" cy="12" r="10" fill="none" stroke="currentColor" stroke-width="2"/>
+        <path d="M12 4l-2 6h4l-2 6" stroke="currentColor" stroke-width="2" fill="none"/>
+        <circle cx="12" cy="12" r="1.5" fill="currentColor"/>
     </svg>""",
-    "download": """<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" width="16" height="16">
-        <rect x="2" y="2" width="12" height="12" rx="2" fill="#3498db" stroke="white" stroke-width="1"/>
-        <polygon points="8,4 8,10 5,7 11,7" fill="white"/>
-        <line x1="4" y1="12" x2="12" y2="12" stroke="white" stroke-width="2"/>
+    "download": """<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="24" height="24">
+        <path d="M5 20h14v-2H5v2zm7-3l6-6h-4V5h-4v6H6l6 6z" fill="currentColor"/>
     </svg>""",
 }
 
