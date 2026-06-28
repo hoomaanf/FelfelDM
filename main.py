@@ -1,6 +1,6 @@
-#!/usr/bin/env python3
+# main.py
 """
-FelfelDM - Download Manager
+FelfelDM - Download Manager with modern UI.
 """
 
 import os
@@ -8,11 +8,11 @@ import sys
 import logging
 
 from PyQt6.QtCore import Qt
-from PyQt6.QtGui import QIcon
+from PyQt6.QtGui import QFontDatabase, QFont, QIcon
 from PyQt6.QtWidgets import QApplication
 
 from ui.main_window import MainWindow
-from utils.style import CustomProxyStyle, setup_style
+from utils.style import detect_theme, apply_modern_theme
 
 
 def setup_logging() -> None:
@@ -29,15 +29,24 @@ def setup_logging() -> None:
 
 def main() -> None:
     """Application entry point."""
-    # Setup logging
     setup_logging()
 
-    # High DPI support - use Round for better scaling
+    # High DPI support
     QApplication.setHighDpiScaleFactorRoundingPolicy(
         Qt.HighDpiScaleFactorRoundingPolicy.Round
     )
+    QApplication.setAttribute(Qt.ApplicationAttribute.AA_EnableHighDpiScaling, True)
+    QApplication.setAttribute(Qt.ApplicationAttribute.AA_UseHighDpiPixmaps, True)
 
     app = QApplication(sys.argv)
+
+    # Load modern font (Inter if available, otherwise fallback to system)
+    font_id = QFontDatabase.addApplicationFont(":/fonts/Inter-Regular.ttf")
+    if font_id != -1:
+        font_family = QFontDatabase.applicationFontFamilies(font_id)[0]
+        app.setFont(QFont(font_family, 10))
+    else:
+        app.setFont(QFont("Segoe UI", 10))
 
     # Set window icon
     if getattr(sys, 'frozen', False) and hasattr(sys, '_MEIPASS'):
@@ -54,11 +63,12 @@ def main() -> None:
             app.setWindowIcon(QIcon(path))
             break
 
-    app.setStyle(CustomProxyStyle())
     app.setApplicationName("FelfelDM")
     app.setQuitOnLastWindowClosed(False)
 
-    setup_style(app)
+    # Detect and apply modern theme
+    is_dark = detect_theme()
+    apply_modern_theme(app, is_dark)
 
     win = MainWindow()
     win.show()
