@@ -13,7 +13,7 @@ class Aria2RPC:
         p = [token] + (params or []) if token else (params or [])
         payload = {"jsonrpc": "2.0", "id": str(self._id), "method": method, "params": p}
         try:
-            r = requests.post(self.url, json=payload, timeout=1.5)
+            r = requests.post(self.url, json=payload, timeout=5)
             result = r.json()
             if "error" in result:
                 err = result["error"]

@@ -494,12 +494,12 @@ class MainWindow(QMainWindow):
         resumed = 0
         if is_scheduled:
             for gid in q.downloads:
-                if gid in self._all_downloads:
-                    status = self._all_downloads[gid].get("status")
-                    if status == "paused":
-                        result = self.aria2.resume(gid)
-                        if result is not None:
-                            resumed += 1
+                real_status = self.aria2.get_status(gid)
+                if real_status == "paused":
+                    result = self.aria2.resume(gid)
+                    if result is not None:
+                        resumed += 1
+                        if gid in self._all_downloads:
                             self._all_downloads[gid]["status"] = "active"
         else:
             days_text = ", ".join(["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"][i] for i in q.days)
@@ -645,6 +645,7 @@ class MainWindow(QMainWindow):
             q.name = d["name"]
             q.save_path = d["save_path"]
             q.max_concurrent = d["max_concurrent"]
+            self.store.settings["max_concurrent"] = d["max_concurrent"]
             q.schedule_enabled = d["schedule_enabled"]
             q.schedule_start = d["schedule_start"]
             q.schedule_end = d["schedule_end"]
@@ -1505,6 +1506,10 @@ class MainWindow(QMainWindow):
                 "aria2 is not installed.\nRun: sudo pacman -S aria2")
     def _on_aria2_error(self, message):
         if "disconnected" in message:
+            return
+        if "cannot be paused now" in message:
+            return
+        if "cannot be unpaused now" in message:
             return
         self.tray.showMessage("FelfelDM ⚠", message,
                             QSystemTrayIcon.MessageIcon.Warning, 3000)
