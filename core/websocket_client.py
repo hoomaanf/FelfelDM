@@ -1,7 +1,7 @@
-# Requires: websocket-client>=1.4.0
-
+# core/websocket_client.py
 """
-WebSocket client for real-time updates from aria2 with auto-reconnect and SSL pinning.
+WebSocket client for real-time updates from aria2 with auto-reconnect
+and SSL pinning. No insecure fallback.
 """
 
 import json
@@ -23,9 +23,9 @@ logger: logging.Logger = logging.getLogger(__name__)
 
 class WebSocketClient(QObject):
     """
-    WebSocket client that connects to aria2's WebSocket endpoint
-    and listens for events. Runs in a separate thread.
-    Implements auto-reconnect with exponential backoff and SSL pinning.
+    WebSocket client that connects to aria2's WebSocket endpoint and listens for events.
+    Runs in a separate thread. Implements auto-reconnect with exponential backoff
+    and SSL pinning. No insecure fallback.
     """
 
     stats_updated = pyqtSignal(dict)
@@ -81,7 +81,7 @@ class WebSocketClient(QObject):
             else:
                 ws_url = f"ws://127.0.0.1:{self.port}/jsonrpc"
 
-            # Create SSL context with pinning if secure
+            # Create SSL context with pinning - MUST succeed for wss
             if ws_url.startswith("wss"):
                 try:
                     ssl_context = create_ssl_context(
@@ -91,7 +91,8 @@ class WebSocketClient(QObject):
                     sslopt = {"context": ssl_context}
                 except Exception as e:
                     logger.error("Failed to create SSL context for WebSocket: %s", e)
-                    sslopt = {"cert_reqs": 0}  # Fallback (insecure, but we avoid if possible)
+                    # No insecure fallback - raise the exception
+                    raise RuntimeError(f"WebSocket SSL setup failed: {e}") from e
             else:
                 sslopt = {}
 
@@ -104,11 +105,14 @@ class WebSocketClient(QObject):
                 subprotocols=["jsonrpc"],
             )
 
-            self._ws.run_forever(
-                sslopt=sslopt,
-                ping_interval=30,
-                ping_timeout=10,
-            )
+            try:
+                self._ws.run_forever(
+                    sslopt=sslopt,
+                    ping_interval=30,
+                    ping_timeout=10,
+                )
+            except Exception as e:
+                logger.error("WebSocket run_forever error: %s", e)
 
             if not self._running:
                 break
@@ -122,54 +126,37 @@ class WebSocketClient(QObject):
         """Callback on WebSocket open."""
         logger.info("WebSocket connected to aria2.")
         self._connected = True
-        self._reconnect_delay = 1.0  # reset
+        self._reconnect_delay = 1.0  # Reset backoff on successful connection
         self.connection_changed.emit(True)
 
-    def send_request(self, method: str, params: List[Any], callback: Callable[[Any], None]) -> None:
-        """Send a JSON-RPC request over WebSocket."""
-        if not self._ws or not self._connected:
-            logger.warning("WebSocket not connected, cannot send request.")
-            return
-        request_id = str(uuid.uuid4())
-        payload = {
-            "jsonrpc": "2.0",
-            "id": request_id,
-            "method": method,
-            "params": [f"token:{self.secret}"] + params
-        }
-        self._ws.send(json.dumps(payload))
-        self._callbacks[request_id] = callback
-
     def _on_message(self, ws, message: str) -> None:
-        """Handle incoming WebSocket messages."""
+        """Callback on WebSocket message."""
         try:
             data = json.loads(message)
-            if "id" in data:
-                request_id = data["id"]
-                callback = self._callbacks.pop(request_id, None)
-                if callback and "result" in data:
-                    callback(data["result"])
-                elif callback and "error" in data:
-                    logger.error("RPC error via WebSocket: %s", data["error"])
-            elif "method" in data:
-                # Notification (event)
-                event = data.get("method")
-                if event in ("aria2.onDownloadStart", "aria2.onDownloadPause",
-                              "aria2.onDownloadStop", "aria2.onDownloadComplete",
-                              "aria2.onDownloadError"):
-                    self.stats_updated.emit({"event": event, "params": data.get("params", [])})
-        except Exception as e:
-            logger.error("Error processing WebSocket message: %s", e)
+            # Forward to main thread via signal
+            self.stats_updated.emit(data)
+        except json.JSONDecodeError as e:
+            logger.error("Failed to parse WebSocket message: %s", e)
 
     def _on_error(self, ws, error) -> None:
+        """Callback on WebSocket error."""
         logger.error("WebSocket error: %s", error)
-        self._connected = False
-        self.connection_changed.emit(False)
 
     def _on_close(self, ws, close_status_code, close_msg) -> None:
-        logger.info("WebSocket closed: %s", close_msg)
+        """Callback on WebSocket close."""
+        logger.info("WebSocket closed: %s - %s", close_status_code, close_msg)
         self._connected = False
         self.connection_changed.emit(False)
 
     def is_connected(self) -> bool:
         return self._connected
+
+    def send_message(self, message: Dict[str, Any]) -> None:
+        """Send a message over WebSocket."""
+        if not self._ws or not self._connected:
+            logger.warning("Cannot send message: WebSocket not connected")
+            return
+        try:
+            self._ws.send(json.dumps(message))
+        except Exception as e:
+            logger.error("Failed to send WebSocket message: %s", e)
