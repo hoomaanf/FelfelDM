@@ -1,6 +1,6 @@
 # utils/style.py
 """
-Style utilities for FelfelDM with automatic theme detection.
+Style utilities for FelfelDM with automatic theme detection and manual override.
 """
 
 import logging
@@ -11,7 +11,7 @@ from typing import Optional
 
 from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QColor, QPalette
-from PyQt6.QtWidgets import QApplication, QProxyStyle, QStyle
+from PyQt6.QtWidgets import QApplication, QProxyStyle, QStyle, QWidget
 
 logger = logging.getLogger(__name__)
 
@@ -58,18 +58,27 @@ class CustomProxyStyle(QProxyStyle):
 
 
 def setup_style(app: QApplication) -> None:
-    """
-    Setup application style with automatic theme detection for all platforms.
-    """
-    is_dark = _detect_theme()
-    if is_dark:
-        _apply_dark_theme(app)
-    else:
-        _apply_light_theme(app)
+    """Setup application style with automatic theme detection."""
+    is_dark = detect_theme()
+    apply_theme(app, is_dark)
     app.setStyle(CustomProxyStyle())
 
 
-def _detect_theme() -> bool:
+def apply_theme(target, is_dark: bool) -> None:
+    """
+    Apply dark or light theme to the target (QApplication or QWidget).
+    
+    Args:
+        target: QApplication or QWidget instance
+        is_dark: True for dark theme, False for light theme
+    """
+    if is_dark:
+        _apply_dark_theme(target)
+    else:
+        _apply_light_theme(target)
+
+
+def detect_theme() -> bool:
     """
     Detect system theme using Qt's style hints with fallbacks for all platforms.
     Defaults to dark theme if detection fails.
@@ -91,10 +100,7 @@ def _detect_theme() -> bool:
 
 
 def _detect_theme_fallback() -> bool:
-    """
-    Fallback theme detection for various desktop environments.
-    Defaults to dark theme if detection fails.
-    """
+    """Fallback theme detection for various desktop environments."""
     # KDE
     try:
         result = subprocess.run(
@@ -202,111 +208,154 @@ def _detect_theme_fallback() -> bool:
     return True
 
 
-def _apply_dark_theme(app: QApplication) -> None:
-    """Apply dark theme."""
-    dark_palette = QPalette()
-    dark_palette.setColor(QPalette.ColorRole.Window, QColor(53, 53, 53))
-    dark_palette.setColor(QPalette.ColorRole.WindowText, Qt.GlobalColor.white)
-    dark_palette.setColor(QPalette.ColorRole.Base, QColor(25, 25, 25))
-    dark_palette.setColor(QPalette.ColorRole.AlternateBase, QColor(53, 53, 53))
-    dark_palette.setColor(QPalette.ColorRole.ToolTipBase, Qt.GlobalColor.black)
-    dark_palette.setColor(QPalette.ColorRole.ToolTipText, Qt.GlobalColor.white)
-    dark_palette.setColor(QPalette.ColorRole.Text, Qt.GlobalColor.white)
-    dark_palette.setColor(QPalette.ColorRole.Button, QColor(53, 53, 53))
-    dark_palette.setColor(QPalette.ColorRole.ButtonText, Qt.GlobalColor.white)
-    dark_palette.setColor(QPalette.ColorRole.BrightText, Qt.GlobalColor.red)
-    dark_palette.setColor(QPalette.ColorRole.Link, QColor(42, 130, 218))
-    dark_palette.setColor(QPalette.ColorRole.Highlight, QColor(42, 130, 218))
-    dark_palette.setColor(QPalette.ColorRole.HighlightedText, Qt.GlobalColor.black)
-    app.setPalette(dark_palette)
+def _apply_dark_theme(target) -> None:
+    """Apply dark theme to target."""
+    if isinstance(target, QApplication):
+        app = target
+        dark_palette = QPalette()
+        dark_palette.setColor(QPalette.ColorRole.Window, QColor(53, 53, 53))
+        dark_palette.setColor(QPalette.ColorRole.WindowText, Qt.GlobalColor.white)
+        dark_palette.setColor(QPalette.ColorRole.Base, QColor(25, 25, 25))
+        dark_palette.setColor(QPalette.ColorRole.AlternateBase, QColor(53, 53, 53))
+        dark_palette.setColor(QPalette.ColorRole.ToolTipBase, Qt.GlobalColor.black)
+        dark_palette.setColor(QPalette.ColorRole.ToolTipText, Qt.GlobalColor.white)
+        dark_palette.setColor(QPalette.ColorRole.Text, Qt.GlobalColor.white)
+        dark_palette.setColor(QPalette.ColorRole.Button, QColor(53, 53, 53))
+        dark_palette.setColor(QPalette.ColorRole.ButtonText, Qt.GlobalColor.white)
+        dark_palette.setColor(QPalette.ColorRole.BrightText, Qt.GlobalColor.red)
+        dark_palette.setColor(QPalette.ColorRole.Link, QColor(42, 130, 218))
+        dark_palette.setColor(QPalette.ColorRole.Highlight, QColor(42, 130, 218))
+        dark_palette.setColor(QPalette.ColorRole.HighlightedText, Qt.GlobalColor.black)
+        app.setPalette(dark_palette)
 
-    # Dark stylesheet
-    app.setStyleSheet("""
-        QMainWindow { background-color: #2b2b2b; }
+        app.setStyleSheet("""
+            QMainWindow { background-color: #2b2b2b; }
+            QWidget { background-color: #2b2b2b; color: #ffffff; }
+            QTableView { background-color: #1e1e1e; alternate-background-color: #2b2b2b; gridline-color: #3a3a3a; }
+            QHeaderView::section { background-color: #3a3a3a; color: #ffffff; padding: 4px; border: 1px solid #4a4a4a; }
+            QTableView::item:selected { background-color: #4a6a9a; }
+            QPushButton { background-color: #3a3a3a; color: #ffffff; border: 1px solid #4a4a4a; padding: 5px 10px; border-radius: 3px; }
+            QPushButton:hover { background-color: #4a4a4a; }
+            QPushButton:pressed { background-color: #2a2a2a; }
+            QLineEdit, QTextEdit, QSpinBox, QComboBox { background-color: #1e1e1e; color: #ffffff; border: 1px solid #4a4a4a; padding: 3px; }
+            QGroupBox { border: 1px solid #4a4a4a; border-radius: 5px; margin-top: 10px; }
+            QGroupBox::title { subcontrol-origin: margin; left: 10px; padding: 0 5px; }
+            QTabWidget::pane { border: 1px solid #4a4a4a; background-color: #2b2b2b; }
+            QTabBar::tab { background-color: #3a3a3a; color: #ffffff; padding: 5px 10px; }
+            QTabBar::tab:selected { background-color: #4a6a9a; }
+            QMenuBar { background-color: #2b2b2b; color: #ffffff; }
+            QMenuBar::item:selected { background-color: #4a6a9a; }
+            QMenu { background-color: #2b2b2b; color: #ffffff; }
+            QMenu::item:selected { background-color: #4a6a9a; }
+            QToolBar { background-color: #2b2b2b; border: none; spacing: 3px; }
+            QStatusBar { background-color: #2b2b2b; color: #aaaaaa; }
+            QDialog { background-color: #2b2b2b; }
+            QProgressBar { border: 1px solid #4a4a4a; border-radius: 3px; text-align: center; }
+            QProgressBar::chunk { background-color: #4a6a9a; }
+            QScrollBar:vertical { background-color: #2b2b2b; width: 12px; }
+            QScrollBar::handle:vertical { background-color: #4a4a4a; border-radius: 6px; min-height: 20px; }
+            QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0px; }
+            QScrollBar:horizontal { background-color: #2b2b2b; height: 12px; }
+            QScrollBar::handle:horizontal { background-color: #4a4a4a; border-radius: 6px; min-width: 20px; }
+            QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal { width: 0px; }
+            QCheckBox { color: #ffffff; }
+            QRadioButton { color: #ffffff; }
+            QLabel { color: #ffffff; }
+        """)
+    else:
+        # Apply to a specific widget
+        _apply_dark_theme_widget(target)
+
+
+def _apply_light_theme(target) -> None:
+    """Apply light theme to target."""
+    if isinstance(target, QApplication):
+        app = target
+        light_palette = QPalette()
+        light_palette.setColor(QPalette.ColorRole.Window, QColor(240, 240, 240))
+        light_palette.setColor(QPalette.ColorRole.WindowText, Qt.GlobalColor.black)
+        light_palette.setColor(QPalette.ColorRole.Base, Qt.GlobalColor.white)
+        light_palette.setColor(QPalette.ColorRole.AlternateBase, QColor(245, 245, 245))
+        light_palette.setColor(QPalette.ColorRole.ToolTipBase, Qt.GlobalColor.white)
+        light_palette.setColor(QPalette.ColorRole.ToolTipText, Qt.GlobalColor.black)
+        light_palette.setColor(QPalette.ColorRole.Text, Qt.GlobalColor.black)
+        light_palette.setColor(QPalette.ColorRole.Button, QColor(240, 240, 240))
+        light_palette.setColor(QPalette.ColorRole.ButtonText, Qt.GlobalColor.black)
+        light_palette.setColor(QPalette.ColorRole.BrightText, Qt.GlobalColor.red)
+        light_palette.setColor(QPalette.ColorRole.Link, QColor(42, 130, 218))
+        light_palette.setColor(QPalette.ColorRole.Highlight, QColor(42, 130, 218))
+        light_palette.setColor(QPalette.ColorRole.HighlightedText, Qt.GlobalColor.white)
+        app.setPalette(light_palette)
+
+        app.setStyleSheet("""
+            QMainWindow { background-color: #f0f0f0; }
+            QWidget { background-color: #f0f0f0; color: #000000; }
+            QTableView { background-color: #ffffff; alternate-background-color: #f5f5f5; gridline-color: #d0d0d0; }
+            QHeaderView::section { background-color: #e0e0e0; color: #000000; padding: 4px; border: 1px solid #d0d0d0; }
+            QTableView::item:selected { background-color: #4a6a9a; color: #ffffff; }
+            QPushButton { background-color: #e0e0e0; color: #000000; border: 1px solid #d0d0d0; padding: 5px 10px; border-radius: 3px; }
+            QPushButton:hover { background-color: #d0d0d0; }
+            QPushButton:pressed { background-color: #c0c0c0; }
+            QLineEdit, QTextEdit, QSpinBox, QComboBox { background-color: #ffffff; color: #000000; border: 1px solid #d0d0d0; padding: 3px; }
+            QGroupBox { border: 1px solid #d0d0d0; border-radius: 5px; margin-top: 10px; }
+            QGroupBox::title { subcontrol-origin: margin; left: 10px; padding: 0 5px; }
+            QTabWidget::pane { border: 1px solid #d0d0d0; background-color: #f0f0f0; }
+            QTabBar::tab { background-color: #e0e0e0; color: #000000; padding: 5px 10px; }
+            QTabBar::tab:selected { background-color: #4a6a9a; color: #ffffff; }
+            QMenuBar { background-color: #f0f0f0; color: #000000; }
+            QMenuBar::item:selected { background-color: #4a6a9a; color: #ffffff; }
+            QMenu { background-color: #f0f0f0; color: #000000; }
+            QMenu::item:selected { background-color: #4a6a9a; color: #ffffff; }
+            QToolBar { background-color: #f0f0f0; border: none; spacing: 3px; }
+            QStatusBar { background-color: #f0f0f0; color: #666666; }
+            QDialog { background-color: #f0f0f0; }
+            QProgressBar { border: 1px solid #d0d0d0; border-radius: 3px; text-align: center; }
+            QProgressBar::chunk { background-color: #4a6a9a; }
+            QScrollBar:vertical { background-color: #f0f0f0; width: 12px; }
+            QScrollBar::handle:vertical { background-color: #d0d0d0; border-radius: 6px; min-height: 20px; }
+            QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0px; }
+            QScrollBar:horizontal { background-color: #f0f0f0; height: 12px; }
+            QScrollBar::handle:horizontal { background-color: #d0d0d0; border-radius: 6px; min-width: 20px; }
+            QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal { width: 0px; }
+            QCheckBox { color: #000000; }
+            QRadioButton { color: #000000; }
+            QLabel { color: #000000; }
+        """)
+    else:
+        _apply_light_theme_widget(target)
+
+
+def _apply_dark_theme_widget(widget: QWidget) -> None:
+    """Apply dark theme to a specific widget."""
+    widget.setStyleSheet("""
         QWidget { background-color: #2b2b2b; color: #ffffff; }
-        QTableView { background-color: #1e1e1e; alternate-background-color: #2b2b2b; gridline-color: #3a3a3a; }
-        QHeaderView::section { background-color: #3a3a3a; color: #ffffff; padding: 4px; border: 1px solid #4a4a4a; }
-        QTableView::item:selected { background-color: #4a6a9a; }
-        QPushButton { background-color: #3a3a3a; color: #ffffff; border: 1px solid #4a4a4a; padding: 5px 10px; border-radius: 3px; }
+        QLabel, QCheckBox, QRadioButton { color: #ffffff; }
+        QLineEdit, QTextEdit, QSpinBox, QComboBox { 
+            background-color: #1e1e1e; color: #ffffff; 
+            border: 1px solid #4a4a4a; padding: 3px; 
+        }
+        QPushButton { 
+            background-color: #3a3a3a; color: #ffffff; 
+            border: 1px solid #4a4a4a; padding: 5px 10px; border-radius: 3px; 
+        }
         QPushButton:hover { background-color: #4a4a4a; }
         QPushButton:pressed { background-color: #2a2a2a; }
-        QLineEdit, QTextEdit, QSpinBox, QComboBox { background-color: #1e1e1e; color: #ffffff; border: 1px solid #4a4a4a; padding: 3px; }
-        QGroupBox { border: 1px solid #4a4a4a; border-radius: 5px; margin-top: 10px; }
-        QGroupBox::title { subcontrol-origin: margin; left: 10px; padding: 0 5px; }
-        QTabWidget::pane { border: 1px solid #4a4a4a; background-color: #2b2b2b; }
-        QTabBar::tab { background-color: #3a3a3a; color: #ffffff; padding: 5px 10px; }
-        QTabBar::tab:selected { background-color: #4a6a9a; }
-        QMenuBar { background-color: #2b2b2b; color: #ffffff; }
-        QMenuBar::item:selected { background-color: #4a6a9a; }
-        QMenu { background-color: #2b2b2b; color: #ffffff; }
-        QMenu::item:selected { background-color: #4a6a9a; }
-        QToolBar { background-color: #2b2b2b; border: none; spacing: 3px; }
-        QStatusBar { background-color: #2b2b2b; color: #aaaaaa; }
-        QDialog { background-color: #2b2b2b; }
-        QProgressBar { border: 1px solid #4a4a4a; border-radius: 3px; text-align: center; }
-        QProgressBar::chunk { background-color: #4a6a9a; }
-        QScrollBar:vertical { background-color: #2b2b2b; width: 12px; }
-        QScrollBar::handle:vertical { background-color: #4a4a4a; border-radius: 6px; min-height: 20px; }
-        QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0px; }
-        QScrollBar:horizontal { background-color: #2b2b2b; height: 12px; }
-        QScrollBar::handle:horizontal { background-color: #4a4a4a; border-radius: 6px; min-width: 20px; }
-        QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal { width: 0px; }
-        QCheckBox { color: #ffffff; }
-        QRadioButton { color: #ffffff; }
-        QLabel { color: #ffffff; }
     """)
 
 
-def _apply_light_theme(app: QApplication) -> None:
-    """Apply light theme."""
-    light_palette = QPalette()
-    light_palette.setColor(QPalette.ColorRole.Window, QColor(240, 240, 240))
-    light_palette.setColor(QPalette.ColorRole.WindowText, Qt.GlobalColor.black)
-    light_palette.setColor(QPalette.ColorRole.Base, Qt.GlobalColor.white)
-    light_palette.setColor(QPalette.ColorRole.AlternateBase, QColor(245, 245, 245))
-    light_palette.setColor(QPalette.ColorRole.ToolTipBase, Qt.GlobalColor.white)
-    light_palette.setColor(QPalette.ColorRole.ToolTipText, Qt.GlobalColor.black)
-    light_palette.setColor(QPalette.ColorRole.Text, Qt.GlobalColor.black)
-    light_palette.setColor(QPalette.ColorRole.Button, QColor(240, 240, 240))
-    light_palette.setColor(QPalette.ColorRole.ButtonText, Qt.GlobalColor.black)
-    light_palette.setColor(QPalette.ColorRole.BrightText, Qt.GlobalColor.red)
-    light_palette.setColor(QPalette.ColorRole.Link, QColor(42, 130, 218))
-    light_palette.setColor(QPalette.ColorRole.Highlight, QColor(42, 130, 218))
-    light_palette.setColor(QPalette.ColorRole.HighlightedText, Qt.GlobalColor.white)
-    app.setPalette(light_palette)
-
-    # Light stylesheet
-    app.setStyleSheet("""
-        QMainWindow { background-color: #f0f0f0; }
+def _apply_light_theme_widget(widget: QWidget) -> None:
+    """Apply light theme to a specific widget."""
+    widget.setStyleSheet("""
         QWidget { background-color: #f0f0f0; color: #000000; }
-        QTableView { background-color: #ffffff; alternate-background-color: #f5f5f5; gridline-color: #d0d0d0; }
-        QHeaderView::section { background-color: #e0e0e0; color: #000000; padding: 4px; border: 1px solid #d0d0d0; }
-        QTableView::item:selected { background-color: #4a6a9a; color: #ffffff; }
-        QPushButton { background-color: #e0e0e0; color: #000000; border: 1px solid #d0d0d0; padding: 5px 10px; border-radius: 3px; }
+        QLabel, QCheckBox, QRadioButton { color: #000000; }
+        QLineEdit, QTextEdit, QSpinBox, QComboBox { 
+            background-color: #ffffff; color: #000000; 
+            border: 1px solid #d0d0d0; padding: 3px; 
+        }
+        QPushButton { 
+            background-color: #e0e0e0; color: #000000; 
+            border: 1px solid #d0d0d0; padding: 5px 10px; border-radius: 3px; 
+        }
         QPushButton:hover { background-color: #d0d0d0; }
         QPushButton:pressed { background-color: #c0c0c0; }
-        QLineEdit, QTextEdit, QSpinBox, QComboBox { background-color: #ffffff; color: #000000; border: 1px solid #d0d0d0; padding: 3px; }
-        QGroupBox { border: 1px solid #d0d0d0; border-radius: 5px; margin-top: 10px; }
-        QGroupBox::title { subcontrol-origin: margin; left: 10px; padding: 0 5px; }
-        QTabWidget::pane { border: 1px solid #d0d0d0; background-color: #f0f0f0; }
-        QTabBar::tab { background-color: #e0e0e0; color: #000000; padding: 5px 10px; }
-        QTabBar::tab:selected { background-color: #4a6a9a; color: #ffffff; }
-        QMenuBar { background-color: #f0f0f0; color: #000000; }
-        QMenuBar::item:selected { background-color: #4a6a9a; color: #ffffff; }
-        QMenu { background-color: #f0f0f0; color: #000000; }
-        QMenu::item:selected { background-color: #4a6a9a; color: #ffffff; }
-        QToolBar { background-color: #f0f0f0; border: none; spacing: 3px; }
-        QStatusBar { background-color: #f0f0f0; color: #666666; }
-        QDialog { background-color: #f0f0f0; }
-        QProgressBar { border: 1px solid #d0d0d0; border-radius: 3px; text-align: center; }
-        QProgressBar::chunk { background-color: #4a6a9a; }
-        QScrollBar:vertical { background-color: #f0f0f0; width: 12px; }
-        QScrollBar::handle:vertical { background-color: #d0d0d0; border-radius: 6px; min-height: 20px; }
-        QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0px; }
-        QScrollBar:horizontal { background-color: #f0f0f0; height: 12px; }
-        QScrollBar::handle:horizontal { background-color: #d0d0d0; border-radius: 6px; min-width: 20px; }
-        QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal { width: 0px; }
-        QCheckBox { color: #000000; }
-        QRadioButton { color: #000000; }
-        QLabel { color: #000000; }
     """)
