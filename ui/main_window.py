@@ -1,65 +1,40 @@
 # ui/main_window.py
+"""
+Main application window - now acts as UI coordinator.
+Refactored to delegate responsibilities to specialized controllers.
+"""
+
 import logging
 import os
-import subprocess
-import time
 from typing import List, Optional
 
-from PyQt6.QtCore import *
-from PyQt6.QtGui import *
-from PyQt6.QtWidgets import *
+from PyQt6.QtCore import Qt, QTimer, pyqtSignal, QObject
+from PyQt6.QtGui import QAction, QKeyEvent
+from PyQt6.QtWidgets import (
+    QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
+    QPushButton, QTableView, QHeaderView, QComboBox,
+    QLabel, QToolBar, QMenu, QSystemTrayIcon, QMenuBar,
+    QMessageBox, QSplitter, QFrame, QStackedWidget,
+)
 
-from core import Aria2RPC, BackendWorker, DataStore
+from core import Aria2RPC, BackendWorker, DataStore, LocalServer
 from core.data_store import Queue
-from core.local_server import LocalServer
+from core.aria2_manager import Aria2Manager
 from ui.delegates import ProgressDelegate
 from ui.dialogs import AddDownloadDialog, SettingsDialog
 from ui.table_model import DownloadTableModel
-from utils.helpers import format_speed, get_category, get_icon
+from utils.helpers import format_speed, get_category, get_icon, format_size
 
 logger = logging.getLogger(__name__)
 
 
-class DownloadController:
-    """Manages download operations and aria2 communication."""
-
-    def __init__(self, aria2: Aria2RPC, store: DataStore):
-        self.aria2 = aria2
-        self.store = store
-        self._cleared_gids: set = set()
-
-    def add_urls(self, urls: List[str], queue_idx: int, options: dict) -> List[str]:
-        """Add URLs to the specified queue and return list of GIDs."""
-        if queue_idx >= len(self.store.queues):
-            return []
-        q = self.store.queues[queue_idx]
-        added_gids = []
-        for url in urls:
-            gid = self.aria2.add_url(url, options)
-            if gid:
-                added_gids.append(gid)
-        q.downloads.extend(added_gids)
-        self.store.save()
-        return added_gids
-
-    def start(self, gid: str) -> None:
-        self.aria2.resume(gid)
-
-    def pause(self, gid: str) -> None:
-        self.aria2.pause(gid)
-
-    def remove(self, gid: str) -> None:
-        self.aria2.remove(gid)
-        self._cleared_gids.add(gid)
-
-    def is_cleared(self, gid: str) -> bool:
-        return gid in self._cleared_gids
-
-
-class QueueManager:
+class QueueController(QObject):
     """Manages queue operations."""
 
-    def __init__(self, store: DataStore):
+    queue_changed = pyqtSignal()
+
+    def __init__(self, store: DataStore) -> None:
+        super().__init__()
         self.store = store
         self.current_index = 0
 
@@ -74,12 +49,14 @@ class QueueManager:
     def set_current_index(self, index: int) -> None:
         if 0 <= index < len(self.store.queues):
             self.current_index = index
+            self.queue_changed.emit()
 
     def toggle_pause(self, index: int) -> None:
         if 0 <= index < len(self.store.queues):
             q = self.store.queues[index]
             q.paused = not q.paused
             self.store.save()
+            self.queue_changed.emit()
 
     def delete_queue(self, index: int) -> bool:
         if 0 <= index < len(self.store.queues):
@@ -88,6 +65,7 @@ class QueueManager:
                 return False
             del self.store.queues[index]
             self.store.save()
+            self.queue_changed.emit()
             return True
         return False
 
@@ -96,14 +74,107 @@ class QueueManager:
             return False
         self.store.queues.append(Queue(name, paused=True))
         self.store.save()
+        self.queue_changed.emit()
         return True
 
 
-class MainWindow(QMainWindow):
-    """Main application window - now acts as UI coordinator."""
+class DownloadController(QObject):
+    """Manages download operations and aria2 communication."""
 
-    def __init__(self):
+    download_added = pyqtSignal(str)  # gid
+    download_removed = pyqtSignal(str)  # gid
+    download_paused = pyqtSignal(str)  # gid
+    download_resumed = pyqtSignal(str)  # gid
+
+    def __init__(self, aria2: Aria2RPC, store: DataStore) -> None:
         super().__init__()
+        self.aria2 = aria2
+        self.store = store
+        self._cleared_gids: set = set()
+
+    def add_urls(self, urls: List[str], queue_idx: int, options: dict) -> List[str]:
+        """Add URLs to the specified queue and return list of GIDs."""
+        if queue_idx >= len(self.store.queues):
+            return []
+
+        q = self.store.queues[queue_idx]
+        added_gids = []
+
+        for url in urls:
+            gid = self.aria2.add_url(url, options)
+            if gid:
+                added_gids.append(gid)
+                self.download_added.emit(gid)
+
+        q.downloads.extend(added_gids)
+        self.store.save()
+        return added_gids
+
+    def start(self, gid: str) -> None:
+        result = self.aria2.resume(gid)
+        if result is not None:
+            self.download_resumed.emit(gid)
+
+    def pause(self, gid: str) -> None:
+        result = self.aria2.pause(gid)
+        if result is not None:
+            self.download_paused.emit(gid)
+
+    def remove(self, gid: str) -> None:
+        self.aria2.remove(gid)
+        self._cleared_gids.add(gid)
+        self.download_removed.emit(gid)
+
+    def is_cleared(self, gid: str) -> bool:
+        return gid in self._cleared_gids
+
+
+class TrayController(QObject):
+    """Manages system tray icon and notifications."""
+
+    show_window_requested = pyqtSignal()
+    quit_requested = pyqtSignal()
+
+    def __init__(self, parent: QWidget = None) -> None:
+        super().__init__(parent)
+        self.tray = QSystemTrayIcon(parent)
+        self.tray.activated.connect(self._on_tray_activated)
+
+        # Set up tray menu
+        menu = QMenu()
+        show_action = QAction("Show", parent)
+        show_action.triggered.connect(self.show_window_requested.emit)
+        menu.addAction(show_action)
+
+        menu.addSeparator()
+
+        quit_action = QAction("Quit", parent)
+        quit_action.triggered.connect(self.quit_requested.emit)
+        menu.addAction(quit_action)
+
+        self.tray.setContextMenu(menu)
+        self.tray.show()
+
+    def _on_tray_activated(self, reason: QSystemTrayIcon.ActivationReason) -> None:
+        if reason == QSystemTrayIcon.ActivationReason.DoubleClick:
+            self.show_window_requested.emit()
+
+    def show_message(self, title: str, message: str, icon: QSystemTrayIcon.MessageIcon = QSystemTrayIcon.MessageIcon.Information) -> None:
+        self.tray.showMessage(title, message, icon)
+
+    def set_icon(self, icon) -> None:
+        self.tray.setIcon(icon)
+
+
+class MainWindow(QMainWindow):
+    """
+    Main application window - now acts as UI coordinator.
+    Delegates responsibilities to QueueController, DownloadController, and TrayController.
+    """
+
+    def __init__(self) -> None:
+        super().__init__()
+
         self.setWindowTitle("FelfelDM")
         self.setMinimumSize(1050, 680)
 
@@ -111,432 +182,353 @@ class MainWindow(QMainWindow):
         self.store = DataStore()
         self._ensure_default_queue()
 
+        # Aria2 manager (starts the subprocess)
+        self.aria2_manager = Aria2Manager()
+        self.aria2_manager.start()
+
+        # RPC client
         self.aria2 = Aria2RPC(
             self.store.settings["aria2_host"],
             self.store.settings["aria2_port"],
             self.store.settings["aria2_secret"],
-            verify_ssl=True
+            verify_ssl=True,
         )
         self.aria2.on_error = self._on_aria2_error
 
+        # Controllers
         self.download_controller = DownloadController(self.aria2, self.store)
-        self.queue_manager = QueueManager(self.store)
+        self.queue_controller = QueueController(self.store)
+        self.tray_controller = TrayController(self)
+
+        # Connect controller signals
+        self.queue_controller.queue_changed.connect(self._update_queue_ui)
+        self.download_controller.download_added.connect(self._on_download_added)
+
+        # Tray signals
+        self.tray_controller.show_window_requested.connect(self.show)
+        self.tray_controller.quit_requested.connect(self._quit_app)
 
         # Build UI
         self._build_ui()
-        self._build_tray()
 
-        # Start services
-        self._start_aria2_if_needed()
-        self._apply_global_speed_limit()
-        self._start_backend()
+        # Backend worker for polling
+        self._setup_worker()
 
-        # Start local server in a separate thread
-        self.local_server = LocalServer(callback=self._add_downloads_from_extension)
-        self.local_server.start(8765)
+        # Local server for browser extension
+        self._setup_local_server()
+
+        # Timer for periodic UI updates
+        self._update_timer = QTimer()
+        self._update_timer.timeout.connect(self._update_ui)
+        self._update_timer.start(1000)
+
+        # Ensure tray icon is set
+        self._update_tray_icon()
 
     def _ensure_default_queue(self) -> None:
         if not any(q.name == "Default" for q in self.store.queues):
             self.store.queues.insert(0, Queue("Default", paused=True))
             self.store.save()
 
+    def _setup_worker(self) -> None:
+        """Set up the background worker for polling aria2."""
+        self.worker = BackendWorker(self.aria2, self.store)
+        self.worker.stats_updated.connect(self._on_stats_updated)
+        self.worker.connection_changed.connect(self._on_connection_changed)
+        self.worker.start()
+
+    def _setup_local_server(self) -> None:
+        """Set up the local HTTP server for browser extension."""
+        self.local_server = LocalServer(self.download_controller)
+        self.local_server.urls_received.connect(self._on_urls_received)
+        self.local_server.start()
+
     def _build_ui(self) -> None:
+        """Build the user interface."""
         central = QWidget()
         self.setCentralWidget(central)
-        root = QHBoxLayout(central)
-        root.setContentsMargins(0, 0, 0, 0)
-        root.setSpacing(0)
+        main_layout = QVBoxLayout(central)
+        main_layout.setContentsMargins(0, 0, 0, 0)
+        main_layout.setSpacing(0)
 
-        splitter = QSplitter(Qt.Orientation.Horizontal)
-        splitter.setChildrenCollapsible(False)
-        splitter.setHandleWidth(4)
-        splitter.setStyleSheet("""
-            QSplitter::handle {
-                background-color: #3d4045;
-                width: 4px;
-            }
-            QSplitter::handle:hover {
-                background-color: #4a4d53;
-            }
-        """)
+        # Toolbar
+        self._build_toolbar(main_layout)
 
-        sidebar = self._build_sidebar()
-        splitter.addWidget(sidebar)
-
-        content = self._build_content()
-        splitter.addWidget(content)
-
-        splitter.setSizes([220, 800])
-        root.addWidget(splitter)
-
-    def _build_sidebar(self) -> QWidget:
-        sidebar = QWidget()
-        sidebar.setObjectName("sidebar")
-        sidebar.setMinimumWidth(180)
-        sidebar.setMaximumWidth(350)
-        sidebar.setStyleSheet("""
-            QWidget#sidebar {
-                background-color: #2d2d30;
-                border-right: 1px solid #1e1e20;
-            }
-        """)
-
-        layout = QVBoxLayout(sidebar)
-        layout.setContentsMargins(10, 12, 10, 12)
-        layout.setSpacing(8)
-
-        layout.addWidget(QLabel("Queues"))
-        layout.addSpacing(4)
-
-        self.queue_list = QListWidget()
-        self.queue_list.currentRowChanged.connect(self._on_queue_changed)
-        layout.addWidget(self.queue_list)
-
-        btn_layout = QHBoxLayout()
-        self.start_queue_btn = QPushButton(get_icon('media-playback-start'), "Start")
-        self.start_queue_btn.clicked.connect(self._toggle_queue_pause)
-        btn_layout.addWidget(self.start_queue_btn)
-
-        self.delete_queue_btn = QPushButton(get_icon('edit-delete'), "Delete")
-        self.delete_queue_btn.clicked.connect(self._delete_current_queue)
-        btn_layout.addWidget(self.delete_queue_btn)
-
-        layout.addLayout(btn_layout)
-
-        add_queue_btn = QPushButton(get_icon('list-add'), "Add Queue")
-        add_queue_btn.clicked.connect(self._add_queue)
-        layout.addWidget(add_queue_btn)
-
-        layout.addStretch()
-
-        self.status_label = QLabel("Ready")
-        self.status_label.setStyleSheet("color: #95a5a6; font-size: 10px;")
-        layout.addWidget(self.status_label)
-
-        return sidebar
-
-    def _build_content(self) -> QWidget:
+        # Main content
         content = QWidget()
-        layout = QVBoxLayout(content)
-        layout.setContentsMargins(8, 8, 8, 8)
-        layout.setSpacing(6)
+        content_layout = QVBoxLayout(content)
+        content_layout.setContentsMargins(10, 10, 10, 10)
 
-        toolbar = self._build_toolbar()
-        layout.addWidget(toolbar)
+        # Queue selector and controls
+        queue_layout = QHBoxLayout()
+        self.queue_combo = QComboBox()
+        self.queue_combo.currentIndexChanged.connect(self._on_queue_changed)
+        queue_layout.addWidget(QLabel("Queue:"))
+        queue_layout.addWidget(self.queue_combo)
+        queue_layout.addStretch()
 
+        # Queue management buttons
+        add_queue_btn = QPushButton("+")
+        add_queue_btn.setToolTip("Add Queue")
+        add_queue_btn.clicked.connect(self._add_queue)
+        queue_layout.addWidget(add_queue_btn)
+
+        toggle_queue_btn = QPushButton("⏸")
+        toggle_queue_btn.setToolTip("Pause/Resume Queue")
+        toggle_queue_btn.clicked.connect(self._toggle_current_queue)
+        queue_layout.addWidget(toggle_queue_btn)
+
+        delete_queue_btn = QPushButton("✕")
+        delete_queue_btn.setToolTip("Delete Queue")
+        delete_queue_btn.clicked.connect(self._delete_current_queue)
+        queue_layout.addWidget(delete_queue_btn)
+
+        content_layout.addLayout(queue_layout)
+
+        # Table view
         self.table = QTableView()
         self.table.setAlternatingRowColors(True)
         self.table.setSortingEnabled(True)
-        self.table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
-        self.table.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
-        self.table.verticalHeader().setVisible(False)
-        self.table.setShowGrid(False)
+        self.table.setSelectionBehavior(QTableView.SelectionBehavior.SelectRows)
 
-        self.model = DownloadTableModel()
-        self.table.setModel(self.model)
+        self.table_model = DownloadTableModel(self.store, self.queue_controller)
+        self.table.setModel(self.table_model)
 
-        self.progress_delegate = ProgressDelegate()
-        self.table.setItemDelegateForColumn(2, self.progress_delegate)
+        # Set up columns
+        for i, name in enumerate(self.table_model.COLS):
+            if name == "Category":
+                self.table.setColumnWidth(i, 80)
+            elif name == "Name":
+                self.table.setColumnWidth(i, 300)
+            elif name == "Size":
+                self.table.setColumnWidth(i, 80)
+            elif name == "Progress":
+                self.table.setColumnWidth(i, 120)
+            elif name == "Speed":
+                self.table.setColumnWidth(i, 100)
+            elif name == "ETA":
+                self.table.setColumnWidth(i, 80)
+            elif name == "Status":
+                self.table.setColumnWidth(i, 100)
+            else:
+                self.table.setColumnWidth(i, 100)
 
-        layout.addWidget(self.table)
+        # Set progress delegate
+        self.table.setItemDelegateForColumn(2, ProgressDelegate(self.table))
 
-        self.status_bar = QStatusBar()
-        self.status_bar.setStyleSheet("QStatusBar { background-color: #2d2d30; color: #efefef; }")
-        self.download_speed_label = QLabel("⬇ 0 B/s")
-        self.upload_speed_label = QLabel("⬆ 0 B/s")
-        self.download_count_label = QLabel("Active: 0")
-        self.status_bar.addWidget(self.download_speed_label)
-        self.status_bar.addWidget(self.upload_speed_label)
-        self.status_bar.addWidget(self.download_count_label)
-        self.status_bar.addPermanentWidget(QLabel("FelfelDM"))
-        layout.addWidget(self.status_bar)
+        content_layout.addWidget(self.table)
 
-        return content
+        # Status bar
+        self.status_label = QLabel("Ready")
+        content_layout.addWidget(self.status_label)
 
-    def _build_toolbar(self) -> QWidget:
-        toolbar = QWidget()
-        toolbar.setStyleSheet("""
-            QWidget {
-                background-color: #2d2d30;
-                border-bottom: 1px solid #1e1e20;
-            }
-            QPushButton {
-                background-color: transparent;
-                color: #efefef;
-                border: none;
-                padding: 6px 12px;
-                border-radius: 4px;
-            }
-            QPushButton:hover {
-                background-color: #3d4045;
-            }
-        """)
-        layout = QHBoxLayout(toolbar)
-        layout.setContentsMargins(8, 4, 8, 4)
-        layout.setSpacing(4)
+        main_layout.addWidget(content)
 
-        add_btn = QPushButton(get_icon('list-add'), "Add")
-        add_btn.clicked.connect(self._add_downloads)
-        layout.addWidget(add_btn)
+        # Update queue combo
+        self._update_queue_ui()
 
-        start_btn = QPushButton(get_icon('media-playback-start'), "Start")
-        start_btn.clicked.connect(self._start_selected)
-        layout.addWidget(start_btn)
+    def _build_toolbar(self, parent_layout) -> None:
+        """Build the toolbar."""
+        toolbar = QToolBar()
+        toolbar.setMovable(False)
 
-        pause_btn = QPushButton(get_icon('media-playback-pause'), "Pause")
-        pause_btn.clicked.connect(self._pause_selected)
-        layout.addWidget(pause_btn)
+        # Add download button
+        add_action = QAction(get_icon("list-add"), "Add Download", self)
+        add_action.triggered.connect(self._show_add_dialog)
+        toolbar.addAction(add_action)
 
-        remove_btn = QPushButton(get_icon('edit-delete'), "Remove")
-        remove_btn.clicked.connect(self._remove_selected)
-        layout.addWidget(remove_btn)
+        toolbar.addSeparator()
 
-        layout.addStretch()
+        # Start/pause/remove actions
+        start_action = QAction(get_icon("media-playback-start"), "Start", self)
+        start_action.triggered.connect(self._start_selected)
+        toolbar.addAction(start_action)
 
-        settings_btn = QPushButton(get_icon('preferences-system'), "Settings")
-        settings_btn.clicked.connect(self._show_settings)
-        layout.addWidget(settings_btn)
+        pause_action = QAction(get_icon("media-playback-pause"), "Pause", self)
+        pause_action.triggered.connect(self._pause_selected)
+        toolbar.addAction(pause_action)
 
-        return toolbar
+        remove_action = QAction("Remove", self)
+        remove_action.triggered.connect(self._remove_selected)
+        toolbar.addAction(remove_action)
 
-    def _build_tray(self) -> None:
-        self.tray = QSystemTrayIcon(self)
-        self.tray.setIcon(self.windowIcon())
-        self.tray.setToolTip("FelfelDM")
+        toolbar.addSeparator()
 
-        tray_menu = QMenu()
-        show_action = QAction("Show", self)
-        show_action.triggered.connect(self.show)
-        tray_menu.addAction(show_action)
+        # Settings
+        settings_action = QAction(get_icon("preferences-system"), "Settings", self)
+        settings_action.triggered.connect(self._show_settings)
+        toolbar.addAction(settings_action)
 
-        quit_action = QAction("Quit", self)
-        quit_action.triggered.connect(self._quit_application)
-        tray_menu.addAction(quit_action)
+        parent_layout.addWidget(toolbar)
 
-        self.tray.setContextMenu(tray_menu)
-        self.tray.show()
+    def _update_queue_ui(self) -> None:
+        """Update the queue combo box and table."""
+        current = self.queue_combo.currentIndex()
+        self.queue_combo.clear()
+        for q in self.queue_controller.get_queues():
+            self.queue_combo.addItem(q.name)
 
-    def _start_aria2_if_needed(self) -> None:
-        if self.aria2.is_connected():
-            return
+        # Restore selection
+        if 0 <= current < self.queue_combo.count():
+            self.queue_combo.setCurrentIndex(current)
+        elif self.queue_combo.count() > 0:
+            self.queue_combo.setCurrentIndex(0)
 
-        try:
-            import shutil
-            aria2_path = shutil.which("aria2c")
-            if aria2_path:
-                cmd = [
-                    aria2_path,
-                    "--enable-rpc",
-                    f"--rpc-listen-port={self.store.settings['aria2_port']}",
-                    "--max-concurrent-downloads=5",
-                    "--max-connection-per-server=16",
-                    "--split=16",
-                    "--min-split-size=1M",
-                    "--console-log-level=error"
-                ]
-                secret = self.store.get_secret()
-                if secret:
-                    cmd.append(f"--rpc-secret={secret}")
-                subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-                time.sleep(1)
-        except Exception as e:
-            logger.error(f"Failed to start aria2: {e}")
-
-    def _apply_global_speed_limit(self) -> None:
-        limit = self.store.settings.get("speed_limit", 0)
-        if limit > 0:
-            self.aria2.change_global_option({"max-download-limit": str(limit)})
-
-    def _start_backend(self) -> None:
-        self.worker = BackendWorker(self.aria2, self.store)
-        self.worker.stats_updated.connect(self._on_stats_updated)
-        self.worker.start()
-
-    def _on_stats_updated(self, data: dict) -> None:
-        if not data.get("connected", False):
-            self.status_label.setText("⚠ aria2 disconnected")
-            return
-
-        stat = data.get("stat", {})
-        if not isinstance(stat, dict):
-            stat = {}
-
-        active = [item for item in data.get("active", []) if isinstance(item, dict)]
-        waiting = [item for item in data.get("waiting", []) if isinstance(item, dict)]
-        stopped = [item for item in data.get("stopped", []) if isinstance(item, dict)]
-
-        dl_speed = int(stat.get("downloadSpeed", 0))
-        ul_speed = int(stat.get("uploadSpeed", 0))
-        self.download_speed_label.setText(f"⬇ {format_speed(dl_speed)}")
-        self.upload_speed_label.setText(f"⬆ {format_speed(ul_speed)}")
-        self.download_count_label.setText(f"Active: {len(active)}")
-
-        self._update_queue_list()
-
-        all_downloads = {}
-        for d in active + waiting + stopped:
-            gid = d.get("gid")
-            if gid:
-                all_downloads[gid] = d
-
-        current_queue = self.queue_manager.get_current_queue()
-        queue_gids = set(current_queue.downloads) if current_queue else set()
-
-        rows = []
-        for gid, d in all_downloads.items():
-            if self.download_controller.is_cleared(gid):
-                continue
-            if queue_gids and gid not in queue_gids:
-                continue
-            files = d.get("files", [])
-            name = files[0].get("path", "unknown").split("/")[-1] if files else "unknown"
-            rows.append({
-                "gid": gid,
-                "name": name,
-                "totalLength": d.get("totalLength", 0),
-                "completedLength": d.get("completedLength", 0),
-                "downloadSpeed": d.get("downloadSpeed", 0),
-                "status": d.get("status", ""),
-                "category": get_category(name),
-                "errorMessage": d.get("errorMessage", ""),
-            })
-
-        self.model.update_rows(rows)
-
-    def _update_queue_list(self) -> None:
-        current = self.queue_list.currentRow()
-        self.queue_list.clear()
-        for q in self.store.queues:
-            status = "⏸" if q.paused else "▶"
-            self.queue_list.addItem(f"{status} {q.name}")
-        if current >= 0 and current < self.queue_list.count():
-            self.queue_list.setCurrentRow(current)
-        elif self.queue_list.count() > 0:
-            self.queue_list.setCurrentRow(0)
+        # Update table
+        self.table_model.refresh()
 
     def _on_queue_changed(self, index: int) -> None:
-        self.queue_manager.set_current_index(index)
-
-    def _toggle_queue_pause(self) -> None:
-        self.queue_manager.toggle_pause(self.queue_manager.current_index)
-        self._update_queue_list()
-
-    def _delete_current_queue(self) -> None:
-        index = self.queue_manager.current_index
-        if index < len(self.store.queues):
-            q = self.store.queues[index]
-            if q.name == "Default":
-                QMessageBox.warning(self, "Cannot Delete", "Cannot delete the Default queue.")
-                return
-            if QMessageBox.question(self, "Delete Queue",
-                                   f"Delete queue '{q.name}' and all its downloads?",
-                                   QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No) == QMessageBox.StandardButton.Yes:
-                if self.queue_manager.delete_queue(index):
-                    self._update_queue_list()
+        """Handle queue selection change."""
+        self.queue_controller.set_current_index(index)
+        self.table_model.refresh()
 
     def _add_queue(self) -> None:
-        name, ok = QInputDialog.getText(self, "Add Queue", "Enter queue name:")
-        if ok and name.strip():
-            if self.queue_manager.add_queue(name.strip()):
-                self._update_queue_list()
-            else:
-                QMessageBox.warning(self, "Duplicate", "A queue with this name already exists.")
+        """Add a new queue."""
+        from PyQt6.QtWidgets import QInputDialog
+        name, ok = QInputDialog.getText(self, "Add Queue", "Queue name:")
+        if ok and name:
+            self.queue_controller.add_queue(name)
 
-    def _add_downloads(self) -> None:
-        dialog = AddDownloadDialog(self.store.queues, self.queue_manager.current_index, self)
-        if dialog.exec() == QDialog.DialogCode.Accepted:
-            data = dialog.get_data()
-            urls = data.get("urls", [])
-            if not urls:
-                return
-            queue_idx = data.get("queue", 0)
-            options = {
-                "dir": data.get("path", ""),
-                "max-connection-per-server": str(data.get("connections", 8)),
-                "split": str(data.get("connections", 8)),
-            }
-            self.download_controller.add_urls(urls, queue_idx, options)
+    def _toggle_current_queue(self) -> None:
+        """Toggle pause/resume of the current queue."""
+        idx = self.queue_combo.currentIndex()
+        self.queue_controller.toggle_pause(idx)
 
-    def _add_downloads_from_extension(self, urls: List[str]) -> None:
-        if not urls:
-            return
-        queue_idx = self.queue_manager.current_index
-        options = {
-            "dir": "",
-            "max-connection-per-server": str(self.store.settings.get("connections", 8)),
-        }
-        added = self.download_controller.add_urls(urls, queue_idx, options)
-        if added:
-            self.status_label.setText(f"Added {len(added)} download(s) from extension")
+    def _delete_current_queue(self) -> None:
+        """Delete the current queue."""
+        idx = self.queue_combo.currentIndex()
+        if idx >= 0:
+            self.queue_controller.delete_queue(idx)
+
+    def _show_add_dialog(self) -> None:
+        """Show the Add Download dialog."""
+        dialog = AddDownloadDialog(
+            self.queue_controller.get_queues(),
+            self.store,
+            self.queue_controller.current_index,
+            self
+        )
+        if dialog.exec():
+            urls = dialog.get_urls()
+            queue_idx = dialog.get_queue_index()
+            options = dialog.get_options()
+            if urls:
+                self.download_controller.add_urls(urls, queue_idx, options)
 
     def _start_selected(self) -> None:
-        selected = self.table.selectionModel().selectedRows()
-        for idx in selected:
-            row = idx.row()
-            if row < len(self.model.rows):
-                gid = self.model.data(idx, DownloadTableModel.GID_ROLE)
-                if gid:
-                    self.download_controller.start(gid)
+        """Start the selected download."""
+        selection = self.table.selectionModel().selectedRows()
+        for idx in selection:
+            gid = self.table_model.get_gid(idx.row())
+            if gid:
+                self.download_controller.start(gid)
 
     def _pause_selected(self) -> None:
-        selected = self.table.selectionModel().selectedRows()
-        for idx in selected:
-            row = idx.row()
-            if row < len(self.model.rows):
-                gid = self.model.data(idx, DownloadTableModel.GID_ROLE)
-                if gid:
-                    self.download_controller.pause(gid)
+        """Pause the selected download."""
+        selection = self.table.selectionModel().selectedRows()
+        for idx in selection:
+            gid = self.table_model.get_gid(idx.row())
+            if gid:
+                self.download_controller.pause(gid)
 
     def _remove_selected(self) -> None:
-        selected = self.table.selectionModel().selectedRows()
-        if not selected:
-            return
-        if QMessageBox.question(self, "Remove Downloads",
-                               f"Remove {len(selected)} download(s)?",
-                               QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No) == QMessageBox.StandardButton.Yes:
-            for idx in selected:
-                row = idx.row()
-                if row < len(self.model.rows):
-                    gid = self.model.data(idx, DownloadTableModel.GID_ROLE)
-                    if gid:
-                        self.download_controller.remove(gid)
+        """Remove the selected download."""
+        selection = self.table.selectionModel().selectedRows()
+        for idx in selection:
+            gid = self.table_model.get_gid(idx.row())
+            if gid:
+                self.download_controller.remove(gid)
+        self.table_model.refresh()
 
     def _show_settings(self) -> None:
+        """Show the Settings dialog."""
         dialog = SettingsDialog(self.store, self)
-        if dialog.exec() == QDialog.DialogCode.Accepted:
-            self.aria2 = Aria2RPC(
-                self.store.settings["aria2_host"],
-                self.store.settings["aria2_port"],
-                self.store.settings["aria2_secret"],
-                verify_ssl=True
-            )
-            self.aria2.on_error = self._on_aria2_error
-            self.download_controller = DownloadController(self.aria2, self.store)
-            self._apply_global_speed_limit()
+        if dialog.exec():
+            # Reconnect if settings changed
+            pass
 
     def _on_aria2_error(self, msg: str) -> None:
-        self.status_label.setText(f"⚠ {msg}")
+        """Handle aria2 errors."""
+        logger.error("aria2 error: %s", msg)
+        self.status_label.setText(f"Error: {msg}")
+
+    def _on_stats_updated(self, stats: dict) -> None:
+        """Update UI with new stats."""
+        self.table_model.refresh()
+        # Update status label with global stats
+        if "global" in stats:
+            gs = stats["global"]
+            speed = format_speed(gs.get("downloadSpeed", 0))
+            self.status_label.setText(f"Download Speed: {speed}")
+
+    def _on_connection_changed(self, connected: bool) -> None:
+        """Handle connection status change."""
+        if connected:
+            self.status_label.setText("Connected to aria2")
+        else:
+            self.status_label.setText("Disconnected from aria2")
+
+    def _on_download_added(self, gid: str) -> None:
+        """Handle download added event."""
+        self.table_model.refresh()
+        self.tray_controller.show_message(
+            "Download Started",
+            f"New download added: {gid[:8]}"
+        )
+
+    def _on_urls_received(self, urls: List[str]) -> None:
+        """Handle URLs received from browser extension."""
+        dialog = AddDownloadDialog(
+            self.queue_controller.get_queues(),
+            self.store,
+            self.queue_controller.current_index,
+            self
+        )
+        dialog.set_urls(urls)
+        if dialog.exec():
+            urls = dialog.get_urls()
+            queue_idx = dialog.get_queue_index()
+            options = dialog.get_options()
+            if urls:
+                self.download_controller.add_urls(urls, queue_idx, options)
+
+    def _update_ui(self) -> None:
+        """Periodic UI update."""
+        # Update tray icon with download speed if needed
+        pass
+
+    def _update_tray_icon(self) -> None:
+        """Update the tray icon."""
+        # Set a default icon
+        from PyQt6.QtGui import QIcon
+        self.tray_controller.set_icon(QIcon.fromTheme("download"))
 
     def keyPressEvent(self, event: QKeyEvent) -> None:
+        """Handle key press events."""
         if event.key() == Qt.Key.Key_Delete:
             self._remove_selected()
-        elif event.key() == Qt.Key.Key_N and event.modifiers() & Qt.KeyboardModifier.ControlModifier:
-            self._add_downloads()
-        elif event.key() == Qt.Key.Key_Q and event.modifiers() & Qt.KeyboardModifier.ControlModifier:
-            self._quit_application()
+        elif event.key() == Qt.Key.Key_Return or event.key() == Qt.Key.Key_Enter:
+            self._start_selected()
         else:
             super().keyPressEvent(event)
 
-    def _quit_application(self) -> None:
-        self.local_server.stop()
+    def closeEvent(self, event) -> None:
+        """Handle close event - hide to tray instead of closing."""
+        event.ignore()
+        self.hide()
+        self.tray_controller.show_message(
+            "FelfelDM",
+            "Application minimized to system tray"
+        )
+
+    def _quit_app(self) -> None:
+        """Quit the application."""
+        # Stop worker
         if hasattr(self, 'worker'):
             self.worker.stop()
+        # Stop local server
+        if hasattr(self, 'local_server'):
+            self.local_server.stop()
+        # Stop aria2
+        self.aria2_manager.stop()
         QApplication.quit()
-
-    def closeEvent(self, event: QCloseEvent) -> None:
-        if self.tray.isVisible():
-            self.hide()
-            event.ignore()
-        else:
-            self._quit_application()
-            event.accept()
