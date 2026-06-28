@@ -1,5 +1,6 @@
 # core/worker.py
 import logging
+from typing import Dict
 
 from PyQt6.QtCore import QThread, pyqtSignal
 
@@ -16,11 +17,19 @@ class BackendWorker(QThread):
         self.store = store
         self.running = True
         self.poll_interval = 1000  # milliseconds
+        self._cached_connected = False
+        self._connection_check_counter = 0
 
     def run(self) -> None:
-        """Main worker loop with batch polling."""
+        """Main worker loop with batch polling and connection caching."""
         while self.running:
-            if not self.aria2.is_connected():
+            # Check connection every 10th iteration to reduce RPC traffic
+            self._connection_check_counter += 1
+            if self._connection_check_counter >= 10:
+                self._cached_connected = self.aria2.is_connected()
+                self._connection_check_counter = 0
+
+            if not self._cached_connected:
                 self.stats_updated.emit({"connected": False})
                 self.msleep(self.poll_interval)
                 continue
