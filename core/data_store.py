@@ -1,9 +1,15 @@
 # core/data_store.py
+"""
+Persistent data store with secure secret handling and thread-safety.
+Synchronizes aria2_secret between settings and keyring.
+"""
+
 import json
 import logging
 import os
 from datetime import datetime, time as dtime
 from threading import Lock
+from typing import Optional, List, Dict, Any
 
 import keyring
 from appdirs import user_config_dir
@@ -17,9 +23,17 @@ KEYRING_KEY = "aria2_secret"
 class Queue:
     """Download queue model - single source of truth."""
 
-    def __init__(self, name: str, max_concurrent: int = 3, save_path: str = "",
-                 schedule_enabled: bool = False, schedule_start=None,
-                 schedule_end=None, days=None, paused: bool = True):
+    def __init__(
+        self,
+        name: str,
+        max_concurrent: int = 3,
+        save_path: str = "",
+        schedule_enabled: bool = False,
+        schedule_start=None,
+        schedule_end=None,
+        days=None,
+        paused: bool = True,
+    ) -> None:
         self.name = name
         self.max_concurrent = max_concurrent
         self.save_path = save_path or os.path.expanduser("~/Downloads")
@@ -27,7 +41,7 @@ class Queue:
         self.schedule_start = schedule_start or dtime(0, 0)
         self.schedule_end = schedule_end or dtime(23, 59)
         self.days = days or [0, 1, 2, 3, 4, 5, 6]
-        self.downloads = []  # List of GIDs (strings)
+        self.downloads: List[str] = []  # List of GIDs
         self.paused = paused
 
     def to_dict(self) -> dict:
@@ -50,10 +64,12 @@ class Queue:
         q.max_concurrent = d.get("max_concurrent", 3)
         q.save_path = d.get("save_path", os.path.expanduser("~/Downloads"))
         q.schedule_enabled = d.get("schedule_enabled", False)
+
         st = d.get("schedule_start", "00:00").split(":")
         en = d.get("schedule_end", "23:59").split(":")
         q.schedule_start = dtime(int(st[0]), int(st[1]))
         q.schedule_end = dtime(int(en[0]), int(en[1]))
+
         q.days = d.get("days", [0, 1, 2, 3, 4, 5, 6])
         q.downloads = list(d.get("downloads", []))
         q.paused = d.get("paused", True)
@@ -75,15 +91,19 @@ class Queue:
 
 
 class DataStore:
-    """Persistent data store with secure secret handling and thread-safety."""
+    """
+    Persistent data store with secure secret handling and thread-safety.
+    Synchronizes aria2_secret between settings (source of truth) and keyring.
+    """
 
     PATH = os.path.join(user_config_dir("felfelDM"), "data.json")
 
-    def __init__(self):
+    def __init__(self) -> None:
         self._lock = Lock()
         os.makedirs(os.path.dirname(self.PATH), exist_ok=True)
-        self.queues = []
-        self.settings = {
+
+        self.queues: List[Queue] = []
+        self.settings: Dict[str, Any] = {
             "aria2_host": "http://localhost",
             "aria2_port": 6800,
             "aria2_secret": "",
@@ -92,73 +112,111 @@ class DataStore:
             "max_concurrent": 5,
             "shutdown_after_finish": False,
             "speed_limit": 0,
-            "auto_clear_completed": False
+            "auto_clear_completed": False,
         }
+
         self.load()
+
         # Ensure Default queue exists
         if not self._has_default_queue():
             self.queues.insert(0, Queue("Default", paused=True))
             self.save()
 
     def _has_default_queue(self) -> bool:
-        for q in self.queues:
-            if q.name == "Default":
-                return True
-        return False
+        return any(q.name == "Default" for q in self.queues)
+
+    def _sync_secret_from_keyring(self) -> None:
+        """Load secret from keyring and update settings if present."""
+        try:
+            secret = keyring.get_password(KEYRING_SERVICE, KEYRING_KEY)
+            if secret:
+                if self.settings.get("aria2_secret") != secret:
+                    self.settings["aria2_secret"] = secret
+                    logger.debug("Secret synced from keyring to settings")
+            else:
+                # If keyring has no secret but settings does, save to keyring
+                if self.settings.get("aria2_secret"):
+                    keyring.set_password(KEYRING_SERVICE, KEYRING_KEY, self.settings["aria2_secret"])
+                    logger.debug("Secret synced from settings to keyring")
+        except Exception as e:
+            logger.warning("Failed to sync secret from keyring: %s", e)
 
     def load(self) -> None:
-        """Load data from disk."""
+        """Load data from file with thread-safety."""
         with self._lock:
+            if not os.path.exists(self.PATH):
+                return
+
             try:
-                with open(self.PATH) as f:
+                with open(self.PATH, "r", encoding="utf-8") as f:
                     data = json.load(f)
-                self.queues = [Queue.from_dict(q) for q in data.get("queues", [])]
-                self.settings.update(data.get("settings", {}))
-                for q in self.queues:
-                    if not hasattr(q, 'paused'):
-                        q.paused = True
-                    if not hasattr(q, 'schedule_enabled'):
-                        q.schedule_enabled = False
-                    if not hasattr(q, 'schedule_start'):
-                        q.schedule_start = dtime(0, 0)
-                    if not hasattr(q, 'schedule_end'):
-                        q.schedule_end = dtime(23, 59)
-                    if not hasattr(q, 'days'):
-                        q.days = [0, 1, 2, 3, 4, 5, 6]
-            except FileNotFoundError:
-                pass
+
+                # Load queues
+                self.queues = []
+                for q_data in data.get("queues", []):
+                    self.queues.append(Queue.from_dict(q_data))
+
+                # Load settings
+                if "settings" in data:
+                    self.settings.update(data["settings"])
+
+                # Sync secret from keyring
+                self._sync_secret_from_keyring()
+
+                logger.info("Loaded %d queues", len(self.queues))
+
             except Exception as e:
-                logger.error(f"Failed to load data: {e}")
+                logger.error("Failed to load data: %s", e)
 
     def save(self) -> None:
-        """Save data to disk."""
+        """Save data to file with thread-safety."""
         with self._lock:
             try:
                 data = {
                     "queues": [q.to_dict() for q in self.queues],
-                    "settings": self.settings
+                    "settings": self.settings,
                 }
-                with open(self.PATH, 'w') as f:
-                    json.dump(data, f, indent=2)
+
+                # Save secret to keyring
+                secret = self.settings.get("aria2_secret")
+                if secret:
+                    try:
+                        keyring.set_password(KEYRING_SERVICE, KEYRING_KEY, secret)
+                    except Exception as e:
+                        logger.warning("Failed to save secret to keyring: %s", e)
+
+                with open(self.PATH, "w", encoding="utf-8") as f:
+                    json.dump(data, f, indent=2, ensure_ascii=False)
+
+                logger.debug("Data saved")
+
             except Exception as e:
-                logger.error(f"Failed to save data: {e}")
+                logger.error("Failed to save data: %s", e)
 
     def get_secret(self) -> str:
-        """Get aria2 secret from keyring."""
-        try:
-            return keyring.get_password(KEYRING_SERVICE, KEYRING_KEY) or ""
-        except Exception as e:
-            logger.warning(f"Failed to get secret from keyring: {e}")
-            return ""
+        """Get the aria2 secret, ensuring it's synced with keyring."""
+        self._sync_secret_from_keyring()
+        return self.settings.get("aria2_secret", "")
 
     def set_secret(self, secret: str) -> None:
-        """Store aria2 secret in keyring."""
+        """Set the aria2 secret and sync to keyring."""
+        self.settings["aria2_secret"] = secret
         try:
-            if secret:
-                keyring.set_password(KEYRING_SERVICE, KEYRING_KEY, secret)
-            else:
-                keyring.delete_password(KEYRING_SERVICE, KEYRING_KEY)
-            self.settings["aria2_secret"] = secret
+            keyring.set_password(KEYRING_SERVICE, KEYRING_KEY, secret)
         except Exception as e:
-            logger.warning(f"Failed to store secret in keyring: {e}")
-            self.settings["aria2_secret"] = secret
+            logger.warning("Failed to save secret to keyring: %s", e)
+        self.save()
+
+    def get_queue(self, name: str) -> Optional[Queue]:
+        """Get a queue by name."""
+        for q in self.queues:
+            if q.name == name:
+                return q
+        return None
+
+    def get_queue_index(self, name: str) -> Optional[int]:
+        """Get the index of a queue by name."""
+        for i, q in enumerate(self.queues):
+            if q.name == name:
+                return i
+        return None
