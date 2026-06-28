@@ -1,5 +1,6 @@
 # core/aria2_rpc.py
 import logging
+import ssl
 from typing import Any, Dict, List, Optional
 
 import requests
@@ -8,13 +9,20 @@ logger = logging.getLogger(__name__)
 
 
 class Aria2RPC:
-    """aria2 RPC client with batch call support via system.multicall."""
+    """aria2 RPC client with batch call support via system.multicall and SSL validation."""
 
-    def __init__(self, host: str = "http://localhost", port: int = 6800, secret: str = ""):
+    def __init__(self, host: str = "http://localhost", port: int = 6800, secret: str = "",
+                 verify_ssl: bool = True):
         self.url = f"{host}:{port}/jsonrpc"
         self.secret = secret
         self._id = 0
         self.on_error = None
+        self.verify_ssl = verify_ssl
+        self._session = requests.Session()
+        if not verify_ssl:
+            self._session.verify = False
+            import urllib3
+            urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
     def _call(self, method: str, params: Optional[List] = None) -> Optional[Any]:
         """Execute a single RPC call."""
@@ -33,7 +41,7 @@ class Aria2RPC:
         }
 
         try:
-            r = requests.post(self.url, json=payload, timeout=5)
+            r = self._session.post(self.url, json=payload, timeout=15)
             result = r.json()
             if "error" in result:
                 err = result["error"]
@@ -96,7 +104,7 @@ class Aria2RPC:
         }
 
         try:
-            r = requests.post(self.url, json=payload, timeout=5)
+            r = self._session.post(self.url, json=payload, timeout=15)
             result = r.json()
             if "error" in result:
                 err = result["error"]
@@ -108,16 +116,17 @@ class Aria2RPC:
 
             raw_results = result.get("result")
             if not isinstance(raw_results, list):
+                logger.warning(f"Unexpected multicall response type: {type(raw_results)}")
                 return [None] * len(calls)
 
             processed = []
-            for item in raw_results[:len(calls)]:
+            for idx, item in enumerate(raw_results[:len(calls)]):
                 if isinstance(item, dict):
                     if "result" in item:
                         processed.append(item["result"])
                     elif "error" in item:
                         err = item["error"]
-                        msg = f"subcall error: {err.get('message', err)}"
+                        msg = f"subcall error at index {idx}: {err.get('message', err)}"
                         logger.warning(msg)
                         processed.append(None)
                     else:
