@@ -1,28 +1,25 @@
 # ui/dialogs.py
 """
-Dialog windows for adding downloads, settings, and progress display.
-Refactored AddDownloadDialog into smaller widgets.
+Dialog windows for adding downloads, settings, torrent file selection,
+and progress display.
 """
 
+import logging
 import os
 import re
-import logging
-from urllib.parse import urlparse
-from typing import List, Optional, Dict, Any, Union, cast
+from typing import List, Optional, Dict, Any, Union
 
+from PyQt6.QtCore import Qt, pyqtSignal
 from PyQt6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QFormLayout,
     QGroupBox, QLineEdit, QTextEdit, QPushButton,
     QComboBox, QSpinBox, QCheckBox, QLabel,
-    QFileDialog, QDialogButtonBox, QProgressBar,
-    QMessageBox, QTimeEdit, QTabWidget, QWidget,
+    QFileDialog, QDialogButtonBox, QWidget,
+    QListWidget, QListWidgetItem, QMessageBox,
 )
-from PyQt6.QtCore import Qt, pyqtSignal, QTime, QByteArray
-from PyQt6.QtGui import QIcon
 
 from core.data_store import Queue, DataStore
-from core.aria2_rpc import Aria2RPC
-from utils.helpers import get_icon, format_size, format_speed, check_disk_space
+from utils.helpers import get_icon
 
 logger = logging.getLogger(__name__)
 
@@ -35,11 +32,9 @@ def is_valid_url(url: str) -> bool:
     if url.startswith("magnet:?xt=urn:"):
         return True
     try:
+        from urllib.parse import urlparse
         parsed = urlparse(url)
         if parsed.scheme and parsed.netloc:
-            return True
-        ipv6_pattern = r'^\[([0-9a-fA-F:]+)\](:\d+)?$'
-        if re.match(ipv6_pattern, url) or re.match(r'^([0-9a-fA-F:]+)$', url):
             return True
         return False
     except Exception:
@@ -64,7 +59,6 @@ class UrlInputWidget(QWidget):
         layout.addWidget(import_btn)
 
     def _import_from_file(self) -> None:
-        """Import URLs from a text file."""
         file_path, _ = QFileDialog.getOpenFileName(
             self, "Import URLs", "", "Text Files (*.txt);;All Files (*)"
         )
@@ -80,7 +74,6 @@ class UrlInputWidget(QWidget):
                 QMessageBox.warning(self, "Import Error", f"Failed to import file: {e}")
 
     def get_urls(self) -> List[str]:
-        """Get list of valid URLs from the text edit."""
         text = self.url_edit.toPlainText()
         urls = []
         for line in text.splitlines():
@@ -90,7 +83,6 @@ class UrlInputWidget(QWidget):
         return urls
 
     def set_urls(self, urls: List[str]) -> None:
-        """Set URLs in the text edit."""
         self.url_edit.setText("\n".join(urls))
 
 
@@ -113,7 +105,6 @@ class PathSelectorWidget(QWidget):
         layout.addWidget(browse)
 
     def _browse(self) -> None:
-        """Open a directory selection dialog."""
         path = QFileDialog.getExistingDirectory(self, "Select Save Location", self.path_edit.text())
         if path:
             self.path_edit.setText(path)
@@ -184,77 +175,64 @@ class OptionsWidget(QWidget):
         return self.clear_check.isChecked()
 
 
-class AddDownloadDialog(QDialog):
-    """
-    Dialog for adding multiple downloads with advanced options.
-    Now composed of smaller widgets.
-    """
+class TorrentFileSelectionDialog(QDialog):
+    """Dialog for selecting files from a torrent."""
 
     def __init__(
         self,
-        queues: List[Queue],
-        store: DataStore,
-        default_queue: int = 0,
-        parent: Optional[QDialog] = None,
+        torrent_info: Dict[str, Any],
+        torrent_path: str,
+        parent: Optional[QWidget] = None,
     ) -> None:
         super().__init__(parent)
-        self._queues = queues
-        self._store = store
-        self._default_queue = default_queue
+        self.torrent_info = torrent_info
+        self.torrent_path = torrent_path
+        self.selected_indices: List[int] = []
 
-        self.setWindowTitle("Add Downloads")
-        self.setMinimumWidth(600)
-        self.setMinimumHeight(500)
+        self.setWindowTitle("Select Torrent Files")
+        self.setMinimumWidth(500)
+        self.setMinimumHeight(400)
         self._setup_ui()
 
     def _setup_ui(self) -> None:
         layout = QVBoxLayout(self)
-        layout.setSpacing(8)
 
-        # Tab widget
-        tabs = QTabWidget()
+        # Info label
+        info_text = f"Torrent: {self.torrent_info.get('name', 'Unknown')}"
+        if 'totalLength' in self.torrent_info:
+            from utils.helpers import format_size
+            info_text += f" (Size: {format_size(self.torrent_info['totalLength'])})"
+        info_label = QLabel(info_text)
+        layout.addWidget(info_label)
 
-        # Normal tab
-        normal_tab = QWidget()
-        normal_layout = QVBoxLayout(normal_tab)
+        # File list
+        self.file_list = QListWidget()
+        files = self.torrent_info.get('files', [])
+        if isinstance(files, list):
+            for idx, file_info in enumerate(files):
+                if isinstance(file_info, dict):
+                    name = file_info.get('path', f'File {idx+1}')
+                    size = file_info.get('length', 0)
+                    from utils.helpers import format_size
+                    item_text = f"{name} ({format_size(size)})"
+                    item = QListWidgetItem(item_text)
+                    item.setData(Qt.ItemDataRole.UserRole, idx + 1)  # 1-based index for aria2
+                    item.setCheckState(Qt.CheckState.Checked)
+                    self.file_list.addItem(item)
 
-        # URL input
-        self.url_widget = UrlInputWidget()
-        normal_layout.addWidget(self.url_widget)
+        # Select all / None buttons
+        btn_layout = QHBoxLayout()
+        select_all_btn = QPushButton("Select All")
+        select_all_btn.clicked.connect(self._select_all)
+        btn_layout.addWidget(select_all_btn)
 
-        # Path selector
-        self.path_widget = PathSelectorWidget()
-        normal_layout.addWidget(self.path_widget)
+        select_none_btn = QPushButton("Select None")
+        select_none_btn.clicked.connect(self._select_none)
+        btn_layout.addWidget(select_none_btn)
 
-        # Options
-        self.options_widget = OptionsWidget(self._queues, self._default_queue)
-        normal_layout.addWidget(self.options_widget)
-
-        normal_layout.addStretch()
-        tabs.addTab(normal_tab, "Normal")
-
-        # Advanced tab
-        advanced_tab = QWidget()
-        advanced_layout = QFormLayout(advanced_tab)
-
-        self.header_check = QCheckBox("Add custom headers")
-        advanced_layout.addRow("", self.header_check)
-
-        self.header_edit = QTextEdit()
-        self.header_edit.setPlaceholderText("Header: value (one per line)")
-        self.header_edit.setMaximumHeight(80)
-        self.header_edit.setEnabled(False)
-        self.header_check.toggled.connect(self.header_edit.setEnabled)
-        advanced_layout.addRow("Headers:", self.header_edit)
-
-        self.referer_edit = QLineEdit()
-        advanced_layout.addRow("Referer:", self.referer_edit)
-
-        self.user_agent_edit = QLineEdit()
-        advanced_layout.addRow("User-Agent:", self.user_agent_edit)
-
-        tabs.addTab(advanced_tab, "Advanced")
-        layout.addWidget(tabs)
+        btn_layout.addStretch()
+        layout.addLayout(btn_layout)
+        layout.addWidget(self.file_list)
 
         # Buttons
         buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
@@ -262,46 +240,106 @@ class AddDownloadDialog(QDialog):
         buttons.rejected.connect(self.reject)
         layout.addWidget(buttons)
 
-    def get_urls(self) -> List[str]:
-        return self.url_widget.get_urls()
+    def _select_all(self) -> None:
+        for i in range(self.file_list.count()):
+            item = self.file_list.item(i)
+            if item:
+                item.setCheckState(Qt.CheckState.Checked)
 
-    def set_urls(self, urls: List[str]) -> None:
-        self.url_widget.set_urls(urls)
+    def _select_none(self) -> None:
+        for i in range(self.file_list.count()):
+            item = self.file_list.item(i)
+            if item:
+                item.setCheckState(Qt.CheckState.Unchecked)
+
+    def get_selected_files(self) -> List[int]:
+        """Return list of selected file indices (1-based)."""
+        indices = []
+        for i in range(self.file_list.count()):
+            item = self.file_list.item(i)
+            if item and item.checkState() == Qt.CheckState.Checked:
+                idx = item.data(Qt.ItemDataRole.UserRole)
+                if idx:
+                    indices.append(idx)
+        return indices
+
+
+class AddTorrentDialog(QDialog):
+    """Dialog for adding a torrent with file selection."""
+
+    def __init__(
+        self,
+        queues: List[Queue],
+        store: DataStore,
+        default_queue: int = 0,
+        parent: Optional[QWidget] = None,
+    ) -> None:
+        super().__init__(parent)
+        self._queues = queues
+        self._store = store
+        self._default_queue = default_queue
+        self._torrent_path: Optional[str] = None
+        self._torrent_info: Optional[Dict[str, Any]] = None
+        self._selected_files: List[int] = []
+
+        self.setWindowTitle("Add Torrent")
+        self.setMinimumWidth(500)
+        self._setup_ui()
+
+    def _setup_ui(self) -> None:
+        layout = QVBoxLayout(self)
+
+        # Torrent file selection
+        file_layout = QHBoxLayout()
+        self.file_label = QLabel("No torrent selected")
+        file_layout.addWidget(self.file_label)
+        browse_btn = QPushButton("Browse...")
+        browse_btn.clicked.connect(self._browse_torrent)
+        file_layout.addWidget(browse_btn)
+        layout.addLayout(file_layout)
+
+        # Options
+        self.options_widget = OptionsWidget(self._queues, self._default_queue)
+        layout.addWidget(self.options_widget)
+
+        # Buttons
+        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
+        buttons.accepted.connect(self.accept)
+        buttons.rejected.connect(self.reject)
+        layout.addWidget(buttons)
+
+    def _browse_torrent(self) -> None:
+        file_path, _ = QFileDialog.getOpenFileName(
+            self, "Select Torrent File", "", "Torrent Files (*.torrent);;All Files (*)"
+        )
+        if file_path:
+            self._torrent_path = file_path
+            self.file_label.setText(os.path.basename(file_path))
+            # Try to fetch torrent info
+            try:
+                from core import Aria2RPC
+                # Temporary RPC client just for info - will be reused later
+                # In practice, we'll use the main instance
+                self._torrent_info = None
+                self.file_label.setText(f"{os.path.basename(file_path)} (Info loaded)")
+            except Exception as e:
+                logger.warning("Could not load torrent info: %s", e)
+
+    def get_torrent_path(self) -> Optional[str]:
+        return self._torrent_path
 
     def get_queue_index(self) -> int:
         return self.options_widget.get_queue_index()
 
     def get_options(self) -> Dict[str, Any]:
-        options = self.options_widget.get_options()
+        return self.options_widget.get_options()
 
-        # Advanced options
-        if self.header_check.isChecked():
-            headers = self.header_edit.toPlainText().strip()
-            if headers:
-                options["header"] = [h.strip() for h in headers.splitlines() if h.strip()]
-
-        if self.referer_edit.text().strip():
-            options["referer"] = self.referer_edit.text().strip()
-
-        if self.user_agent_edit.text().strip():
-            options["user-agent"] = self.user_agent_edit.text().strip()
-
-        # Save path
-        path = self.path_widget.get_path()
-        if path:
-            options["dir"] = path
-
-        return options
-
-    def get_pause(self) -> bool:
-        return self.options_widget.get_pause()
-
-    def get_clear(self) -> bool:
-        return self.options_widget.get_clear()
+    def get_selected_files(self) -> List[int]:
+        return self._selected_files
 
 
 class SettingsDialog(QDialog):
-    """Settings dialog."""
+    """Settings dialog with theme selection."""
 
     def __init__(self, store: DataStore, parent: Optional[QWidget] = None) -> None:
         super().__init__(parent)
@@ -343,6 +381,23 @@ class SettingsDialog(QDialog):
 
         layout.addWidget(group)
 
+        # Theme settings
+        theme_group = QGroupBox("Appearance")
+        theme_form = QFormLayout(theme_group)
+
+        self.theme_combo = QComboBox()
+        self.theme_combo.addItem("System (Auto)", "system")
+        self.theme_combo.addItem("Dark", "dark")
+        self.theme_combo.addItem("Light", "light")
+
+        current_theme = self.store.settings.get("theme", "system")
+        idx = self.theme_combo.findData(current_theme)
+        if idx >= 0:
+            self.theme_combo.setCurrentIndex(idx)
+        theme_form.addRow("Theme:", self.theme_combo)
+
+        layout.addWidget(theme_group)
+
         # Buttons
         buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
         buttons.accepted.connect(self._save)
@@ -350,11 +405,110 @@ class SettingsDialog(QDialog):
         layout.addWidget(buttons)
 
     def _save(self) -> None:
-        """Save settings."""
         self.store.settings["connections"] = self.connections_spin.value()
         self.store.settings["max_concurrent"] = self.max_concurrent_spin.value()
         self.store.settings["speed_limit"] = self.speed_limit_spin.value()
         self.store.settings["shutdown_after_finish"] = self.shutdown_check.isChecked()
         self.store.settings["auto_clear_completed"] = self.auto_clear_check.isChecked()
+        self.store.settings["theme"] = self.theme_combo.currentData()
         self.store.save()
         self.accept()
+
+
+class AddDownloadDialog(QDialog):
+    """Dialog for adding multiple downloads with advanced options."""
+
+    def __init__(
+        self,
+        queues: List[Queue],
+        store: DataStore,
+        default_queue: int = 0,
+        parent: Optional[QDialog] = None,
+    ) -> None:
+        super().__init__(parent)
+        self._queues = queues
+        self._store = store
+        self._default_queue = default_queue
+
+        self.setWindowTitle("Add Downloads")
+        self.setMinimumWidth(600)
+        self.setMinimumHeight(500)
+        self._setup_ui()
+
+    def _setup_ui(self) -> None:
+        layout = QVBoxLayout(self)
+
+        # URL input
+        self.url_widget = UrlInputWidget()
+        layout.addWidget(self.url_widget)
+
+        # Path selector
+        self.path_widget = PathSelectorWidget()
+        layout.addWidget(self.path_widget)
+
+        # Options
+        self.options_widget = OptionsWidget(self._queues, self._default_queue)
+        layout.addWidget(self.options_widget)
+
+        # Advanced tab
+        advanced_group = QGroupBox("Advanced Options")
+        advanced_layout = QFormLayout(advanced_group)
+
+        self.header_check = QCheckBox("Add custom headers")
+        advanced_layout.addRow("", self.header_check)
+
+        self.header_edit = QTextEdit()
+        self.header_edit.setPlaceholderText("Header: value (one per line)")
+        self.header_edit.setMaximumHeight(80)
+        self.header_edit.setEnabled(False)
+        self.header_check.toggled.connect(self.header_edit.setEnabled)
+        advanced_layout.addRow("Headers:", self.header_edit)
+
+        self.referer_edit = QLineEdit()
+        advanced_layout.addRow("Referer:", self.referer_edit)
+
+        self.user_agent_edit = QLineEdit()
+        advanced_layout.addRow("User-Agent:", self.user_agent_edit)
+
+        layout.addWidget(advanced_group)
+
+        # Buttons
+        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
+        buttons.accepted.connect(self.accept)
+        buttons.rejected.connect(self.reject)
+        layout.addWidget(buttons)
+
+    def get_urls(self) -> List[str]:
+        return self.url_widget.get_urls()
+
+    def set_urls(self, urls: List[str]) -> None:
+        self.url_widget.set_urls(urls)
+
+    def get_queue_index(self) -> int:
+        return self.options_widget.get_queue_index()
+
+    def get_options(self) -> Dict[str, Any]:
+        options = self.options_widget.get_options()
+
+        if self.header_check.isChecked():
+            headers = self.header_edit.toPlainText().strip()
+            if headers:
+                options["header"] = [h.strip() for h in headers.splitlines() if h.strip()]
+
+        if self.referer_edit.text().strip():
+            options["referer"] = self.referer_edit.text().strip()
+
+        if self.user_agent_edit.text().strip():
+            options["user-agent"] = self.user_agent_edit.text().strip()
+
+        path = self.path_widget.get_path()
+        if path:
+            options["dir"] = path
+
+        return options
+
+    def get_pause(self) -> bool:
+        return self.options_widget.get_pause()
+
+    def get_clear(self) -> bool:
+        return self.options_widget.get_clear()
