@@ -45,3 +45,5 @@ FelfelDM-extension.zip
 data.json
 *.secret
 *.key
+__pycache__/
+*.pyc
