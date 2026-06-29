@@ -2,16 +2,18 @@
 # ui/dialogs.py
 # =============================================================================
 import os
+import re
 from pathlib import Path
-from typing import Optional
+from typing import Optional, Dict, Any
+from urllib.parse import urlparse
 
 from PyQt6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QLabel, QLineEdit, QPushButton,
-    QFileDialog, QMessageBox
+    QFileDialog, QMessageBox, QWidget
 )
 from PyQt6.QtCore import Qt
 
-from utils.helpers import is_valid_url
+import validators
 
 
 def validate_download_path(path: str) -> Optional[str]:
@@ -20,15 +22,42 @@ def validate_download_path(path: str) -> Optional[str]:
         return None
     expanded = os.path.expanduser(path.strip())
     abs_path = os.path.abspath(expanded)
-    # Define allowed base (user's Downloads or home)
     allowed_base = os.path.expanduser("~/Downloads")
-    # If the path does not start with allowed_base, warn but still allow? Better to restrict.
-    # For safety, we restrict to inside Downloads.
     if not abs_path.startswith(allowed_base):
-        # Optionally, we can create a subdirectory inside Downloads
-        # Let's just reject for security
         return None
     return abs_path
+
+
+def is_valid_url(url: str) -> bool:
+    """
+    Validate URL or Magnet link.
+    For HTTP/HTTPS: use validators.url.
+    For Magnet: use comprehensive regex.
+    """
+    if not url:
+        return False
+    url = url.strip()
+
+    # HTTP/HTTPS
+    if url.startswith(("http://", "https://")):
+        return validators.url(url)
+
+    # Magnet: comprehensive check
+    if url.startswith("magnet:?xt=urn:"):
+        # Basic structure: magnet:?xt=urn:btih:<hash>&dn=<name>&tr=<tracker>
+        # We'll check for at least xt parameter
+        pattern = re.compile(
+            r'^magnet:\?xt=urn:[a-zA-Z0-9]+:[a-zA-Z0-9]+'
+            r'(?:&[a-zA-Z0-9_]+=[^&]*)*$'
+        )
+        if pattern.match(url):
+            return True
+        # Allow simple magnet with just xt
+        if re.match(r'^magnet:\?xt=urn:[a-zA-Z0-9]+:[a-zA-Z0-9]+$', url):
+            return True
+        return False
+
+    return False
 
 
 class AddDownloadDialog(QDialog):
@@ -67,6 +96,8 @@ class AddDownloadDialog(QDialog):
         btn_layout.addWidget(self.cancel_btn)
         layout.addLayout(btn_layout)
 
+        self._info = None
+
     def browse_path(self):
         dir_path = QFileDialog.getExistingDirectory(self, "Select Download Folder")
         if dir_path:
@@ -76,7 +107,7 @@ class AddDownloadDialog(QDialog):
             else:
                 QMessageBox.warning(self, "Invalid Path", "Please select a folder inside Downloads.")
 
-    def get_download_info(self):
+    def get_download_info(self) -> Optional[Dict[str, str]]:
         url = self.url_edit.text().strip()
         path = self.path_edit.text().strip()
         validated_path = validate_download_path(path)
@@ -91,18 +122,8 @@ class AddDownloadDialog(QDialog):
     def accept(self):
         info = self.get_download_info()
         if info:
-            # Store info for retrieval by main window
             self._info = info
             super().accept()
-        # else stay open
 
-    def get_info(self):
-        return getattr(self, '_info', None)
-
-
-class PathSelectorWidget(QWidget):
-    # A simplified version; we'll use the above dialog for demo.
-    # Actually, we need to implement a widget that validates.
-    # The analysis mentions lines 40-60, maybe it's a separate class.
-    # We'll provide a general solution.
-    pass
+    def get_info(self) -> Optional[Dict[str, str]]:
+        return self._info
