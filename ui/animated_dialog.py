@@ -3,7 +3,7 @@
 Animated dialog base class with fade-in/fade-out animations.
 """
 
-from PyQt6.QtCore import QPropertyAnimation, QEasingCurve, Qt, pyqtSignal
+from PyQt6.QtCore import QPropertyAnimation, QEasingCurve, Qt
 from PyQt6.QtWidgets import QDialog, QWidget, QVBoxLayout, QFrame
 
 
@@ -23,6 +23,7 @@ class AnimatedDialog(QDialog):
         self._duration = duration
         self._fade_animation: QPropertyAnimation = None
         self._slide_animation: QPropertyAnimation = None
+        self._content_widget: QWidget = None
 
         # Set up the dialog
         self.setWindowFlags(self.windowFlags() | Qt.WindowType.FramelessWindowHint)
@@ -58,14 +59,24 @@ class AnimatedDialog(QDialog):
         self._fade_animation.setDuration(self._duration)
         self._fade_animation.setEasingCurve(QEasingCurve.Type.OutCubic)
 
-        # Slide animation (scale)
+        # Slide animation (geometry)
         self._slide_animation = QPropertyAnimation(self._container, b"geometry")
         self._slide_animation.setDuration(self._duration)
         self._slide_animation.setEasingCurve(QEasingCurve.Type.OutBack)
 
     def set_content_widget(self, widget: QWidget) -> None:
-        """Set the main content widget inside the dialog."""
+        """
+        Set the main content widget inside the dialog.
+        Connects the widget's accepted/rejected signals to the dialog.
+        """
+        self._content_widget = widget
         self._container_layout.addWidget(widget)
+
+        # Connect signals from the content widget to this dialog
+        if hasattr(widget, 'accepted'):
+            widget.accepted.connect(self.accept)
+        if hasattr(widget, 'rejected'):
+            widget.rejected.connect(self.reject)
 
     def content_layout(self) -> QVBoxLayout:
         """Get the content layout for adding widgets."""
@@ -99,15 +110,58 @@ class AnimatedDialog(QDialog):
 
     def closeEvent(self, event) -> None:
         """Animate close with fade-out."""
+        # If the dialog is already closed, just finish
+        if not self.isVisible():
+            super().closeEvent(event)
+            return
+
+        # Start fade-out animation
         self._fade_animation.setStartValue(1.0)
         self._fade_animation.setEndValue(0.0)
         self._fade_animation.finished.connect(self._on_fade_out_finished)
         self._fade_animation.start()
 
+        # Don't accept the event yet, wait for animation to finish
+        event.ignore()
+
     def _on_fade_out_finished(self) -> None:
         """Handle fade-out completion."""
         self._fade_animation.finished.disconnect()
+        # Call the base class close event to actually close the dialog
         super().closeEvent(None)
+
+    def accept(self) -> None:
+        """Accept the dialog with animation."""
+        self.done(QDialog.DialogCode.Accepted)
+
+    def reject(self) -> None:
+        """Reject the dialog with animation."""
+        self.done(QDialog.DialogCode.Rejected)
+
+    def done(self, result_code: int) -> None:
+        """
+        Override done to trigger close animation before closing.
+        """
+        # Store the result code
+        self._result_code = result_code
+
+        # If already closed or not visible, just call super
+        if not self.isVisible():
+            super().done(result_code)
+            return
+
+        # Start fade-out animation and then close
+        self._fade_animation.setStartValue(1.0)
+        self._fade_animation.setEndValue(0.0)
+        self._fade_animation.finished.connect(
+            lambda: self._finish_done(self._result_code)
+        )
+        self._fade_animation.start()
+
+    def _finish_done(self, result_code: int) -> None:
+        """Finish the done operation after animation."""
+        self._fade_animation.finished.disconnect()
+        super().done(result_code)
 
     def set_animation_duration(self, duration: int) -> None:
         """Set the animation duration in milliseconds."""
@@ -116,6 +170,7 @@ class AnimatedDialog(QDialog):
         self._slide_animation.setDuration(duration)
 
     def exec(self) -> int:
-        """Show the dialog and return the result code."""
-        self.show()
+        """
+        Execute the dialog modally and return the result code.
+        """
         return super().exec()
