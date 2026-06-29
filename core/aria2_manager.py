@@ -8,7 +8,6 @@ import datetime
 import logging
 import os
 import shutil
-import socket
 import subprocess
 import tempfile
 from pathlib import Path
