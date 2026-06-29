@@ -1,7 +1,7 @@
 # ui/main_window.py
 """
 Main application window - now acts as UI coordinator.
-Includes modern UI, search, torrent support, theme switching, and system tray.
+Uses ServiceContainer for dependency injection.
 """
 
 import logging
@@ -16,9 +16,17 @@ from PyQt6.QtWidgets import (
     QMessageBox, QLineEdit, QFileDialog, QApplication, QStatusBar,
 )
 
-from core import Aria2RPC, BackendWorker, DataStore, LocalServer
+from core.service_container import ServiceContainer
+from core import (
+    Aria2RPC,
+    BackendWorker,
+    AsyncWorker,
+    DataStore,
+    LocalServer,
+    HistoryManager,
+    Aria2Manager,
+)
 from core.data_store import Queue
-from core.aria2_manager import Aria2Manager
 from ui.delegates import ProgressDelegate
 from ui.dialogs import AddDownloadDialog, SettingsDialog, AddTorrentDialog, TorrentFileSelectionDialog
 from ui.table_model import DownloadTableModel
@@ -86,10 +94,11 @@ class DownloadController(QObject):
     download_paused = pyqtSignal(str)
     download_resumed = pyqtSignal(str)
 
-    def __init__(self, aria2: Aria2RPC, store: DataStore) -> None:
+    def __init__(self, aria2: Aria2RPC, store: DataStore, history_mgr: HistoryManager) -> None:
         super().__init__()
         self.aria2 = aria2
         self.store = store
+        self.history_mgr = history_mgr
         self._cleared_gids = set()
 
     def add_urls(self, urls: List[str], queue_idx: int, options: dict) -> List[str]:
@@ -261,29 +270,39 @@ class AsyncModeIndicator(QLabel):
 class MainWindow(QMainWindow):
     """Main application window - UI coordinator with modern design."""
 
-    def __init__(self) -> None:
+    def __init__(self, container: ServiceContainer) -> None:
+        """
+        Initialize main window with services from the container.
+
+        Args:
+            container: ServiceContainer instance with all core services
+        """
         super().__init__()
+
+        self._container = container
 
         self.setWindowTitle("FelfelDM")
         self.setMinimumSize(1050, 680)
 
-        # Core components
-        self.store = DataStore()
-        self._ensure_default_queue()
+        # Resolve core services from container
+        self.store: DataStore = container.resolve('data_store')
+        self.history_manager: HistoryManager = container.resolve('history_manager')
+        self.aria2_manager: Aria2Manager = container.resolve('aria2_manager')
+        self.aria2: Aria2RPC = container.resolve('aria2_rpc')
+        self.worker = container.resolve('worker')  # BackendWorker or AsyncWorker
 
-        self.aria2_manager = Aria2Manager()
-        self.aria2_manager.start()
-
-        self.aria2 = Aria2RPC(
-            self.store.settings["aria2_host"],
-            self.store.settings["aria2_port"],
-            self.store.settings["aria2_secret"],
-            verify_ssl=True,
-        )
+        # Set error handler for aria2
         self.aria2.on_error = self._on_aria2_error
 
+        # Ensure default queue exists
+        self._ensure_default_queue()
+
+        # Start aria2 if not already started
+        if not self.aria2_manager.is_running():
+            self.aria2_manager.start()
+
         # Controllers
-        self.download_controller = DownloadController(self.aria2, self.store)
+        self.download_controller = DownloadController(self.aria2, self.store, self.history_manager)
         self.queue_controller = QueueController(self.store)
         self.tray_controller = TrayController(self)
 
@@ -298,10 +317,8 @@ class MainWindow(QMainWindow):
         # Build UI
         self._build_ui()
 
-        # Backend worker
+        # Setup worker and local server
         self._setup_worker()
-
-        # Local server
         self._setup_local_server()
 
         # Timer for UI updates
@@ -325,12 +342,19 @@ class MainWindow(QMainWindow):
             self.store.save()
 
     def _setup_worker(self) -> None:
-        self.worker = BackendWorker(self.aria2, self.store)
-        self.worker.stats_updated.connect(self._on_stats_updated)
-        self.worker.connection_changed.connect(self._on_connection_changed)
-        self.worker.start()
+        """Connect worker signals."""
+        if hasattr(self.worker, 'stats_updated'):
+            self.worker.stats_updated.connect(self._on_stats_updated)
+        if hasattr(self.worker, 'connection_changed'):
+            self.worker.connection_changed.connect(self._on_connection_changed)
+        if hasattr(self.worker, 'error_occurred'):
+            self.worker.error_occurred.connect(self._on_worker_error)
+
+        if hasattr(self.worker, 'start'):
+            self.worker.start()
 
     def _setup_local_server(self) -> None:
+        """Set up the local HTTP server for browser extension."""
         self.local_server = LocalServer(self.download_controller)
         self.local_server.urls_received.connect(self._on_urls_received)
         self.local_server.start()
@@ -432,7 +456,6 @@ class MainWindow(QMainWindow):
     def _create_async_mode_indicator(self) -> AsyncModeIndicator:
         """Create and return the async/sync mode indicator."""
         self.async_mode_indicator = AsyncModeIndicator()
-        # Check if async mode is enabled in settings
         async_mode = self.store.settings.get("async_mode", False)
         self.async_mode_indicator.set_mode(async_mode)
         return self.async_mode_indicator
@@ -650,6 +673,10 @@ class MainWindow(QMainWindow):
             self.status_label.setText("Disconnected from aria2")
         self.connection_indicator.set_connected(connected)
 
+    def _on_worker_error(self, error_msg: str) -> None:
+        logger.error("Worker error: %s", error_msg)
+        self.status_label.setText(f"Worker Error: {error_msg}")
+
     def _on_download_added(self, gid: str) -> None:
         self.table_model.refresh()
         self.tray_controller.show_message(
@@ -709,7 +736,7 @@ class MainWindow(QMainWindow):
         )
 
     def _quit_app(self) -> None:
-        if hasattr(self, 'worker'):
+        if hasattr(self, 'worker') and hasattr(self.worker, 'stop'):
             self.worker.stop()
         if hasattr(self, 'local_server'):
             self.local_server.stop()
