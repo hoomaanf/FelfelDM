@@ -9,9 +9,9 @@ from typing import Optional
 from PyQt6.QtCore import Qt, QSortFilterProxyModel
 from PyQt6.QtGui import QStandardItemModel, QStandardItem
 from PyQt6.QtWidgets import (
-    QDialog, QVBoxLayout, QHBoxLayout, QPushButton,
-    QTableView, QHeaderView, QLineEdit, QLabel,
-    QMessageBox, QAbstractItemView,
+    QDialog, QVBoxLayout, QHBoxLayout,
+    QPushButton, QTableView, QHeaderView, QLineEdit,
+    QLabel, QMessageBox, QAbstractItemView, QWidget,
 )
 
 from core.history import HistoryManager, DownloadHistory
@@ -54,6 +54,7 @@ class HistoryDialog(QDialog):
 
         self.model = QStandardItemModel()
         self.model.setHorizontalHeaderLabels(["Name", "Size", "Status", "Start", "End", "Save Path"])
+
         self.proxy_model = QSortFilterProxyModel()
         self.proxy_model.setSourceModel(self.model)
         self.table.setModel(self.proxy_model)
@@ -79,22 +80,43 @@ class HistoryDialog(QDialog):
         layout.addLayout(btn_layout)
 
     def _load_history(self) -> None:
-        """Load history into the table."""
+        """Load history into the table with tooltips."""
         self.model.removeRows(0, self.model.rowCount())
 
         entries = self.history_manager.get_all()
         for entry in entries:
-            row = [
-                QStandardItem(entry.name),
-                QStandardItem(format_size(entry.size)),
-                QStandardItem(entry.status),
-                QStandardItem(entry.start_time),
-                QStandardItem(entry.end_time),
-                QStandardItem(entry.save_path),
-            ]
-            # Store GID as user data in first column
-            row[0].setData(entry.gid, Qt.ItemDataRole.UserRole)
-            self.model.appendRow(row)
+            # Build tooltip with full details
+            tooltip = (
+                f"Name: {entry.name}\n"
+                f"URL: {entry.url}\n"
+                f"Size: {format_size(entry.size)}\n"
+                f"Status: {entry.status}\n"
+                f"Start: {entry.start_time}\n"
+                f"End: {entry.end_time}\n"
+                f"Save Path: {entry.save_path}\n"
+                f"GID: {entry.gid}"
+            )
+
+            name_item = QStandardItem(entry.name)
+            name_item.setToolTip(tooltip)
+            name_item.setData(entry.gid, Qt.ItemDataRole.UserRole)
+
+            size_item = QStandardItem(format_size(entry.size))
+            size_item.setToolTip(tooltip)
+
+            status_item = QStandardItem(entry.status)
+            status_item.setToolTip(tooltip)
+
+            start_item = QStandardItem(entry.start_time)
+            start_item.setToolTip(tooltip)
+
+            end_item = QStandardItem(entry.end_time)
+            end_item.setToolTip(tooltip)
+
+            path_item = QStandardItem(entry.save_path)
+            path_item.setToolTip(tooltip)
+
+            self.model.appendRow([name_item, size_item, status_item, start_item, end_item, path_item])
 
         # Set column widths
         for i in range(self.model.columnCount()):
@@ -102,14 +124,9 @@ class HistoryDialog(QDialog):
 
     def _on_search_changed(self, text: str) -> None:
         """Filter history based on search text."""
-        # Implement search via proxy model
-        # For now, just reload with filter
-        self._load_history()
-        # Actually implement filter via proxy
         if text:
-            # Use proxy model filter
             self.proxy_model.setFilterFixedString(text)
-            self.proxy_model.setFilterKeyColumn(0)  # Name
+            self.proxy_model.setFilterKeyColumn(0)  # Search by Name
         else:
             self.proxy_model.setFilterFixedString("")
 
