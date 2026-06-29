@@ -1,85 +1,123 @@
+# =============================================================================
 # core/local_server.py
-"""
-Local HTTP server for browser extension integration with token authentication.
-"""
-
+# =============================================================================
 import json
-import logging
 import secrets
-import threading
+import logging
+from pathlib import Path
+from typing import Optional, Dict, Any
 from http.server import HTTPServer, BaseHTTPRequestHandler
-from typing import Optional, Protocol, List, Any, runtime_checkable
-
-from PyQt6.QtCore import QObject, pyqtSignal
+import threading
+import urllib.parse
 
 logger = logging.getLogger(__name__)
 
-
-@runtime_checkable
-class DownloadControllerProtocol(Protocol):
-    """
-    Protocol defining the interface required by LocalServer.
-    Any download controller must implement this interface.
-    """
-
-    def add_urls(self, urls: List[str], queue_idx: int, options: dict) -> List[str]:
-        """
-        Add URLs to the download queue.
-
-        Args:
-            urls: List of URLs to download
-            queue_idx: Index of the queue to add to
-            options: Download options
-
-        Returns:
-            List of GIDs for the added downloads
-        """
-        ...
+# Token storage
+TOKEN_DIR = Path.home() / ".felfeldm"
+TOKEN_FILE = TOKEN_DIR / "token.json"
 
 
-class LocalServer(QObject):
-    """
-    Local HTTP server that receives URLs from the browser extension.
-    Uses token-based authentication with constant-time comparison.
-    """
+class TokenManager:
+    """Manage persistent token for browser extension communication."""
 
-    urls_received = pyqtSignal(list)
+    @staticmethod
+    def get_or_create_token() -> str:
+        """Retrieve existing token or create a new one and persist it."""
+        try:
+            TOKEN_DIR.mkdir(parents=True, exist_ok=True)
+            if TOKEN_FILE.exists():
+                with open(TOKEN_FILE, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                    token = data.get("token")
+                    if token and isinstance(token, str) and len(token) >= 16:
+                        return token
+        except Exception as e:
+            logger.warning("Failed to read token: %s", e)
 
-    def __init__(self, download_controller: DownloadControllerProtocol, port: int = 8080) -> None:
-        """
-        Initialize the local server.
+        # Create new token
+        token = secrets.token_urlsafe(32)
+        try:
+            with open(TOKEN_FILE, "w", encoding="utf-8") as f:
+                json.dump({"token": token}, f, indent=2)
+            # Restrict permissions
+            TOKEN_FILE.chmod(0o600)
+        except Exception as e:
+            logger.error("Failed to save token: %s", e)
+        return token
 
-        Args:
-            download_controller: The download controller instance (must implement
-                                 DownloadControllerProtocol)
-            port: Port to listen on (default: 8080)
-        """
-        super().__init__()
-        self.download_controller = download_controller
+
+class LocalServerHandler(BaseHTTPRequestHandler):
+    """HTTP handler for browser extension communication."""
+
+    token: str = ""  # class variable set by server
+
+    def do_GET(self):
+        """Handle GET requests from browser extension."""
+        parsed = urllib.parse.urlparse(self.path)
+        if parsed.path != "/token":
+            self.send_error(404, "Not found")
+            return
+
+        # Verify token from query parameter
+        query = urllib.parse.parse_qs(parsed.query)
+        provided_token = query.get("token", [None])[0]
+        if provided_token != self.token:
+            self.send_error(401, "Unauthorized")
+            return
+
+        # Respond with RPC info
+        response = {
+            "host": self.server.server_address[0],
+            "port": self.server.server_address[1],
+            "secret": self.token,  # extension uses secret for aria2
+            "protocol": "http"
+        }
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.end_headers()
+        self.wfile.write(json.dumps(response).encode("utf-8"))
+
+    def log_message(self, format, *args):
+        """Suppress verbose logging."""
+        pass
+
+
+class LocalServer:
+    """HTTP server for browser extension integration."""
+
+    def __init__(self, host: str = "127.0.0.1", port: int = 8080):
+        self.host = host
         self.port = port
         self._server: Optional[HTTPServer] = None
         self._thread: Optional[threading.Thread] = None
         self._running = False
-        self._token = secrets.token_urlsafe(32)
+        self.token = TokenManager.get_or_create_token()
 
-    def start(self) -> None:
+    def start(self) -> bool:
         """Start the HTTP server in a background thread."""
         if self._running:
-            return
+            return True
+        try:
+            # Set token as class variable for handler
+            LocalServerHandler.token = self.token
+            self._server = HTTPServer((self.host, self.port), LocalServerHandler)
+            self._running = True
+            self._thread = threading.Thread(target=self._serve, daemon=True)
+            self._thread.start()
+            logger.info("Local server started on %s:%d", self.host, self.port)
+            return True
+        except Exception as e:
+            logger.error("Failed to start local server: %s", e)
+            return False
 
-        self._running = True
-        self._server = HTTPServer(("localhost", self.port), self._create_handler())
-        self._thread = threading.Thread(target=self._run, daemon=True)
-        self._thread.start()
-        logger.info("Local server started on port %d", self.port)
-
-    def _run(self) -> None:
-        """Run the server loop."""
+    def _serve(self) -> None:
+        """Serve requests until stopped."""
         while self._running:
             try:
                 self._server.handle_request()
             except Exception as e:
                 logger.error("Local server error: %s", e)
+                break
 
     def stop(self) -> None:
         """Stop the server."""
@@ -87,82 +125,11 @@ class LocalServer(QObject):
         if self._server:
             self._server.shutdown()
             self._server.server_close()
-        if self._thread:
-            self._thread.join(timeout=1)
+            self._server = None
+        if self._thread and self._thread.is_alive():
+            self._thread.join(timeout=2.0)
         logger.info("Local server stopped")
 
     def get_token(self) -> str:
-        """Get the authentication token for the browser extension."""
-        return self._token
-
-    def _create_handler(self):
-        """Create a request handler class with access to this instance."""
-        handler = self
-
-        class Handler(BaseHTTPRequestHandler):
-            def do_GET(self):
-                self._handle_request()
-
-            def do_POST(self):
-                self._handle_request()
-
-            def do_OPTIONS(self):
-                self._handle_options()
-
-            def _handle_options(self):
-                """Handle CORS preflight requests."""
-                self.send_response(200)
-                self._send_cors_headers()
-                self.end_headers()
-
-            def _send_cors_headers(self):
-                """Send CORS headers."""
-                self.send_header("Access-Control-Allow-Origin", "http://localhost")
-                self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
-                self.send_header("Access-Control-Allow-Headers", "X-Auth-Token, Content-Type")
-                self.send_header("Access-Control-Max-Age", "86400")
-
-            def _handle_request(self):
-                # CORS headers
-                self._send_cors_headers()
-                self.end_headers()
-
-                # Handle OPTIONS preflight
-                if self.command == "OPTIONS":
-                    return
-
-                # Verify token with constant-time comparison
-                token_header = self.headers.get("X-Auth-Token", "")
-                if not token_header:
-                    self.wfile.write(b'{"error": "Missing token"}')
-                    return
-
-                if not secrets.compare_digest(token_header, handler._token):
-                    self.wfile.write(b'{"error": "Invalid token"}')
-                    return
-
-                # Handle GET requests - no token in response
-                if self.command == "GET":
-                    self.wfile.write(b'{"status": "ok"}')
-                    return
-
-                # Handle POST requests
-                if self.command == "POST":
-                    content_length = int(self.headers.get("Content-Length", 0))
-                    body = self.rfile.read(content_length).decode("utf-8")
-                    try:
-                        data = json.loads(body)
-                        urls = data.get("urls", [])
-                        if urls:
-                            handler.urls_received.emit(urls)
-                            self.wfile.write(f'{{"status": "ok", "count": {len(urls)}}}'.encode())
-                        else:
-                            self.wfile.write(b'{"error": "No URLs provided"}')
-                    except json.JSONDecodeError:
-                        self.wfile.write(b'{"error": "Invalid JSON"}')
-
-            def log_message(self, format, *args):
-                # Suppress default logging
-                pass
-
-        return Handler
+        """Return the current token."""
+        return self.token
