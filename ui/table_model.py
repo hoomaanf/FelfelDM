@@ -3,14 +3,13 @@
 # =============================================================================
 from typing import Optional, Dict, Any
 
-from PyQt6.QtCore import QAbstractTableModel, Qt, QModelIndex
+from PyQt6.QtCore import QAbstractTableModel, Qt, QModelIndex, pyqtSignal
 
 from core.worker import BackendWorker
-from core.queue_model import Queue, DownloadStatus
 
 
 class DownloadTableModel(QAbstractTableModel):
-    """Table model for displaying downloads from the worker's cache."""
+    """Table model for displaying downloads with live updates from worker."""
 
     COLUMNS = ["Name", "Size", "Progress", "Speed", "Status", "GID"]
 
@@ -20,25 +19,30 @@ class DownloadTableModel(QAbstractTableModel):
         self._downloads: Dict[str, Dict[str, Any]] = {}  # gid -> download info
         self._gid_list: list = []
 
-        # Connect to worker's stats update to refresh
-        self._worker.stats_updated.connect(self.on_stats_updated)
+        # Connect to worker's stats update
+        self._worker.stats_updated.connect(self._on_stats_updated)
 
-    def on_stats_updated(self, stats: dict) -> None:
-        """Update the model when new stats arrive."""
-        # In a real implementation, we would parse the stats to extract downloads.
-        # For this example, we assume stats contains a list of active downloads.
-        # We'll simulate by using the worker's cached stats.
-        self.refresh()
+    def _on_stats_updated(self, stats: dict) -> None:
+        """
+        Called when worker receives new stats. Updates internal data and notifies UI.
+        The stats parameter is a dict from aria2.getGlobalStat.
+        In a complete implementation, we would also call tellActive, tellWaiting, etc.
+        For now, we simulate with a dummy refresh.
+        """
+        # In a real app, we'd fetch active downloads via worker's method.
+        # Since the worker might not expose detailed download lists directly,
+        # we will rely on the worker to emit signals for each download update.
+        # For simplicity, we just emit layoutChanged to cause a refresh.
+        # This should be replaced with a proper update mechanism in production.
+        self.layoutChanged.emit()
 
     def refresh(self) -> None:
-        """Refresh the model data from the worker's cached stats."""
-        stats = self._worker.get_cached_stats()
-        # Assume stats is a dict with 'numActive', etc. Actually we need to get list of downloads.
-        # To keep it simple, we'll just emit layoutChanged to force refresh.
-        # In a full implementation, we would call aria2.tellActive, etc., but we rely on worker.
-        # The worker could provide a method to get all downloads.
-        # Here we'll just update from a hypothetical list.
-        # Since we don't have the exact structure, we'll emit layoutChanged.
+        """Manually refresh the model (delegates to worker's cache)."""
+        # The worker will emit stats_updated, which triggers _on_stats_updated.
+        # We can call worker's get_cached_stats to get the latest global stats,
+        # but we need a mechanism to get the list of downloads.
+        # This implementation assumes the worker provides a signal for download list.
+        # For now, we just emit layoutChanged.
         self.layoutChanged.emit()
 
     def rowCount(self, parent=QModelIndex()) -> int:
@@ -79,4 +83,26 @@ class DownloadTableModel(QAbstractTableModel):
                 return self.COLUMNS[section]
         return None
 
-    # Additional methods to add/remove downloads can be implemented.
+    # Methods to add/update downloads
+    def add_download(self, gid: str, info: Dict[str, Any]) -> None:
+        if gid not in self._downloads:
+            self._downloads[gid] = info
+            self._gid_list.append(gid)
+            self.layoutChanged.emit()
+
+    def update_download(self, gid: str, info: Dict[str, Any]) -> None:
+        if gid in self._downloads:
+            self._downloads[gid].update(info)
+            # Optionally emit dataChanged for specific row
+            row = self._gid_list.index(gid)
+            self.dataChanged.emit(self.index(row, 0), self.index(row, len(self.COLUMNS)-1))
+        else:
+            self.add_download(gid, info)
+
+    def remove_download(self, gid: str) -> None:
+        if gid in self._downloads:
+            row = self._gid_list.index(gid)
+            self.beginRemoveRows(QModelIndex(), row, row)
+            del self._downloads[gid]
+            self._gid_list.remove(gid)
+            self.endRemoveRows()
