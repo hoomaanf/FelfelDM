@@ -146,7 +146,7 @@ class DownloadController(QObject):
 
 
 class TrayController(QObject):
-    """Manages system tray icon and notifications."""
+    """Manages system tray icon and notifications with progress display."""
     show_window_requested = pyqtSignal()
     quit_requested = pyqtSignal()
 
@@ -154,6 +154,7 @@ class TrayController(QObject):
         super().__init__(parent)
         self.tray = QSystemTrayIcon(parent)
         self.tray.activated.connect(self._on_tray_activated)
+        self._current_progress: Optional[int] = None
 
         menu = QMenu()
         show_action = QAction("Show", parent)
@@ -180,6 +181,24 @@ class TrayController(QObject):
     def set_icon(self, icon) -> None:
         self.tray.setIcon(icon)
 
+    def update_progress(self, progress: Optional[int], speed: Optional[str] = None) -> None:
+        """
+        Update the tray tooltip with progress information.
+
+        Args:
+            progress: Download progress percentage (0-100)
+            speed: Download speed string (e.g., "1.5 MB/s")
+        """
+        self._current_progress = progress
+
+        if progress is not None and progress > 0:
+            tooltip = f"FelfelDM\nDownloading: {progress}%"
+            if speed:
+                tooltip += f"\nSpeed: {speed}"
+            self.tray.setToolTip(tooltip)
+        else:
+            self.tray.setToolTip("FelfelDM\nReady")
+
 
 class SearchProxyModel(QSortFilterProxyModel):
     """Proxy model for filtering downloads by name."""
@@ -197,11 +216,28 @@ class SearchProxyModel(QSortFilterProxyModel):
             return True
 
         model = self.sourceModel()
-        name_index = model.index(source_row, 0)  # Name column
+        name_index = model.index(source_row, 0)
         name = model.data(name_index, Qt.ItemDataRole.DisplayRole)
         if name and self._filter_text in str(name).lower():
             return True
         return False
+
+
+class ConnectionIndicator(QLabel):
+    """Custom widget for displaying aria2 connection status."""
+
+    def __init__(self, parent=None) -> None:
+        super().__init__(parent)
+        self.set_connected(False)
+
+    def set_connected(self, connected: bool) -> None:
+        """Update the indicator based on connection status."""
+        if connected:
+            self.setText("● Connected")
+            self.setStyleSheet("color: #a6e3a1; font-weight: bold;")
+        else:
+            self.setText("● Disconnected")
+            self.setStyleSheet("color: #f38ba8; font-weight: bold;")
 
 
 class MainWindow(QMainWindow):
@@ -359,9 +395,17 @@ class MainWindow(QMainWindow):
 
         main_layout.addWidget(self.table)
 
-        # Status bar
+        # Status bar with connection indicator
+        status_layout = QHBoxLayout()
         self.status_label = QLabel("Ready")
-        main_layout.addWidget(self.status_label)
+        status_layout.addWidget(self.status_label)
+        status_layout.addStretch()
+
+        self.connection_indicator = ConnectionIndicator()
+        self.connection_indicator.set_connected(True)  # Initial state
+        status_layout.addWidget(self.connection_indicator)
+
+        main_layout.addLayout(status_layout)
 
         self._update_queue_ui()
 
@@ -369,12 +413,10 @@ class MainWindow(QMainWindow):
         toolbar = QToolBar()
         toolbar.setMovable(False)
 
-        # Add download button
         add_action = QAction(get_icon("list-add"), "Add Download", self)
         add_action.triggered.connect(self._show_add_dialog)
         toolbar.addAction(add_action)
 
-        # Add torrent button
         torrent_action = QAction(get_icon("torrent"), "Add Torrent", self)
         torrent_action.triggered.connect(self._show_add_torrent_dialog)
         toolbar.addAction(torrent_action)
@@ -389,7 +431,7 @@ class MainWindow(QMainWindow):
         pause_action.triggered.connect(self._pause_selected)
         toolbar.addAction(pause_action)
 
-        remove_action = QAction(get_icon("edit-delete"), "Remove", self)
+        remove_action = QAction("✕", "Remove", self)
         remove_action.triggered.connect(self._remove_selected)
         toolbar.addAction(remove_action)
 
@@ -463,11 +505,9 @@ class MainWindow(QMainWindow):
                 QMessageBox.warning(self, "Error", "No torrent file selected.")
                 return
 
-            # Try to get torrent info for file selection
             try:
                 torrent_info = self.aria2.get_torrent_info(torrent_path)
                 if torrent_info and torrent_info.get('files'):
-                    # Show file selection dialog
                     file_dialog = TorrentFileSelectionDialog(torrent_info, torrent_path, self)
                     if file_dialog.exec():
                         selected_files = file_dialog.get_selected_files()
@@ -475,7 +515,6 @@ class MainWindow(QMainWindow):
                             QMessageBox.warning(self, "No Files Selected",
                                                 "Please select at least one file to download.")
                             return
-                        # Add torrent with selected files
                         gid = self.download_controller.add_torrent(
                             torrent_path, queue_idx, options, selected_files
                         )
@@ -487,7 +526,6 @@ class MainWindow(QMainWindow):
             except Exception as e:
                 logger.warning("Could not get torrent info: %s", e)
 
-            # Fallback: add without file selection
             gid = self.download_controller.add_torrent(torrent_path, queue_idx, options)
             if gid:
                 QMessageBox.information(self, "Success", "Torrent added successfully.")
@@ -530,7 +568,7 @@ class MainWindow(QMainWindow):
             is_dark = detect_theme()
         elif theme_setting == "dark":
             is_dark = True
-        else:  # "light"
+        else:
             is_dark = False
         apply_theme(self, is_dark)
 
@@ -540,16 +578,35 @@ class MainWindow(QMainWindow):
 
     def _on_stats_updated(self, stats: dict) -> None:
         self.table_model.refresh()
+
+        # Update status label and connection indicator
         if "global" in stats:
             gs = stats["global"]
             speed = format_speed(gs.get("downloadSpeed", 0))
             self.status_label.setText(f"Download Speed: {speed}")
+
+            # Calculate overall progress for tray
+            total_downloaded = gs.get("totalDownloaded", 0)
+            total_uploaded = gs.get("totalUploaded", 0)
+            total = total_downloaded + total_uploaded
+            if total > 0:
+                progress = min(100, int((total_downloaded / total) * 100))
+                self.tray_controller.update_progress(progress, speed)
+            else:
+                self.tray_controller.update_progress(None, speed)
+
+        # Update connection indicator
+        if stats.get("connected", True):
+            self.connection_indicator.set_connected(True)
+        else:
+            self.connection_indicator.set_connected(False)
 
     def _on_connection_changed(self, connected: bool) -> None:
         if connected:
             self.status_label.setText("Connected to aria2")
         else:
             self.status_label.setText("Disconnected from aria2")
+        self.connection_indicator.set_connected(connected)
 
     def _on_download_added(self, gid: str) -> None:
         self.table_model.refresh()
@@ -577,7 +634,6 @@ class MainWindow(QMainWindow):
         pass
 
     def _update_tray_icon(self) -> None:
-        # Use a default icon from theme or fallback
         icon = get_icon("download")
         if not icon.isNull():
             self.tray_controller.set_icon(icon)
