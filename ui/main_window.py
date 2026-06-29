@@ -6,7 +6,7 @@ from typing import Optional
 
 from PyQt6.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QPushButton,
-    QTableView, QToolBar, QLineEdit, QLabel, QMessageBox, QHeaderView
+    QTableView, QLineEdit, QLabel, QMessageBox, QHeaderView
 )
 from PyQt6.QtCore import Qt, QSortFilterProxyModel, QModelIndex
 
@@ -81,14 +81,24 @@ class MainWindow(QMainWindow):
         self.status_label = QLabel("Ready")
         self.statusBar().addWidget(self.status_label)
 
-        # Connect signals
+        # Connect signals - ensure GID is not None before emitting
+        self.worker.download_added.connect(self._on_download_added)
+        self.worker.download_removed.connect(self._on_download_removed)
         self.worker.stats_updated.connect(self.update_status)
 
         # Start worker
         self.worker.start()
 
+    def _on_download_added(self, gid: str) -> None:
+        if gid:
+            logger.info(f"Download added: {gid}")
+        # else ignore
+
+    def _on_download_removed(self, gid: str) -> None:
+        if gid:
+            logger.info(f"Download removed: {gid}")
+
     def create_toolbar(self) -> QWidget:
-        """Create toolbar with add button and search box."""
         widget = QWidget()
         layout = QHBoxLayout(widget)
         layout.setContentsMargins(0, 0, 0, 0)
@@ -112,16 +122,13 @@ class MainWindow(QMainWindow):
         return widget
 
     def on_search_text_changed(self, text: str) -> None:
-        """Update search filter."""
         self.proxy_model.set_search_text(text)
 
     def add_download(self) -> None:
-        """Open Add Download dialog."""
         dialog = AddDownloadDialog(self)
         if dialog.exec() == AddDownloadDialog.DialogCode.Accepted:
             info = dialog.get_info()
             if info:
-                # Use download controller to add
                 gid = self.download_controller.add_download(info["url"], {"dir": info["path"]})
                 if gid:
                     QMessageBox.information(self, "Added", f"Download added: {gid}")
@@ -129,18 +136,15 @@ class MainWindow(QMainWindow):
                     QMessageBox.warning(self, "Error", "Failed to add download.")
 
     def refresh_table(self) -> None:
-        """Manually refresh table data."""
         self.model.refresh()
 
     def update_status(self, stats: dict) -> None:
-        """Update status bar with global stats."""
         active = stats.get("numActive", 0)
         waiting = stats.get("numWaiting", 0)
         stopped = stats.get("numStopped", 0)
         self.status_label.setText(f"Active: {active}  Waiting: {waiting}  Stopped: {stopped}")
 
     def closeEvent(self, event) -> None:
-        """Clean up resources on close."""
         self.worker.stop()
         if self.local_server:
             self.local_server.stop()
