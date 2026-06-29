@@ -9,7 +9,7 @@ from typing import Optional, List, Dict, Any
 from PyQt6.QtCore import Qt, QAbstractTableModel, QModelIndex, pyqtSignal
 
 from core.data_store import DataStore
-from core.constants import DownloadStatus
+from core.enums import DownloadStatus  # ✅ اصلاح شده: از enums import می‌کند
 from utils.helpers import format_size, format_speed
 
 logger = logging.getLogger(__name__)
@@ -159,7 +159,6 @@ class DownloadTableModel(QAbstractTableModel):
         elif col == 5:  # Status
             raw_status = status.get("status", "unknown")
             try:
-                # Try to convert to Enum
                 status_enum = DownloadStatus.from_string(raw_status)
                 return status_enum.value
             except ValueError:
