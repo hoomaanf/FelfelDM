@@ -28,6 +28,7 @@ class AsyncAria2RPC(BaseAria2RPC):
             self._session = aiohttp.ClientSession(connector=connector)
 
     async def _send_request_async(self, payload: Dict[str, Any]) -> Optional[Any]:
+        """Send request asynchronously using aiohttp."""
         await self._ensure_session()
         url = self._build_url()
         async with self._semaphore:
@@ -44,11 +45,12 @@ class AsyncAria2RPC(BaseAria2RPC):
                 return None
 
     async def _call_async(self, method: str, params: Optional[List] = None) -> Optional[Any]:
+        """Async version of _call."""
         payload = self._prepare_payload(method, params)
         response = await self._send_request_async(payload)
         return self._handle_response(response)
 
-    # Async versions of all methods
+    # Async versions of all public methods
     async def get_global_stat(self) -> Dict[str, Any]:
         return await self._call_async("aria2.getGlobalStat") or {}
 
