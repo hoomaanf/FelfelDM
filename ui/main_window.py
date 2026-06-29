@@ -1456,15 +1456,25 @@ class MainWindow(QMainWindow):
                         self.store.save()
 
         for q in self.store.queues:
-            if not q.paused and q.schedule_enabled and not q.is_scheduled_now():
-                q.paused = True
+            if q.paused or not q.schedule_enabled:
+                continue
+
+            if q.is_scheduled_now():
+              
                 for gid in q.downloads:
-                    if gid in self._all_downloads:
-                        if self._all_downloads[gid].get("status") == "active":
-                            self.aria2.pause(gid)
-                            self._all_downloads[gid]["status"] = "paused"
-                            self._all_downloads[gid]["downloadSpeed"] = 0
-                self.store.save()
+                    if self.aria2.get_status(gid) == "paused":
+                        self.aria2.resume(gid)
+
+                        if gid in self._all_downloads:
+                            self._all_downloads[gid]["status"] = "active"
+
+            else:
+               
+                for gid in q.downloads:
+                    if gid in self._all_downloads and self._all_downloads[gid].get("status") == "active":
+                        self.aria2.pause(gid)
+                        self._all_downloads[gid]["status"] = "paused"
+                        self._all_downloads[gid]["downloadSpeed"] = 0
                 
         if hasattr(self, '_progress_dialog') and self._progress_dialog.isVisible():
             gid = self._progress_dialog.gid
