@@ -14,7 +14,10 @@ logger = logging.getLogger(__name__)
 
 
 class Aria2RPC:
-    """aria2 RPC client with batch call support and connection caching."""
+    """
+    aria2 RPC client with batch call support via system.multicall and SSL validation.
+    Uses a persistent requests.Session with keep-alive for connection caching.
+    """
 
     DEFAULT_TIMEOUT: int = 15
 
@@ -88,11 +91,16 @@ class Aria2RPC:
                 self.on_error(msg)
             return None
 
-    def batch_call(self, calls: List[Dict[str, Any]]) -> List[Any]:
-        """Execute multiple RPC calls in a single request using system.multicall."""
-        if not calls:
-            return []
+    def _prepare_multicall_params(self, calls: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """
+        Prepare parameters for system.multicall.
 
+        Args:
+            calls: List of call dicts with 'method' and optional 'params'
+
+        Returns:
+            List of params for the multicall
+        """
         params = []
         for call in calls:
             method = call.get("method")
@@ -103,6 +111,58 @@ class Aria2RPC:
                 "methodName": method,
                 "params": params_list,
             })
+        return params
+
+    def _process_multicall_results(self, raw_results: Any, expected_count: int) -> List[Any]:
+        """
+        Process results from system.multicall.
+
+        Args:
+            raw_results: Raw results from the RPC call
+            expected_count: Number of expected results
+
+        Returns:
+            Processed list of results
+        """
+        if not isinstance(raw_results, list):
+            logger.warning("Unexpected multicall response type: %s", type(raw_results))
+            return [None] * expected_count
+
+        processed = []
+        for idx, item in enumerate(raw_results[:expected_count]):
+            if isinstance(item, dict):
+                if "result" in item:
+                    processed.append(item["result"])
+                elif "error" in item:
+                    err = item["error"]
+                    logger.warning("Sub-call %d failed: %s", idx, err.get("message", err))
+                    processed.append(None)
+                else:
+                    processed.append(None)
+            else:
+                processed.append(None)
+
+        # Pad with None if we got fewer results than expected
+        while len(processed) < expected_count:
+            processed.append(None)
+
+        return processed
+
+    def batch_call(self, calls: List[Dict[str, Any]]) -> List[Any]:
+        """
+        Execute multiple RPC calls in a single request using system.multicall.
+
+        Args:
+            calls: List of dicts with 'method' and optional 'params'
+
+        Returns:
+            List of results from each call, in the same order as calls.
+            If a sub‑call fails, its entry will be None.
+        """
+        if not calls:
+            return []
+
+        params = self._prepare_multicall_params(calls)
 
         self._id += 1
         payload = {
@@ -115,6 +175,7 @@ class Aria2RPC:
         try:
             r = self._session.post(self.url, json=payload, timeout=self.timeout)
             result = r.json()
+
             if "error" in result:
                 err = result["error"]
                 msg = f"multicall error: {err.get('message', err)}"
@@ -124,28 +185,7 @@ class Aria2RPC:
                 return [None] * len(calls)
 
             raw_results = result.get("result")
-            if not isinstance(raw_results, list):
-                logger.warning("Unexpected multicall response type: %s", type(raw_results))
-                return [None] * len(calls)
-
-            processed = []
-            for idx, item in enumerate(raw_results[:len(calls)]):
-                if isinstance(item, dict):
-                    if "result" in item:
-                        processed.append(item["result"])
-                    elif "error" in item:
-                        err = item["error"]
-                        logger.warning("Sub-call %d failed: %s", idx, err.get("message", err))
-                        processed.append(None)
-                    else:
-                        processed.append(None)
-                else:
-                    processed.append(None)
-
-            while len(processed) < len(calls):
-                processed.append(None)
-
-            return processed
+            return self._process_multicall_results(raw_results, len(calls))
 
         except requests.exceptions.ConnectionError:
             msg = "aria2 disconnected during batch call"
@@ -188,21 +228,12 @@ class Aria2RPC:
         options: Optional[Dict] = None,
         selected_files: Optional[List[int]] = None,
     ) -> Optional[str]:
-        """
-        Add a torrent file and return the GID.
-
-        Args:
-            torrent_file: Path to the .torrent file.
-            options: Additional aria2 options.
-            selected_files: List of file indices to download (1-based).
-                            If None, all files are downloaded.
-        """
+        """Add a torrent file and return the GID."""
         with open(torrent_file, "rb") as f:
             torrent_data = base64.b64encode(f.read()).decode("utf-8")
 
         params = [torrent_data]
         if options:
-            # If selected_files is provided, add to options
             if selected_files:
                 options["select-file"] = ",".join(str(i) for i in selected_files)
             params.append(options)
@@ -214,16 +245,7 @@ class Aria2RPC:
         return result
 
     def get_torrent_info(self, torrent_file: str) -> Optional[Dict[str, Any]]:
-        """
-        Get information about a torrent file without starting the download.
-
-        Args:
-            torrent_file: Path to the .torrent file.
-
-        Returns:
-            Dictionary containing torrent info including files list.
-        """
-        import base64
+        """Get information about a torrent file without starting the download."""
         with open(torrent_file, "rb") as f:
             torrent_data = base64.b64encode(f.read()).decode("utf-8")
 
@@ -285,7 +307,7 @@ class Aria2RPC:
 
     def get_certificate_fingerprint(self) -> Optional[str]:
         """Get the certificate fingerprint."""
-        return None  # Placeholder - managed by Aria2Manager
+        return None
 
     def _ensure_session(self) -> None:
         """Ensure the session is valid and recreate it if necessary."""
