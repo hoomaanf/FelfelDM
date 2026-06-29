@@ -1,38 +1,28 @@
 # ui/main_window.py
 """
-Main application window - now acts as UI coordinator.
-Uses ServiceContainer for dependency injection.
-Supports Drag & Drop for torrent files.
+Main application window - UI coordinator with modern design.
 """
 
 import logging
-import os
 from typing import List, Optional
 
-from PyQt6.QtCore import Qt, QTimer, pyqtSignal, QObject, QSortFilterProxyModel
-from PyQt6.QtGui import QAction, QKeyEvent, QDragEnterEvent, QDropEvent
+from PyQt6.QtCore import Qt, QTimer, pyqtSignal, QObject
+from PyQt6.QtGui import QAction, QKeyEvent, QIcon
 from PyQt6.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QPushButton, QTableView, QHeaderView, QComboBox,
     QLabel, QToolBar, QMenu, QSystemTrayIcon, QMenuBar,
     QMessageBox, QLineEdit, QFileDialog, QApplication, QStatusBar,
+    QInputDialog,
 )
 
-from core.service_container import ServiceContainer
-from core import (
-    Aria2RPC,
-    BackendWorker,
-    AsyncWorker,
-    DataStore,
-    LocalServer,
-    HistoryManager,
-    Aria2Manager,
-)
+from core import Aria2RPC, BackendWorker, DataStore, LocalServer
 from core.data_store import Queue
+from core.aria2_manager import Aria2Manager
 from ui.delegates import ProgressDelegate
 from ui.dialogs import AddDownloadDialog, SettingsDialog, AddTorrentDialog, TorrentFileSelectionDialog
 from ui.table_model import DownloadTableModel
-from ui.icons import get_icon
+from ui.icons import get_icon, clear_icon_cache
 from ui.animated_dialog import AnimatedDialog
 from utils.helpers import format_speed
 from utils.style import apply_theme, detect_theme
@@ -96,11 +86,10 @@ class DownloadController(QObject):
     download_paused = pyqtSignal(str)
     download_resumed = pyqtSignal(str)
 
-    def __init__(self, aria2: Aria2RPC, store: DataStore, history_mgr: HistoryManager) -> None:
+    def __init__(self, aria2: Aria2RPC, store: DataStore) -> None:
         super().__init__()
         self.aria2 = aria2
         self.store = store
-        self.history_mgr = history_mgr
         self._cleared_gids = set()
 
     def add_urls(self, urls: List[str], queue_idx: int, options: dict) -> List[str]:
@@ -158,12 +147,13 @@ class DownloadController(QObject):
 
 
 class TrayController(QObject):
-    """Manages system tray icon and notifications with progress display."""
+    """Manages system tray icon and notifications."""
     show_window_requested = pyqtSignal()
     quit_requested = pyqtSignal()
 
     def __init__(self, parent: QWidget = None) -> None:
         super().__init__(parent)
+        self.parent = parent
         self.tray = QSystemTrayIcon(parent)
         self.tray.activated.connect(self._on_tray_activated)
         self._current_progress: Optional[int] = None
@@ -176,11 +166,15 @@ class TrayController(QObject):
         menu.addSeparator()
 
         quit_action = QAction("Quit", parent)
-        quit_action.triggered.connect(self.quit_requested.emit)
+        quit_action.triggered.connect(self._on_quit_clicked)
         menu.addAction(quit_action)
 
         self.tray.setContextMenu(menu)
         self.tray.show()
+
+    def _on_quit_clicked(self) -> None:
+        """Handle quit action from tray menu."""
+        self.quit_requested.emit()
 
     def _on_tray_activated(self, reason: QSystemTrayIcon.ActivationReason) -> None:
         if reason == QSystemTrayIcon.ActivationReason.DoubleClick:
@@ -190,7 +184,7 @@ class TrayController(QObject):
                      icon: QSystemTrayIcon.MessageIcon = QSystemTrayIcon.MessageIcon.Information) -> None:
         self.tray.showMessage(title, message, icon)
 
-    def set_icon(self, icon) -> None:
+    def set_icon(self, icon: QIcon) -> None:
         self.tray.setIcon(icon)
 
     def update_progress(self, progress: Optional[int], speed: Optional[str] = None) -> None:
@@ -238,10 +232,10 @@ class ConnectionIndicator(QLabel):
     def set_connected(self, connected: bool) -> None:
         if connected:
             self.setText("● Connected")
-            self.setStyleSheet("color: #a6e3a1; font-weight: bold;")
+            self.setStyleSheet("color: #27ae60; font-weight: bold;")
         else:
             self.setText("● Disconnected")
-            self.setStyleSheet("color: #f38ba8; font-weight: bold;")
+            self.setStyleSheet("color: #e74c3c; font-weight: bold;")
 
 
 class AsyncModeIndicator(QLabel):
@@ -254,45 +248,40 @@ class AsyncModeIndicator(QLabel):
     def set_mode(self, async_mode: bool) -> None:
         if async_mode:
             self.setText("⚡ Async")
-            self.setStyleSheet("color: #89b4fa; font-weight: bold;")
+            self.setStyleSheet("color: #3498db; font-weight: bold;")
         else:
             self.setText("🔄 Sync")
-            self.setStyleSheet("color: #a6adc8; font-weight: bold;")
+            self.setStyleSheet("color: #95a5a6; font-weight: bold;")
 
 
 class MainWindow(QMainWindow):
     """Main application window - UI coordinator with modern design."""
 
-    def __init__(self, container: ServiceContainer) -> None:
+    def __init__(self, container=None) -> None:
         super().__init__()
-
-        self._container = container
 
         self.setWindowTitle("FelfelDM")
         self.setMinimumSize(1050, 680)
 
-        # Enable drag and drop for torrent files
-        self.setAcceptDrops(True)
-
-        # Resolve core services from container
-        self.store: DataStore = container.resolve('data_store')
-        self.history_manager: HistoryManager = container.resolve('history_manager')
-        self.aria2_manager: Aria2Manager = container.resolve('aria2_manager')
-        self.aria2: Aria2RPC = container.resolve('aria2_rpc')
-        self.worker = container.resolve('worker')  # BackendWorker or AsyncWorker
-
-        # Set error handler for aria2
-        self.aria2.on_error = self._on_aria2_error
-
-        # Ensure default queue exists
+        # Core components
+        self.store = DataStore()
         self._ensure_default_queue()
 
-        # Start aria2 if not already started
-        if not self.aria2_manager.is_running():
-            self.aria2_manager.start()
+        # aria2 manager
+        self.aria2_manager = Aria2Manager()
+        self.aria2_manager.start()
+
+        # aria2 RPC client
+        self.aria2 = Aria2RPC(
+            self.store.settings.get("aria2_host", "http://localhost"),
+            self.store.settings.get("aria2_port", 6800),
+            self.store.get_secret(),
+            verify_ssl=True,
+        )
+        self.aria2.on_error = self._on_aria2_error
 
         # Controllers
-        self.download_controller = DownloadController(self.aria2, self.store, self.history_manager)
+        self.download_controller = DownloadController(self.aria2, self.store)
         self.queue_controller = QueueController(self.store)
         self.tray_controller = TrayController(self)
 
@@ -300,15 +289,17 @@ class MainWindow(QMainWindow):
         self.queue_controller.queue_changed.connect(self._update_queue_ui)
         self.download_controller.download_added.connect(self._on_download_added)
 
-        # Tray signals
+        # Tray signals - CRITICAL: must connect properly
         self.tray_controller.show_window_requested.connect(self.show)
         self.tray_controller.quit_requested.connect(self._quit_app)
 
         # Build UI
         self._build_ui()
 
-        # Setup worker and local server
+        # Backend worker
         self._setup_worker()
+
+        # Local server
         self._setup_local_server()
 
         # Timer for UI updates
@@ -326,113 +317,30 @@ class MainWindow(QMainWindow):
 
         self._update_tray_icon()
 
-    # =========================================================================
-    # Drag and Drop Handlers
-    # =========================================================================
-
-    def dragEnterEvent(self, event: QDragEnterEvent) -> None:
-        if event.mimeData().hasUrls():
-            urls = event.mimeData().urls()
-            for url in urls:
-                if url.isLocalFile() and url.toLocalFile().lower().endswith('.torrent'):
-                    event.acceptProposedAction()
-                    return
-        event.ignore()
-
-    def dragMoveEvent(self, event) -> None:
-        event.acceptProposedAction()
-
-    def dropEvent(self, event: QDropEvent) -> None:
-        if not event.mimeData().hasUrls():
-            return
-
-        urls = event.mimeData().urls()
-        torrent_path = None
-        for url in urls:
-            if url.isLocalFile():
-                path = url.toLocalFile()
-                if path.lower().endswith('.torrent'):
-                    torrent_path = path
-                    break
-
-        if torrent_path and os.path.exists(torrent_path):
-            event.acceptProposedAction()
-            self._open_add_torrent_dialog_with_file(torrent_path)
-        else:
-            event.ignore()
-
-    def _open_add_torrent_dialog_with_file(self, torrent_path: str) -> None:
-        dialog = AddTorrentDialog(
-            self.queue_controller.get_queues(),
-            self.store,
-            self.queue_controller.current_index,
-            self
-        )
-        dialog.set_torrent_path(torrent_path)
-
-        animated_dialog = AnimatedDialog(self)
-        animated_dialog.set_content_widget(dialog)
-        animated_dialog.setWindowTitle("Add Torrent")
-
-        if animated_dialog.exec():
-            self._process_torrent_dialog(dialog)
-
-    def _process_torrent_dialog(self, dialog: AddTorrentDialog) -> None:
-        torrent_path = dialog.get_torrent_path()
-        queue_idx = dialog.get_queue_index()
-        options = dialog.get_options()
-
-        if not torrent_path:
-            QMessageBox.warning(self, "Error", "No torrent file selected.")
-            return
-
-        try:
-            torrent_info = self.aria2.get_torrent_info(torrent_path)
-            if torrent_info and torrent_info.get('files'):
-                file_dialog = TorrentFileSelectionDialog(torrent_info, torrent_path, self.aria2)
-                if file_dialog.exec():
-                    selected_files = file_dialog.get_selected_files()
-                    if not selected_files:
-                        QMessageBox.warning(self, "No Files Selected",
-                                            "Please select at least one file to download.")
-                        return
-                    gid = self.download_controller.add_torrent(
-                        torrent_path, queue_idx, options, selected_files
-                    )
-                    if gid:
-                        file_dialog.set_gid(gid)
-                        QMessageBox.information(self, "Success", "Torrent added successfully.")
-                    else:
-                        QMessageBox.warning(self, "Error", "Failed to add torrent.")
-                return
-        except Exception as e:
-            logger.warning("Could not get torrent info: %s", e)
-
-        gid = self.download_controller.add_torrent(torrent_path, queue_idx, options)
-        if gid:
-            QMessageBox.information(self, "Success", "Torrent added successfully.")
-        else:
-            QMessageBox.warning(self, "Error", "Failed to add torrent.")
-
-    # =========================================================================
-    # Core Methods
-    # =========================================================================
-
     def _ensure_default_queue(self) -> None:
         if not any(q.name == "Default" for q in self.store.queues):
             self.store.queues.insert(0, Queue("Default", paused=True))
             self.store.save()
 
     def _setup_worker(self) -> None:
-        if hasattr(self.worker, 'stats_updated'):
-            self.worker.stats_updated.connect(self._on_stats_updated)
-        if hasattr(self.worker, 'connection_changed'):
-            self.worker.connection_changed.connect(self._on_connection_changed)
-        if hasattr(self.worker, 'error_occurred'):
-            self.worker.error_occurred.connect(self._on_worker_error)
+        async_mode = self.store.settings.get("async_mode", False)
+        if async_mode:
+            from core.async_worker import AsyncWorker
+            from core.aria2_rpc_async import AsyncAria2RPC
+            # Use async worker
+            async_aria2 = AsyncAria2RPC(
+                host=self.aria2.url.rsplit(':', 1)[0],
+                port=int(self.aria2.url.rsplit(':', 1)[1].split('/')[0]),
+                secret=self.aria2.secret,
+                verify_ssl=self.aria2.verify_ssl,
+            )
+            self.worker = AsyncWorker(async_aria2, self.store)
+        else:
+            self.worker = BackendWorker(self.aria2, self.store)
 
-        if hasattr(self.worker, 'start'):
-            self.worker.start()
+        self.worker.stats_updated.connect(self._on_stats_updated)
+        self.worker.connection_changed.connect(self._on_connection_changed)
+        self.worker.start()
 
     def _setup_local_server(self) -> None:
         self.local_server = LocalServer(self.download_controller)
@@ -446,8 +354,10 @@ class MainWindow(QMainWindow):
         main_layout.setContentsMargins(12, 12, 12, 12)
         main_layout.setSpacing(12)
 
+        # Toolbar
         self._build_toolbar(main_layout)
 
+        # Queue selector and controls
         queue_layout = QHBoxLayout()
         self.queue_combo = QComboBox()
         self.queue_combo.currentIndexChanged.connect(self._on_queue_changed)
@@ -472,6 +382,7 @@ class MainWindow(QMainWindow):
 
         main_layout.addLayout(queue_layout)
 
+        # Search bar
         search_layout = QHBoxLayout()
         search_layout.addWidget(QLabel("Search:"))
         self.search_edit = QLineEdit()
@@ -480,6 +391,7 @@ class MainWindow(QMainWindow):
         search_layout.addWidget(self.search_edit)
         main_layout.addLayout(search_layout)
 
+        # Table view with proxy model
         self.table = QTableView()
         self.table.setAlternatingRowColors(True)
         self.table.setSortingEnabled(True)
@@ -490,6 +402,7 @@ class MainWindow(QMainWindow):
         self.proxy_model.setSourceModel(self.table_model)
         self.table.setModel(self.proxy_model)
 
+        # Set up columns
         for i, name in enumerate(self.table_model.COLS):
             if name == "Category":
                 self.table.setColumnWidth(i, 80)
@@ -512,14 +425,15 @@ class MainWindow(QMainWindow):
 
         main_layout.addWidget(self.table)
 
+        # Status bar with indicators
         status_bar = QStatusBar()
         self.setStatusBar(status_bar)
 
         self.status_label = QLabel("Ready")
         status_bar.addWidget(self.status_label)
 
-        status_bar.addPermanentWidget(self._create_async_mode_indicator())
         status_bar.addPermanentWidget(self._create_connection_indicator())
+        status_bar.addPermanentWidget(self._create_async_mode_indicator())
 
     def _create_connection_indicator(self) -> ConnectionIndicator:
         self.connection_indicator = ConnectionIndicator()
@@ -537,36 +451,30 @@ class MainWindow(QMainWindow):
         toolbar.setMovable(False)
 
         add_action = QAction(get_icon("list-add"), "Add Download", self)
-        add_action.setObjectName("addAction")
         add_action.triggered.connect(self._show_add_dialog)
         toolbar.addAction(add_action)
 
         torrent_action = QAction(get_icon("torrent"), "Add Torrent", self)
-        torrent_action.setObjectName("torrentAction")
         torrent_action.triggered.connect(self._show_add_torrent_dialog)
         toolbar.addAction(torrent_action)
 
         toolbar.addSeparator()
 
         start_action = QAction(get_icon("media-playback-start"), "Start", self)
-        start_action.setObjectName("startAction")
         start_action.triggered.connect(self._start_selected)
         toolbar.addAction(start_action)
 
         pause_action = QAction(get_icon("media-playback-pause"), "Pause", self)
-        pause_action.setObjectName("pauseAction")
         pause_action.triggered.connect(self._pause_selected)
         toolbar.addAction(pause_action)
 
         remove_action = QAction(get_icon("edit-delete"), "Remove", self)
-        remove_action.setObjectName("removeAction")
         remove_action.triggered.connect(self._remove_selected)
         toolbar.addAction(remove_action)
 
         toolbar.addSeparator()
 
         settings_action = QAction(get_icon("preferences-system"), "Settings", self)
-        settings_action.setObjectName("settingsAction")
         settings_action.triggered.connect(self._show_settings)
         toolbar.addAction(settings_action)
 
@@ -590,31 +498,31 @@ class MainWindow(QMainWindow):
         self.table_model.refresh()
 
     def _add_queue(self) -> None:
-        from PyQt6.QtWidgets import QInputDialog
         name, ok = QInputDialog.getText(self, "Add Queue", "Queue name:")
-        if ok and name:
-            self.queue_controller.add_queue(name)
+        if ok and name.strip():
+            self.queue_controller.add_queue(name.strip())
 
     def _toggle_current_queue(self) -> None:
         idx = self.queue_combo.currentIndex()
-        self.queue_controller.toggle_pause(idx)
+        if idx >= 0:
+            self.queue_controller.toggle_pause(idx)
 
     def _delete_current_queue(self) -> None:
         idx = self.queue_combo.currentIndex()
         if idx >= 0:
-            self.queue_controller.delete_queue(idx)
+            if not self.queue_controller.delete_queue(idx):
+                QMessageBox.warning(self, "Cannot Delete", "Cannot delete the Default queue.")
 
     def _show_add_dialog(self) -> None:
+        """Show the Add Download dialog."""
         dialog = AddDownloadDialog(
             self.queue_controller.get_queues(),
             self.store,
             self.queue_controller.current_index,
             self
         )
-        animated_dialog = AnimatedDialog(self)
-        animated_dialog.set_content_widget(dialog)
-        animated_dialog.setWindowTitle("Add Downloads")
-        if animated_dialog.exec():
+        # استفاده از exec_ به جای exec برای سازگاری
+        if dialog.exec() == QDialog.DialogCode.Accepted:
             urls = dialog.get_urls()
             queue_idx = dialog.get_queue_index()
             options = dialog.get_options()
@@ -622,28 +530,50 @@ class MainWindow(QMainWindow):
                 self.download_controller.add_urls(urls, queue_idx, options)
 
     def _show_add_torrent_dialog(self) -> None:
+        """Show the Add Torrent dialog."""
         dialog = AddTorrentDialog(
             self.queue_controller.get_queues(),
             self.store,
             self.queue_controller.current_index,
             self
         )
-        animated_dialog = AnimatedDialog(self)
-        animated_dialog.set_content_widget(dialog)
-        animated_dialog.setWindowTitle("Add Torrent")
+        if dialog.exec() == QDialog.DialogCode.Accepted:
+            torrent_path = dialog.get_torrent_path()
+            queue_idx = dialog.get_queue_index()
+            options = dialog.get_options()
 
-        if animated_dialog.exec():
-            self._process_torrent_dialog(dialog)
+            if not torrent_path:
+                QMessageBox.warning(self, "Error", "No torrent file selected.")
+                return
 
-    def _show_settings(self) -> None:
-        dialog = SettingsDialog(self.store, self)
-        animated_dialog = AnimatedDialog(self)
-        animated_dialog.set_content_widget(dialog)
-        animated_dialog.setWindowTitle("Settings")
-        if animated_dialog.exec():
-            self._apply_theme_from_settings()
-            async_mode = self.store.settings.get("async_mode", False)
-            self.async_mode_indicator.set_mode(async_mode)
+            # Try to get torrent info for file selection
+            try:
+                torrent_info = self.aria2.get_torrent_info(torrent_path)
+                if torrent_info and torrent_info.get('files'):
+                    file_dialog = TorrentFileSelectionDialog(torrent_info, torrent_path, self)
+                    if file_dialog.exec():
+                        selected_files = file_dialog.get_selected_files()
+                        if not selected_files:
+                            QMessageBox.warning(self, "No Files Selected",
+                                                "Please select at least one file to download.")
+                            return
+                        gid = self.download_controller.add_torrent(
+                            torrent_path, queue_idx, options, selected_files
+                        )
+                        if gid:
+                            QMessageBox.information(self, "Success", "Torrent added successfully.")
+                        else:
+                            QMessageBox.warning(self, "Error", "Failed to add torrent.")
+                    return
+            except Exception as e:
+                logger.warning("Could not get torrent info: %s", e)
+
+            # Fallback: add without file selection
+            gid = self.download_controller.add_torrent(torrent_path, queue_idx, options)
+            if gid:
+                QMessageBox.information(self, "Success", "Torrent added successfully.")
+            else:
+                QMessageBox.warning(self, "Error", "Failed to add torrent.")
 
     def _start_selected(self) -> None:
         selection = self.table.selectionModel().selectedRows()
@@ -663,54 +593,56 @@ class MainWindow(QMainWindow):
 
     def _remove_selected(self) -> None:
         selection = self.table.selectionModel().selectedRows()
-        for idx in selection:
-            source_idx = self.proxy_model.mapToSource(idx)
-            gid = self.table_model.get_gid(source_idx.row())
-            if gid:
-                self.download_controller.remove(gid)
-        self.table_model.refresh()
+        if not selection:
+            return
+        if QMessageBox.question(self, "Remove Downloads",
+                               f"Remove {len(selection)} download(s)?",
+                               QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No) == QMessageBox.StandardButton.Yes:
+            for idx in selection:
+                source_idx = self.proxy_model.mapToSource(idx)
+                gid = self.table_model.get_gid(source_idx.row())
+                if gid:
+                    self.download_controller.remove(gid)
+            self.table_model.refresh()
+
+    def _show_settings(self) -> None:
+        """Show the Settings dialog."""
+        dialog = SettingsDialog(self.store, self)
+        if dialog.exec() == QDialog.DialogCode.Accepted:
+            # Reload settings
+            self._apply_theme_from_settings()
+            async_mode = self.store.settings.get("async_mode", False)
+            self.async_mode_indicator.set_mode(async_mode)
+            # Restart worker if async mode changed
+            self._restart_worker()
+
+    def _restart_worker(self) -> None:
+        """Restart the backend worker."""
+        if hasattr(self, 'worker'):
+            self.worker.stop()
+        self._setup_worker()
 
     def _apply_theme_from_settings(self) -> None:
-        """Apply theme from settings and refresh UI accordingly."""
-        theme_setting = self.store.settings.get("theme", "system")
-        if theme_setting == "system":
-            is_dark = detect_theme()
-        elif theme_setting == "dark":
-            is_dark = True
-        else:  # "light"
-            is_dark = False
+        """Apply the theme based on settings."""
+        try:
+            theme_setting = self.store.settings.get("theme", "system")
+            if theme_setting == "system":
+                is_dark = detect_theme()
+            elif theme_setting == "dark":
+                is_dark = True
+            else:
+                is_dark = False
 
-        # Apply theme to the whole application
-        apply_theme(self, is_dark)
+            apply_theme(self, is_dark)
 
-        # Refresh icons to reflect the new theme
-        self._refresh_icons()
-
-    def _refresh_icons(self) -> None:
-        """Refresh all icons in the UI after theme change."""
-        # Clear the icon cache
-        from ui.icons import clear_icon_cache
-        clear_icon_cache()
-
-        # Update toolbar actions
-        toolbar = self.findChild(QToolBar)
-        if toolbar:
-            for action in toolbar.actions():
-                if action.objectName() == "addAction":
-                    action.setIcon(get_icon("list-add"))
-                elif action.objectName() == "torrentAction":
-                    action.setIcon(get_icon("torrent"))
-                elif action.objectName() == "startAction":
-                    action.setIcon(get_icon("media-playback-start"))
-                elif action.objectName() == "pauseAction":
-                    action.setIcon(get_icon("media-playback-pause"))
-                elif action.objectName() == "removeAction":
-                    action.setIcon(get_icon("edit-delete"))
-                elif action.objectName() == "settingsAction":
-                    action.setIcon(get_icon("preferences-system"))
-
-        # Update tray icon
-        self._update_tray_icon()
+            # Clear icon cache and update icons
+            clear_icon_cache()
+            self._update_tray_icon()
+            # Force UI update
+            self.update()
+            logger.info("Theme applied: %s", "Dark" if is_dark else "Light")
+        except Exception as e:
+            logger.error("Failed to apply theme: %s", e)
 
     def _on_aria2_error(self, msg: str) -> None:
         logger.error("aria2 error: %s", msg)
@@ -721,17 +653,18 @@ class MainWindow(QMainWindow):
 
         if "global" in stats:
             gs = stats["global"]
-            speed = format_speed(gs.get("downloadSpeed", 0))
-            self.status_label.setText(f"Download Speed: {speed}")
+            if gs:
+                speed = format_speed(gs.get("downloadSpeed", 0))
+                self.status_label.setText(f"Download Speed: {speed}")
 
-            total_downloaded = gs.get("totalDownloaded", 0)
-            total_uploaded = gs.get("totalUploaded", 0)
-            total = total_downloaded + total_uploaded
-            if total > 0:
-                progress = min(100, int((total_downloaded / total) * 100))
-                self.tray_controller.update_progress(progress, speed)
-            else:
-                self.tray_controller.update_progress(None, speed)
+                total_downloaded = gs.get("totalDownloaded", 0)
+                total_uploaded = gs.get("totalUploaded", 0)
+                total = total_downloaded + total_uploaded
+                if total > 0:
+                    progress = min(100, int((total_downloaded / total) * 100))
+                    self.tray_controller.update_progress(progress, speed)
+                else:
+                    self.tray_controller.update_progress(None, speed)
 
         if stats.get("connected", True):
             self.connection_indicator.set_connected(True)
@@ -744,10 +677,6 @@ class MainWindow(QMainWindow):
         else:
             self.status_label.setText("Disconnected from aria2")
         self.connection_indicator.set_connected(connected)
-
-    def _on_worker_error(self, error_msg: str) -> None:
-        logger.error("Worker error: %s", error_msg)
-        self.status_label.setText(f"Worker Error: {error_msg}")
 
     def _on_download_added(self, gid: str) -> None:
         self.table_model.refresh()
@@ -764,7 +693,7 @@ class MainWindow(QMainWindow):
             self
         )
         dialog.set_urls(urls)
-        if dialog.exec():
+        if dialog.exec() == QDialog.DialogCode.Accepted:
             urls = dialog.get_urls()
             queue_idx = dialog.get_queue_index()
             options = dialog.get_options()
@@ -772,15 +701,39 @@ class MainWindow(QMainWindow):
                 self.download_controller.add_urls(urls, queue_idx, options)
 
     def _update_ui(self) -> None:
+        """Periodic UI updates."""
         pass
 
     def _update_tray_icon(self) -> None:
-        icon = get_icon("download")
-        if not icon.isNull():
-            self.tray_controller.set_icon(icon)
-        else:
-            from PyQt6.QtGui import QIcon
-            self.tray_controller.set_icon(QIcon.fromTheme("download"))
+        """Update the tray icon with themed icon."""
+        is_dark = False
+        try:
+            palette = self.palette()
+            bg = palette.color(QPalette.ColorRole.Window)
+            brightness = (bg.red() * 299 + bg.green() * 587 + bg.blue() * 114) / 1000
+            is_dark = brightness < 128
+        except Exception:
+            pass
+
+        # Use a simple built-in icon
+        icon = get_icon("download", is_dark)
+        if icon.isNull():
+            icon = QIcon.fromTheme("download")
+        if icon.isNull():
+            icon = QIcon.fromTheme("folder-download")
+        if icon.isNull():
+            # Fallback: create a simple icon
+            pixmap = QPixmap(64, 64)
+            pixmap.fill(QColor(0, 0, 0, 0))
+            from PyQt6.QtGui import QPainter, QColor
+            painter = QPainter(pixmap)
+            painter.setBrush(QColor("#e67e22"))
+            painter.setPen(QColor("#e67e22"))
+            painter.drawRoundedRect(10, 10, 44, 44, 8, 8)
+            painter.end()
+            icon = QIcon(pixmap)
+
+        self.tray_controller.set_icon(icon)
 
     def _on_search_text_changed(self, text: str) -> None:
         self._search_timer.start(300)
@@ -808,49 +761,24 @@ class MainWindow(QMainWindow):
         )
 
     def _quit_app(self) -> None:
-        """Quit the application gracefully."""
+        """Cleanly quit the application."""
         logger.info("Quitting application...")
 
-        # Stop the worker (sync or async)
-        if hasattr(self, 'worker') and hasattr(self.worker, 'stop'):
-            try:
-                self.worker.stop()
-                logger.debug("Worker stopped")
-            except Exception as e:
-                logger.warning("Error stopping worker: %s", e)
+        # Stop worker
+        if hasattr(self, 'worker'):
+            self.worker.stop()
 
-        # Stop the local server
+        # Stop local server
         if hasattr(self, 'local_server'):
-            try:
-                self.local_server.stop()
-                logger.debug("Local server stopped")
-            except Exception as e:
-                logger.warning("Error stopping local server: %s", e)
+            self.local_server.stop()
 
         # Stop aria2
         if hasattr(self, 'aria2_manager'):
-            try:
-                self.aria2_manager.stop()
-                logger.debug("Aria2 stopped")
-            except Exception as e:
-                logger.warning("Error stopping aria2: %s", e)
+            self.aria2_manager.stop()
 
-        # Close the RPC session
-        if hasattr(self, 'aria2') and hasattr(self.aria2, 'close'):
-            try:
-                self.aria2.close()
-                logger.debug("RPC session closed")
-            except Exception as e:
-                logger.warning("Error closing RPC session: %s", e)
+        # Close RPC connection
+        if hasattr(self, 'aria2'):
+            self.aria2.close()
 
-        # Hide the tray icon before quitting
-        if hasattr(self, 'tray_controller') and hasattr(self.tray_controller, 'tray'):
-            try:
-                self.tray_controller.tray.hide()
-                logger.debug("Tray icon hidden")
-            except Exception as e:
-                logger.warning("Error hiding tray icon: %s", e)
-
-        # Quit the application
-        logger.info("Application quit successfully")
+        # Quit application
         QApplication.quit()
