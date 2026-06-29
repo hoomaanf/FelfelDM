@@ -1,7 +1,7 @@
 # core/data_store.py
 """
 Persistent data store with secure secret handling and thread-safety.
-Synchronizes aria2_secret between settings and keyring.
+Synchronizes aria2_secret between settings (source of truth) and keyring.
 """
 
 import json
@@ -14,80 +14,12 @@ from typing import Optional, List, Dict, Any
 import keyring
 from appdirs import user_config_dir
 
+from core.queue_model import Queue
+
 logger = logging.getLogger(__name__)
 
 KEYRING_SERVICE = "felfelDM"
 KEYRING_KEY = "aria2_secret"
-
-
-class Queue:
-    """Download queue model - single source of truth."""
-
-    def __init__(
-        self,
-        name: str,
-        max_concurrent: int = 3,
-        save_path: str = "",
-        schedule_enabled: bool = False,
-        schedule_start=None,
-        schedule_end=None,
-        days=None,
-        paused: bool = True,
-    ) -> None:
-        self.name = name
-        self.max_concurrent = max_concurrent
-        self.save_path = save_path or os.path.expanduser("~/Downloads")
-        self.schedule_enabled = schedule_enabled
-        self.schedule_start = schedule_start or dtime(0, 0)
-        self.schedule_end = schedule_end or dtime(23, 59)
-        self.days = days or [0, 1, 2, 3, 4, 5, 6]
-        self.downloads: List[str] = []  # List of GIDs
-        self.paused = paused
-
-    def to_dict(self) -> dict:
-        return {
-            "name": self.name,
-            "max_concurrent": self.max_concurrent,
-            "save_path": self.save_path,
-            "schedule_enabled": self.schedule_enabled,
-            "schedule_start": self.schedule_start.strftime("%H:%M"),
-            "schedule_end": self.schedule_end.strftime("%H:%M"),
-            "days": self.days,
-            "downloads": self.downloads,
-            "paused": self.paused,
-        }
-
-    @classmethod
-    def from_dict(cls, d: dict) -> "Queue":
-        name = d.get("name", "Default")
-        q = cls(name)
-        q.max_concurrent = d.get("max_concurrent", 3)
-        q.save_path = d.get("save_path", os.path.expanduser("~/Downloads"))
-        q.schedule_enabled = d.get("schedule_enabled", False)
-
-        st = d.get("schedule_start", "00:00").split(":")
-        en = d.get("schedule_end", "23:59").split(":")
-        q.schedule_start = dtime(int(st[0]), int(st[1]))
-        q.schedule_end = dtime(int(en[0]), int(en[1]))
-
-        q.days = d.get("days", [0, 1, 2, 3, 4, 5, 6])
-        q.downloads = list(d.get("downloads", []))
-        q.paused = d.get("paused", True)
-        return q
-
-    def is_scheduled_now(self) -> bool:
-        """Check if the queue is allowed to run based on schedule."""
-        if not self.schedule_enabled:
-            return True
-        now = datetime.now()
-        if now.weekday() not in self.days:
-            return False
-        t = now.time().replace(second=0, microsecond=0)
-        start = self.schedule_start
-        end = self.schedule_end
-        if start <= end:
-            return start <= t <= end
-        return t >= start or t <= end
 
 
 class DataStore:
@@ -113,6 +45,8 @@ class DataStore:
             "shutdown_after_finish": False,
             "speed_limit": 0,
             "auto_clear_completed": False,
+            "theme": "system",
+            "default_download_path": os.path.expanduser("~/Downloads"),
         }
 
         self.load()
@@ -134,7 +68,6 @@ class DataStore:
                     self.settings["aria2_secret"] = secret
                     logger.debug("Secret synced from keyring to settings")
             else:
-                # If keyring has no secret but settings does, save to keyring
                 if self.settings.get("aria2_secret"):
                     keyring.set_password(KEYRING_SERVICE, KEYRING_KEY, self.settings["aria2_secret"])
                     logger.debug("Secret synced from settings to keyring")
@@ -159,6 +92,10 @@ class DataStore:
                 # Load settings
                 if "settings" in data:
                     self.settings.update(data["settings"])
+
+                # Ensure default_download_path exists
+                if "default_download_path" not in self.settings:
+                    self.settings["default_download_path"] = os.path.expanduser("~/Downloads")
 
                 # Sync secret from keyring
                 self._sync_secret_from_keyring()
@@ -205,6 +142,15 @@ class DataStore:
             keyring.set_password(KEYRING_SERVICE, KEYRING_KEY, secret)
         except Exception as e:
             logger.warning("Failed to save secret to keyring: %s", e)
+        self.save()
+
+    def get_default_download_path(self) -> str:
+        """Get the default download path."""
+        return self.settings.get("default_download_path", os.path.expanduser("~/Downloads"))
+
+    def set_default_download_path(self, path: str) -> None:
+        """Set the default download path."""
+        self.settings["default_download_path"] = path
         self.save()
 
     def get_queue(self, name: str) -> Optional[Queue]:
