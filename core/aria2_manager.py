@@ -29,6 +29,7 @@ logger: logging.Logger = logging.getLogger(__name__)
 class CertificateManager:
     """
     Manages SSL certificate generation, storage, and fingerprint retrieval.
+    Supports custom user-provided certificates.
     """
 
     CONFIG_DIR: Path = Path.home() / ".config" / "felfelDM"
@@ -40,6 +41,7 @@ class CertificateManager:
     def __init__(self) -> None:
         self._fingerprint: Optional[str] = None
         self._cert_generated: bool = False
+        self._custom_cert_used: bool = False
         self._ensure_dirs()
 
     def _ensure_dirs(self) -> None:
@@ -54,13 +56,56 @@ class CertificateManager:
         except Exception as e:
             logger.warning("Failed to set permissions on %s: %s", path, e)
 
+    def set_custom_certificate(self, cert_path: Path, key_path: Path) -> bool:
+        """
+        Use a custom certificate provided by the user.
+
+        Args:
+            cert_path: Path to the certificate file (PEM format)
+            key_path: Path to the private key file (PEM format)
+
+        Returns:
+            True if the certificate was loaded successfully
+        """
+        if not cert_path.exists() or not key_path.exists():
+            logger.error("Custom certificate or key file not found")
+            return False
+
+        try:
+            # Copy to the cert directory
+            shutil.copy2(cert_path, self.CERT_FILE)
+            shutil.copy2(key_path, self.KEY_FILE)
+            self._set_file_permissions(self.CERT_FILE)
+            self._set_file_permissions(self.KEY_FILE)
+
+            # Compute fingerprint
+            fingerprint = get_fingerprint_from_cert(self.CERT_FILE)
+            if fingerprint:
+                with open(self.FINGERPRINT_FILE, "w", encoding="utf-8") as f:
+                    f.write(fingerprint)
+                self._fingerprint = fingerprint
+                self._cert_generated = True
+                self._custom_cert_used = True
+                logger.info("Custom certificate loaded with fingerprint: %s", fingerprint)
+                return True
+            else:
+                logger.error("Failed to compute certificate fingerprint")
+                return False
+
+        except Exception as e:
+            logger.error("Failed to load custom certificate: %s", e)
+            return False
+
     def generate_certificates(self) -> bool:
         """
         Generate self-signed certificate and private key if missing.
         Also store the SHA-256 fingerprint for pinning.
         """
+        # If custom certificate is already used, skip generation
+        if self._custom_cert_used:
+            return True
+
         if self.CERT_FILE.exists() and self.KEY_FILE.exists() and self.FINGERPRINT_FILE.exists():
-            # Load fingerprint
             try:
                 with open(self.FINGERPRINT_FILE, "r", encoding="utf-8") as f:
                     self._fingerprint = f.read().strip()
@@ -68,18 +113,15 @@ class CertificateManager:
                 return True
             except Exception as e:
                 logger.error("Failed to load fingerprint: %s", e)
-                # Fall through to regenerate
 
         logger.info("Generating self-signed certificate for aria2 HTTPS...")
         try:
-            # Generate private key
             private_key = rsa.generate_private_key(
                 public_exponent=65537,
                 key_size=2048,
                 backend=default_backend()
             )
 
-            # Create self-signed certificate
             subject = issuer = x509.Name([
                 x509.NameAttribute(NameOID.COUNTRY_NAME, "US"),
                 x509.NameAttribute(NameOID.STATE_OR_PROVINCE_NAME, "California"),
@@ -106,7 +148,6 @@ class CertificateManager:
                 .sign(private_key, hashes.SHA256(), default_backend())
             )
 
-            # Write private key
             with open(self.KEY_FILE, "wb") as f:
                 f.write(private_key.private_bytes(
                     encoding=serialization.Encoding.PEM,
@@ -115,19 +156,18 @@ class CertificateManager:
                 ))
             self._set_file_permissions(self.KEY_FILE)
 
-            # Write certificate
             with open(self.CERT_FILE, "wb") as f:
                 f.write(cert.public_bytes(serialization.Encoding.PEM))
             self._set_file_permissions(self.CERT_FILE)
 
-            # Compute and store fingerprint
             fingerprint = get_fingerprint_from_cert(self.CERT_FILE)
             if fingerprint:
                 with open(self.FINGERPRINT_FILE, "w", encoding="utf-8") as f:
                     f.write(fingerprint)
                 self._fingerprint = fingerprint
                 self._cert_generated = True
-                logger.info("Certificate generated with fingerprint: %s", fingerprint)
+                self._custom_cert_used = False
+                logger.info("Self-signed certificate generated with fingerprint: %s", fingerprint)
                 return True
             else:
                 logger.error("Failed to compute certificate fingerprint")
@@ -136,6 +176,10 @@ class CertificateManager:
         except Exception as e:
             logger.error("Certificate generation failed: %s", e)
             return False
+
+    def is_self_signed(self) -> bool:
+        """Return True if using a self-signed certificate."""
+        return self._cert_generated and not self._custom_cert_used
 
     @property
     def cert_file(self) -> Path:
@@ -169,12 +213,17 @@ class Aria2Manager:
         self._lock: Lock = Lock()
         self._started: bool = False
 
-        # Delegate certificate management
         self._cert_manager = CertificateManager()
         self._cert_manager.generate_certificates()
 
+        # Warn if using self-signed certificate
+        if self._cert_manager.is_self_signed():
+            logger.warning(
+                "Using self-signed certificate for aria2 HTTPS. "
+                "For production use, please provide a custom certificate via settings."
+            )
+
     def _generate_secret(self) -> str:
-        """Generate a random secret for RPC."""
         import secrets
         return secrets.token_urlsafe(32)
 
@@ -198,18 +247,20 @@ class Aria2Manager:
     def fingerprint(self) -> Optional[str]:
         return self._cert_manager.fingerprint
 
+    def set_custom_certificate(self, cert_path: Path, key_path: Path) -> bool:
+        """Set a custom certificate for aria2."""
+        return self._cert_manager.set_custom_certificate(cert_path, key_path)
+
     def start(self) -> bool:
         """Start the aria2 subprocess with HTTPS enabled."""
         with self._lock:
             if self._started:
                 return True
 
-            # Ensure certificates are generated
             if not self._cert_manager.is_generated:
                 logger.error("Certificates not generated, cannot start aria2 with HTTPS")
                 return False
 
-            # Build aria2 command with HTTPS
             cmd: List[str] = [
                 self.ARIA2_BIN,
                 f"--rpc-listen-port={self._port}",
@@ -251,10 +302,16 @@ class Aria2Manager:
                     stderr=subprocess.DEVNULL,
                     start_new_session=True,
                 )
-                # Wait for aria2 to start
                 import time
                 time.sleep(1)
                 self._started = True
+
+                # Log certificate type
+                if self._cert_manager.is_self_signed():
+                    logger.info("Using self-signed certificate for aria2")
+                else:
+                    logger.info("Using custom certificate for aria2")
+
                 return True
             except FileNotFoundError:
                 logger.error("aria2c not found in PATH")
