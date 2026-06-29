@@ -35,8 +35,9 @@ class DownloadTableModel(QAbstractTableModel):
                 t = int(row.get("totalLength", 0))
                 if t == 0:
                     status = row.get("status", "")
-                    if status in ["waiting", "active"]:
-                        return "⏳ Getting size..."         
+                    # ✅ برای waiting, active و paused هم "⏳ Getting size..." نشون بده
+                    if status in ["waiting", "active", "paused"]:
+                        return "⏳ Getting size..."
                 return format_size(t) if t > 0 else "—"
             if col == 2:
                 t = int(row.get("totalLength", 0))
