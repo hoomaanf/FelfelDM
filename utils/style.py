@@ -10,7 +10,7 @@ import logging
 from typing import Optional
 
 from PyQt6.QtCore import Qt
-from PyQt6.QtGui import QColor, QPalette, QFont
+from PyQt6.QtGui import QColor, QPalette, QFont  # ← QPalette و QColor به‌درستی ایمپورت شده‌اند
 from PyQt6.QtWidgets import QApplication, QWidget
 
 logger = logging.getLogger(__name__)
@@ -392,7 +392,6 @@ def apply_theme(target, is_dark: bool) -> None:
     if isinstance(target, QApplication):
         target.setPalette(palette)
         target.setStyleSheet(stylesheet)
-        # Force update
         target.processEvents()
     else:
         target.setPalette(palette)
@@ -408,9 +407,8 @@ def detect_theme() -> bool:
     """
     app = QApplication.instance()
     if not app:
-        return True  # Default to dark if no app instance
+        return True
     
-    # Try Qt 6.5+ style hints
     try:
         hints = app.styleHints()
         if hints is not None:
@@ -476,7 +474,7 @@ def detect_theme() -> bool:
             key = winreg.OpenKey(winreg.HKEY_CURRENT_USER,
                                  r'Software\Microsoft\Windows\CurrentVersion\Themes\Personalize')
             value, _ = winreg.QueryValueEx(key, 'AppsUseLightTheme')
-            return value == 0  # 0 = dark
+            return value == 0
         except Exception:
             pass
     
@@ -494,7 +492,6 @@ def detect_theme() -> bool:
         except Exception:
             pass
     
-    # Default to dark if detection fails
     return True
 
 
