@@ -44,11 +44,13 @@ class AsyncAria2RPC:
         if self.secret:
             payload["params"].insert(0, f"token:{self.secret}")
 
-        url = f"http://{self.host}:{self.port}/jsonrpc"
-        if self.host and ':' in self.host:  # IPv6
+        # Handle IPv6
+        if self.host and ':' in self.host:
             url = f"http://[{self.host}]:{self.port}/jsonrpc"
+        else:
+            url = f"http://{self.host}:{self.port}/jsonrpc"
 
-        async with self._semaphore:  # only one lock
+        async with self._semaphore:
             try:
                 async with self._session.post(url, json=payload, ssl=self.verify_ssl) as resp:
                     if resp.status != 200:
@@ -59,6 +61,8 @@ class AsyncAria2RPC:
                         logger.error("RPC error: %s", data["error"])
                         return None
                     return data.get("result")
+            except asyncio.CancelledError:
+                raise
             except Exception as e:
                 logger.error("RPC exception: %s", e)
                 return None
@@ -98,19 +102,40 @@ class AsyncAria2RPC:
         return await self._call("aria2.tellStatus", [gid])
 
     async def batch_call(self, calls: List[Dict]) -> Optional[List]:
-        """Perform multiple calls in one request using system.multicall."""
+        """
+        Perform multiple calls in one request using system.multicall.
+        Each call should be a dict with keys: "method", "params" (optional).
+        Returns a list of results in the same order.
+        """
         if not calls:
             return []
-        # Use system.multicall
+        # Build multicall params
         multicall_params = []
         for call in calls:
-            # call format: {"method": "aria2.getGlobalStat", "params": []}
+            method = call.get("method")
+            params = call.get("params", [])
+            if not method:
+                logger.warning("Skipping call with no method")
+                continue
             multicall_params.append({
-                "methodName": call["method"],
-                "params": call.get("params", [])
+                "methodName": method,
+                "params": params
             })
+        if not multicall_params:
+            return []
         result = await self._call("system.multicall", [multicall_params])
-        return result
+        if result is None:
+            return None
+        # system.multicall returns a list where each element is either the result or an error dict
+        # We'll extract results or log errors
+        results = []
+        for item in result:
+            if isinstance(item, dict) and "error" in item:
+                logger.error("Multicall error: %s", item["error"])
+                results.append(None)
+            else:
+                results.append(item)
+        return results
 
     async def close(self) -> None:
         if self._session:
