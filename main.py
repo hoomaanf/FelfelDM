@@ -11,6 +11,7 @@ from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QFontDatabase, QFont, QIcon
 from PyQt6.QtWidgets import QApplication
 
+from core.service_container import get_container
 from ui.main_window import MainWindow
 from utils.style import detect_theme, apply_modern_theme
 
@@ -102,7 +103,11 @@ def main() -> None:
     is_dark = detect_theme()
     apply_modern_theme(app, is_dark)
 
-    win = MainWindow()
+    # Initialize the service container
+    container = get_container()
+
+    # Create main window with container
+    win = MainWindow(container)
     win.show()
 
     sys.exit(app.exec())
