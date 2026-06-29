@@ -30,39 +30,45 @@ def setup_logging() -> None:
 
 def setup_font() -> None:
     """
-    Load and apply the Inter font if available.
-    Fallback to system font.
+    Load and apply a suitable font for the application.
+    Tries to use system fonts, with fallback to default.
     """
-    # Try to load Inter font from local resources
-    font_paths = [
-        os.path.join(os.path.dirname(os.path.abspath(__file__)), "fonts", "Inter-Regular.ttf"),
-        os.path.join(os.path.dirname(os.path.abspath(__file__)), "fonts", "Inter-Variable.ttf"),
+    app = QApplication.instance()
+    if not app:
+        return
+
+    # List of preferred fonts (first available will be used)
+    preferred_fonts = [
+        "Vazir",           # Popular Persian font
+        "IRANSansWeb",     # Another Persian font
+        "IRANSans",        # Alternative
+        "Noto Sans",       # Google Noto Sans (covers many scripts)
+        "Segoe UI",        # Windows default
+        "system-ui",       # CSS generic
+        "sans-serif",      # Final fallback
     ]
 
     font_family = None
-    for path in font_paths:
-        if os.path.exists(path):
-            font_id = QFontDatabase.addApplicationFont(path)
-            if font_id != -1:
-                families = QFontDatabase.applicationFontFamilies(font_id)
-                if families:
-                    font_family = families[0]
-                    break
 
-    # If Inter not found, use system font
+    # Try to find a preferred font in the system
+    available_families = QFontDatabase.families()
+    for name in preferred_fonts:
+        if name in available_families:
+            font_family = name
+            break
+
+    # If no preferred font is found, use the default application font
     if font_family is None:
-        # Try to use Inter from system if available
-        if "Inter" in QFontDatabase.families():
-            font_family = "Inter"
-        else:
-            # Fallback to Segoe UI or system default
-            font_family = "Segoe UI" if sys.platform == "win32" else "sans-serif"
+        font_family = app.font().family()
+        logging.info("Using default system font: %s", font_family)
+    else:
+        logging.info("Using font: %s", font_family)
 
-    app = QApplication.instance()
-    if app:
-        font = QFont(font_family, 10)
-        app.setFont(font)
-        logging.info("Font loaded: %s", font_family)
+    # Create and apply the font
+    font = QFont(font_family, 10)
+    # Set default fallback for characters not in the font
+    font.setStyleHint(QFont.StyleHint.SansSerif)
+    app.setFont(font)
 
 
 def main() -> None:
@@ -70,13 +76,14 @@ def main() -> None:
     setup_logging()
 
     # High DPI support - using modern approach
-    # Note: AA_EnableHighDpiScaling and AA_UseHighDpiPixmaps are not needed in PyQt6
-    # when using setHighDpiScaleFactorRoundingPolicy.
     QApplication.setHighDpiScaleFactorRoundingPolicy(
         Qt.HighDpiScaleFactorRoundingPolicy.Round
     )
 
     app = QApplication(sys.argv)
+
+    # Use system default style instead of Fusion
+    # app.setStyle('Fusion')  # Removed to use system default
 
     # Load modern font
     setup_font()
