@@ -1,181 +1,125 @@
+# =============================================================================
 # ui/animated_dialog.py
-"""
-Animated dialog base class with fade-in/fade-out animations.
-Provides a modern glass-morphism style container with smooth transitions.
-"""
-
-from PyQt6.QtCore import QPropertyAnimation, QEasingCurve, Qt, pyqtSignal
-from PyQt6.QtWidgets import QDialog, QWidget, QVBoxLayout, QFrame
-from PyQt6.QtGui import QCloseEvent
+# =============================================================================
+from PyQt6.QtWidgets import (
+    QDialog, QVBoxLayout, QWidget, QLabel, QPushButton,
+    QGraphicsOpacityEffect, QFrame
+)
+from PyQt6.QtCore import Qt, QPropertyAnimation, QEasingCurve, QParallelAnimationGroup
+from PyQt6.QtGui import QFont
 
 
 class AnimatedDialog(QDialog):
-    """
-    A base dialog class with smooth fade-in and fade-out animations.
-    Uses a glass-morphism styled container for modern appearance.
-    """
+    """A dialog with glass-morphism and fade-in animation, with proper cleanup."""
 
-    def __init__(
-        self,
-        parent: QWidget = None,
-        flags: Qt.WindowType = Qt.WindowType.Dialog,
-        duration: int = 200,
-    ) -> None:
-        super().__init__(parent, flags)
-
-        self._duration = duration
-        self._fade_animation: QPropertyAnimation = None
-        self._slide_animation: QPropertyAnimation = None
-        self._is_closing = False
-
-        # Set up the dialog
-        self.setWindowFlags(self.windowFlags() | Qt.WindowType.FramelessWindowHint)
-        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
+    def __init__(self, parent=None, title: str = "", message: str = ""):
+        super().__init__(parent)
+        self.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose, True)
+        self.setWindowFlags(Qt.WindowType.FramelessWindowHint)
         self.setModal(True)
-
-        # Main container with glass effect
-        self._container = QFrame(self)
-        self._container.setObjectName("animatedDialogContainer")
-        self._container.setStyleSheet("""
-            QFrame#animatedDialogContainer {
-                background: rgba(26, 26, 46, 0.92);
-                border: 1px solid rgba(255, 255, 255, 0.08);
+        self.setStyleSheet("""
+            QDialog {
+                background: rgba(30, 30, 40, 0.7);
                 border-radius: 16px;
-                backdrop-filter: blur(20px);
+                border: 1px solid rgba(255, 255, 255, 0.1);
+            }
+            QLabel#title {
+                font-size: 18px;
+                font-weight: bold;
+                color: #ffffff;
+            }
+            QLabel#message {
+                font-size: 14px;
+                color: #cccccc;
+            }
+            QPushButton {
+                background: rgba(255, 255, 255, 0.1);
+                color: #ffffff;
+                border: 1px solid rgba(255, 255, 255, 0.2);
+                border-radius: 8px;
+                padding: 8px 20px;
+                font-size: 14px;
+            }
+            QPushButton:hover {
+                background: rgba(255, 255, 255, 0.2);
             }
         """)
 
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(20, 20, 20, 20)
-        layout.addWidget(self._container)
+        self._content_widget = None
+        self._anim_group = None
 
-        self._container_layout = QVBoxLayout(self._container)
-        self._container_layout.setContentsMargins(16, 16, 16, 16)
+        # Main layout
+        main_layout = QVBoxLayout(self)
+        main_layout.setContentsMargins(30, 30, 30, 30)
+        main_layout.setSpacing(16)
 
-        # Create animations
-        self._setup_animations()
+        # Title
+        self.title_label = QLabel(title)
+        self.title_label.setObjectName("title")
+        self.title_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        main_layout.addWidget(self.title_label)
 
-    def _setup_animations(self) -> None:
-        """Setup fade and slide animations."""
-        # Fade animation
-        self._fade_animation = QPropertyAnimation(self, b"windowOpacity")
-        self._fade_animation.setDuration(self._duration)
-        self._fade_animation.setEasingCurve(QEasingCurve.Type.OutCubic)
+        # Message
+        self.message_label = QLabel(message)
+        self.message_label.setObjectName("message")
+        self.message_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.message_label.setWordWrap(True)
+        main_layout.addWidget(self.message_label)
 
-        # Slide animation (scale/position)
-        self._slide_animation = QPropertyAnimation(self._container, b"geometry")
-        self._slide_animation.setDuration(self._duration)
-        self._slide_animation.setEasingCurve(QEasingCurve.Type.OutBack)
+        # Content area (for custom widgets)
+        self.content_frame = QFrame()
+        self.content_frame.setStyleSheet("background: transparent;")
+        self.content_layout = QVBoxLayout(self.content_frame)
+        self.content_layout.setContentsMargins(0, 0, 0, 0)
+        main_layout.addWidget(self.content_frame)
 
-    def set_content_widget(self, widget: QWidget) -> None:
-        """Set the main content widget inside the dialog."""
-        # Clear existing content
-        while self._container_layout.count():
-            item = self._container_layout.takeAt(0)
-            if item.widget():
-                item.widget().deleteLater()
+        # Button row
+        self.button_layout = QVBoxLayout()
+        main_layout.addLayout(self.button_layout)
 
-        self._container_layout.addWidget(widget)
+        # Start with fade-in animation
+        self._start_animation()
 
-    def content_layout(self) -> QVBoxLayout:
-        """Get the content layout for adding widgets."""
-        return self._container_layout
+    def _start_animation(self):
+        """Apply fade-in animation."""
+        opacity = QGraphicsOpacityEffect(self)
+        self.setGraphicsEffect(opacity)
+        anim = QPropertyAnimation(opacity, b"opacity")
+        anim.setDuration(300)
+        anim.setStartValue(0.0)
+        anim.setEndValue(1.0)
+        anim.setEasingCurve(QEasingCurve.Type.OutCubic)
+        anim.start()
 
-    def set_animation_duration(self, duration: int) -> None:
-        """Set the animation duration in milliseconds."""
-        self._duration = duration
-        self._fade_animation.setDuration(duration)
-        self._slide_animation.setDuration(duration)
+    def set_content_widget(self, widget: QWidget):
+        """Set a custom content widget, properly deleting previous one."""
+        if self._content_widget:
+            # Remove and delete old widget
+            self.content_layout.removeWidget(self._content_widget)
+            self._content_widget.deleteLater()
+            self._content_widget = None
 
-    def showEvent(self, event) -> None:
-        """Animate show with fade-in and slide-up."""
-        super().showEvent(event)
+        if widget:
+            self.content_layout.addWidget(widget)
+            self._content_widget = widget
 
-        # Reset closing flag
-        self._is_closing = False
+    def add_button(self, text: str, callback=None):
+        """Add a button to the dialog."""
+        btn = QPushButton(text)
+        if callback:
+            btn.clicked.connect(callback)
+        self.button_layout.addWidget(btn, alignment=Qt.AlignmentFlag.AlignCenter)
+        return btn
 
-        # Set initial state
-        self.setWindowOpacity(0.0)
-        geo = self._container.geometry()
-        self._container.setGeometry(
-            geo.x(),
-            geo.y() + 30,
-            geo.width(),
-            geo.height()
-        )
+    def closeEvent(self, event):
+        """Ensure all child widgets are properly deleted on close."""
+        if self._content_widget:
+            self.content_layout.removeWidget(self._content_widget)
+            self._content_widget.deleteLater()
+            self._content_widget = None
 
-        # Start animations
-        self._fade_animation.setStartValue(0.0)
-        self._fade_animation.setEndValue(1.0)
-        self._fade_animation.start()
+        # Process pending events to ensure deletion
+        from PyQt6.QtCore import QCoreApplication
+        QCoreApplication.processEvents()
 
-        # Slide animation
-        target_geo = self._container.geometry()
-        target_geo.setY(target_geo.y() - 30)
-        self._slide_animation.setStartValue(geo)
-        self._slide_animation.setEndValue(target_geo)
-        self._slide_animation.start()
-
-    def closeEvent(self, event: QCloseEvent) -> None:
-        """Handle close event with animation."""
-        if not self._is_closing:
-            event.ignore()
-            self._start_close_animation()
-        else:
-            super().closeEvent(event)
-
-    def _start_close_animation(self) -> None:
-        """Start the close animation."""
-        self._is_closing = True
-        self._fade_animation.setStartValue(1.0)
-        self._fade_animation.setEndValue(0.0)
-        self._fade_animation.finished.connect(self._on_close_animation_finished)
-        self._fade_animation.start()
-
-    def _on_close_animation_finished(self) -> None:
-        """Handle close animation completion."""
-        self._fade_animation.finished.disconnect()
-        self._is_closing = False
-        super().close()
-
-    def accept(self) -> None:
-        """Accept the dialog with animation."""
-        if not self._is_closing:
-            self._is_closing = True
-            self._fade_animation.setStartValue(1.0)
-            self._fade_animation.setEndValue(0.0)
-            self._fade_animation.finished.connect(self._on_accept_finished)
-            self._fade_animation.start()
-
-    def _on_accept_finished(self) -> None:
-        """Handle accept animation completion."""
-        self._fade_animation.finished.disconnect()
-        self._is_closing = False
-        super().accept()
-
-    def reject(self) -> None:
-        """Reject the dialog with animation."""
-        if not self._is_closing:
-            self._is_closing = True
-            self._fade_animation.setStartValue(1.0)
-            self._fade_animation.setEndValue(0.0)
-            self._fade_animation.finished.connect(self._on_reject_finished)
-            self._fade_animation.start()
-
-    def _on_reject_finished(self) -> None:
-        """Handle reject animation completion."""
-        self._fade_animation.finished.disconnect()
-        self._is_closing = False
-        super().reject()
-
-    def exec(self) -> int:
-        """
-        Execute the dialog and return the result code.
-        This overrides QDialog.exec() to ensure proper behavior.
-        """
-        self.show()
-        return super().exec()
-
-    def exec_(self) -> int:
-        """Alias for exec() for compatibility."""
-        return self.exec()
+        super().closeEvent(event)
