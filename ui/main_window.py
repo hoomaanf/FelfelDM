@@ -15,7 +15,7 @@ from PyQt6.QtWidgets import (
     QPushButton, QTableView, QHeaderView, QComboBox,
     QLabel, QToolBar, QMenu, QSystemTrayIcon, QMenuBar,
     QMessageBox, QLineEdit, QFileDialog, QApplication, QStatusBar,
-    QInputDialog, QDialog,  # ← QDialog اضافه شد
+    QInputDialog, QDialog,
 )
 
 from core import Aria2RPC, BackendWorker, DataStore, LocalServer
@@ -276,10 +276,10 @@ class MainWindow(QMainWindow):
         self.aria2_manager = Aria2Manager()
         self.aria2_manager.start()
 
-        # aria2 RPC client
+        # aria2 RPC client - استفاده از attribute به جای .get()
         self.aria2 = Aria2RPC(
-            self.store.settings.get("aria2_host", "http://localhost"),
-            self.store.settings.get("aria2_port", 6800),
+            self.store.settings.aria2_host,
+            self.store.settings.aria2_port,
             self.store.get_secret(),
             verify_ssl=True,
         )
@@ -328,7 +328,8 @@ class MainWindow(QMainWindow):
             self.store.save()
 
     def _setup_worker(self) -> None:
-        async_mode = self.store.settings.get("async_mode", False)
+        # استفاده از attribute
+        async_mode = self.store.settings.async_mode
         if async_mode:
             from core.async_worker import AsyncWorker
             from core.aria2_rpc_async import AsyncAria2RPC
@@ -446,7 +447,8 @@ class MainWindow(QMainWindow):
 
     def _create_async_mode_indicator(self) -> AsyncModeIndicator:
         self.async_mode_indicator = AsyncModeIndicator()
-        async_mode = self.store.settings.get("async_mode", False)
+        # استفاده از attribute
+        async_mode = self.store.settings.async_mode
         self.async_mode_indicator.set_mode(async_mode)
         return self.async_mode_indicator
 
@@ -614,7 +616,8 @@ class MainWindow(QMainWindow):
         if dialog.exec() == QDialog.DialogCode.Accepted:
             # Reload settings
             self._apply_theme_from_settings()
-            async_mode = self.store.settings.get("async_mode", False)
+            # استفاده از attribute
+            async_mode = self.store.settings.async_mode
             self.async_mode_indicator.set_mode(async_mode)
             # Restart worker if async mode changed
             self._restart_worker()
@@ -628,7 +631,7 @@ class MainWindow(QMainWindow):
     def _apply_theme_from_settings(self) -> None:
         """Apply the theme based on settings."""
         try:
-            theme_setting = self.store.settings.get("theme", "system")
+            theme_setting = self.store.settings.theme
             if theme_setting == "system":
                 is_dark = detect_theme()
             elif theme_setting == "dark":
