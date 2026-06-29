@@ -6,7 +6,7 @@ Aria2 health monitor: periodically checks and restarts if necessary.
 import logging
 import threading
 import time
-from typing import Optional
+from typing import Optional, List, Dict, Any
 
 from PyQt6.QtCore import QObject, QTimer, pyqtSignal
 
@@ -82,26 +82,25 @@ class Aria2Monitor(QObject):
                 new_secret = self.aria2_manager.get_secret()
                 self.aria2.set_secret(new_secret)
 
-                # Update fingerprint if changed (using the manager's method)
-                new_fingerprint = self.aria2_manager.get_certificate_fingerprint()
-                if new_fingerprint:
-                    # The fingerprint is stored in the manager, we just need to ensure
-                    # the RPC client uses the new certificate.
-                    # Since we don't have a direct fingerprint attribute in Aria2RPC,
-                    # we use the manager's fingerprint for reference.
-                    pass
-
                 # Ensure the session is recreated with new settings
                 self.aria2._ensure_session()
 
-                # Resume all active GIDs from session
+                # Resume all active GIDs from session using batch call
                 gids = self.session_mgr.load_gids()
-                for gid in gids:
-                    # Check if GID still exists
-                    status = self.aria2.tell_status(gid, ["gid"])
-                    if status and status.get("gid"):
-                        self.aria2.resume(gid)
-                    else:
-                        logger.warning("GID %s not found, skipping resume", gid)
+                if gids:
+                    # Build batch calls for each GID
+                    batch_calls = []
+                    for gid in gids:
+                        batch_calls.append({
+                            "method": "aria2.tellStatus",
+                            "params": [gid, ["gid"]],  # just check existence
+                        })
+                    # Execute batch
+                    results = self.aria2.batch_call(batch_calls)
+                    for gid, result in zip(gids, results):
+                        if result and result.get("gid"):
+                            self.aria2.resume(gid)
+                        else:
+                            logger.warning("GID %s not found, skipping resume", gid)
             else:
                 logger.critical("Failed to restart aria2. Manual intervention may be required.")
