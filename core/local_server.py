@@ -4,6 +4,7 @@
 import json
 import secrets
 import logging
+import socket
 from pathlib import Path
 from typing import Optional, Dict, Any
 from http.server import HTTPServer, BaseHTTPRequestHandler
@@ -12,7 +13,6 @@ import urllib.parse
 
 logger = logging.getLogger(__name__)
 
-# Token storage
 TOKEN_DIR = Path.home() / ".felfeldm"
 TOKEN_FILE = TOKEN_DIR / "token.json"
 
@@ -34,12 +34,10 @@ class TokenManager:
         except Exception as e:
             logger.warning("Failed to read token: %s", e)
 
-        # Create new token
         token = secrets.token_urlsafe(32)
         try:
             with open(TOKEN_FILE, "w", encoding="utf-8") as f:
                 json.dump({"token": token}, f, indent=2)
-            # Restrict permissions
             TOKEN_FILE.chmod(0o600)
         except Exception as e:
             logger.error("Failed to save token: %s", e)
@@ -47,29 +45,24 @@ class TokenManager:
 
 
 class LocalServerHandler(BaseHTTPRequestHandler):
-    """HTTP handler for browser extension communication."""
-
-    token: str = ""  # class variable set by server
+    token: str = ""
 
     def do_GET(self):
-        """Handle GET requests from browser extension."""
         parsed = urllib.parse.urlparse(self.path)
         if parsed.path != "/token":
             self.send_error(404, "Not found")
             return
 
-        # Verify token from query parameter
         query = urllib.parse.parse_qs(parsed.query)
         provided_token = query.get("token", [None])[0]
         if provided_token != self.token:
             self.send_error(401, "Unauthorized")
             return
 
-        # Respond with RPC info
         response = {
             "host": self.server.server_address[0],
             "port": self.server.server_address[1],
-            "secret": self.token,  # extension uses secret for aria2
+            "secret": self.token,
             "protocol": "http"
         }
         self.send_response(200)
@@ -78,40 +71,80 @@ class LocalServerHandler(BaseHTTPRequestHandler):
         self.wfile.write(json.dumps(response).encode("utf-8"))
 
     def log_message(self, format, *args):
-        """Suppress verbose logging."""
         pass
 
 
 class LocalServer:
-    """HTTP server for browser extension integration."""
+    """HTTP server for browser extension integration with flexible port binding."""
 
-    def __init__(self, host: str = "127.0.0.1", port: int = 8080):
+    def __init__(self, host: str = "127.0.0.1", port: Optional[int] = None):
         self.host = host
-        self.port = port
+        self.port = port or self._get_default_port()
         self._server: Optional[HTTPServer] = None
         self._thread: Optional[threading.Thread] = None
         self._running = False
         self.token = TokenManager.get_or_create_token()
 
+    @staticmethod
+    def _get_default_port() -> int:
+        """Get port from config or default to 8080."""
+        config_file = Path.home() / ".felfeldm" / "local_server_config.json"
+        if config_file.exists():
+            try:
+                with open(config_file, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                    port = data.get("port")
+                    if port and isinstance(port, int):
+                        return port
+            except Exception:
+                pass
+        return 8080
+
+    def _find_available_port(self, start_port: int, max_tries: int = 10) -> Optional[int]:
+        """Try to find an available port starting from start_port."""
+        for port in range(start_port, start_port + max_tries):
+            try:
+                test_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                test_sock.bind((self.host, port))
+                test_sock.close()
+                return port
+            except OSError:
+                continue
+        return None
+
     def start(self) -> bool:
-        """Start the HTTP server in a background thread."""
+        """Start the HTTP server on an available port."""
         if self._running:
             return True
+
+        # Try given port; if busy, find next available
+        actual_port = self.port
         try:
-            # Set token as class variable for handler
+            test_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            test_sock.bind((self.host, actual_port))
+            test_sock.close()
+        except OSError:
+            logger.warning("Port %d is busy, searching for available port...", actual_port)
+            new_port = self._find_available_port(actual_port + 1)
+            if new_port is None:
+                logger.error("No available port found in range")
+                return False
+            actual_port = new_port
+            self.port = actual_port
+
+        try:
             LocalServerHandler.token = self.token
-            self._server = HTTPServer((self.host, self.port), LocalServerHandler)
+            self._server = HTTPServer((self.host, actual_port), LocalServerHandler)
             self._running = True
             self._thread = threading.Thread(target=self._serve, daemon=True)
             self._thread.start()
-            logger.info("Local server started on %s:%d", self.host, self.port)
+            logger.info("Local server started on %s:%d", self.host, actual_port)
             return True
         except Exception as e:
             logger.error("Failed to start local server: %s", e)
             return False
 
     def _serve(self) -> None:
-        """Serve requests until stopped."""
         while self._running:
             try:
                 self._server.handle_request()
@@ -120,7 +153,6 @@ class LocalServer:
                 break
 
     def stop(self) -> None:
-        """Stop the server."""
         self._running = False
         if self._server:
             self._server.shutdown()
@@ -131,5 +163,4 @@ class LocalServer:
         logger.info("Local server stopped")
 
     def get_token(self) -> str:
-        """Return the current token."""
         return self.token
