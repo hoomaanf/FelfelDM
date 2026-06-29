@@ -20,3 +20,6 @@ RPC_POLL_INTERVAL = 1  # seconds
 DEFAULT_DOWNLOAD_PATH = Path.home() / "Downloads"
 DEFAULT_MAX_CONCURRENT = 5
 DEFAULT_SPEED_LIMIT = 0  # 0 means unlimited
+
+# Note: HISTORY_FILE is removed as it was unused.
+# If history is needed, implement a HistoryManager class.
