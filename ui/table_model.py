@@ -11,6 +11,19 @@ from core.worker import BackendWorker
 
 logger = logging.getLogger(__name__)
 
+# Global event loop shared across all table updates
+_loop: Optional[asyncio.AbstractEventLoop] = None
+
+
+def _get_event_loop() -> asyncio.AbstractEventLoop:
+    """Get or create a persistent event loop."""
+    global _loop
+    if _loop is None or _loop.is_closed():
+        _loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(_loop)
+        logger.info("Created new asyncio event loop")
+    return _loop
+
 
 class DownloadTableModel(QAbstractTableModel):
     """Table model for displaying downloads with live updates from worker."""
@@ -27,17 +40,18 @@ class DownloadTableModel(QAbstractTableModel):
         self._worker.stats_updated.connect(self._on_stats_updated)
 
     def _on_stats_updated(self, stats: dict) -> None:
-        """Fetch download list from aria2 and update model."""
+        """Fetch download list from aria2 and update model using a persistent event loop."""
         # If worker is not running, skip update
         if hasattr(self._worker, '_running') and not self._worker._running:
             logger.debug("Worker not running, skipping table update")
             return
 
+        loop = _get_event_loop()
         try:
-            # Use asyncio.run() which manages the event loop automatically
-            active = asyncio.run(self._worker.async_aria2.tell_active()) or []
-            waiting = asyncio.run(self._worker.async_aria2.tell_waiting(0, 100)) or []
-            stopped = asyncio.run(self._worker.async_aria2.tell_stopped(0, 100)) or []
+            # Run async coroutines using the persistent loop
+            active = loop.run_until_complete(self._worker.async_aria2.tell_active()) or []
+            waiting = loop.run_until_complete(self._worker.async_aria2.tell_waiting(0, 100)) or []
+            stopped = loop.run_until_complete(self._worker.async_aria2.tell_stopped(0, 100)) or []
 
             all_downloads = active + waiting + stopped
 
@@ -78,6 +92,15 @@ class DownloadTableModel(QAbstractTableModel):
 
         except asyncio.CancelledError:
             logger.info("Table update cancelled")
+        except RuntimeError as e:
+            if "Event loop is closed" in str(e):
+                logger.warning("Event loop closed, recreating...")
+                global _loop
+                _loop = None
+                # Retry once with a new loop
+                self._on_stats_updated(stats)
+            else:
+                logger.error("Runtime error in table update: %s", e)
         except Exception as e:
             logger.error("Failed to update download list: %s", e)
 
