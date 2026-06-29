@@ -11,10 +11,12 @@ from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QFontDatabase, QFont, QIcon
 from PyQt6.QtWidgets import QApplication
 
-from core.service_container import get_container
 from ui.main_window import MainWindow
-from utils.style import detect_theme, apply_modern_theme
+from utils.style import detect_theme
 
+# =============================================================================
+# Logging Setup
+# =============================================================================
 
 def setup_logging() -> None:
     """Configure logging for the application."""
@@ -28,62 +30,68 @@ def setup_logging() -> None:
     )
 
 
+# =============================================================================
+# Font Setup
+# =============================================================================
+
 def setup_font() -> None:
     """
-    Load and apply a suitable font for the application.
-    Tries to use system fonts, with fallback to default.
+    Load and apply the Vazir font if available.
+    Fallback to system font.
     """
     app = QApplication.instance()
     if not app:
         return
 
-    # List of preferred fonts (first available will be used)
+    # List of preferred fonts in order
     preferred_fonts = [
-        "Vazir",           # Popular Persian font
-        "IRANSansWeb",     # Another Persian font
-        "IRANSans",        # Alternative
-        "Noto Sans",       # Google Noto Sans (covers many scripts)
-        "Segoe UI",        # Windows default
-        "system-ui",       # CSS generic
-        "sans-serif",      # Final fallback
+        "Vazir",
+        "IRANSansWeb",
+        "IRANSans",
+        "Noto Sans",
+        "Segoe UI",
+        "system-ui",
+        "sans-serif",
     ]
 
-    font_family = None
+    # Check if any preferred font is available in the system
+    font_families = QFontDatabase.families()
+    chosen_font = None
 
-    # Try to find a preferred font in the system
-    available_families = QFontDatabase.families()
-    for name in preferred_fonts:
-        if name in available_families:
-            font_family = name
+    for font_name in preferred_fonts:
+        if font_name in font_families:
+            chosen_font = font_name
             break
 
-    # If no preferred font is found, use the default application font
-    if font_family is None:
-        font_family = app.font().family()
-        logging.info("Using default system font: %s", font_family)
+    if chosen_font:
+        font = QFont(chosen_font, 10)
+        app.setFont(font)
+        logging.info("Using font: %s", chosen_font)
     else:
-        logging.info("Using font: %s", font_family)
+        logging.info("No preferred font found, using system default")
 
-    # Create and apply the font
-    font = QFont(font_family, 10)
-    # Set default fallback for characters not in the font
-    font.setStyleHint(QFont.StyleHint.SansSerif)
-    app.setFont(font)
 
+# =============================================================================
+# Main Application
+# =============================================================================
 
 def main() -> None:
     """Application entry point."""
     setup_logging()
 
-    # High DPI support - using modern approach
+    # High DPI support
     QApplication.setHighDpiScaleFactorRoundingPolicy(
         Qt.HighDpiScaleFactorRoundingPolicy.Round
     )
+    QApplication.setAttribute(Qt.ApplicationAttribute.AA_EnableHighDpiScaling, True)
+    QApplication.setAttribute(Qt.ApplicationAttribute.AA_UseHighDpiPixmaps, True)
 
     app = QApplication(sys.argv)
 
-    # Use system default style instead of Fusion
-    # app.setStyle('Fusion')  # Removed to use system default
+    # Set application properties
+    app.setApplicationName("FelfelDM")
+    app.setOrganizationName("FelfelDM")
+    app.setQuitOnLastWindowClosed(False)
 
     # Load modern font
     setup_font()
@@ -95,25 +103,21 @@ def main() -> None:
         base_path = os.path.dirname(os.path.abspath(__file__))
 
     icon_paths = [
-        os.path.join(base_path, "logo/icon256.png"),
-        os.path.join(base_path, "logo/icon128.png"),
+        os.path.join(base_path, "logo", "icon256.png"),
+        os.path.join(base_path, "logo", "icon128.png"),
+        os.path.join(base_path, "logo", "icon64.png"),
     ]
     for path in icon_paths:
         if os.path.exists(path):
             app.setWindowIcon(QIcon(path))
+            logging.info("Icon loaded from: %s", path)
             break
 
-    app.setApplicationName("FelfelDM")
-    app.setQuitOnLastWindowClosed(False)
+    # Do NOT apply theme here - it will be applied in MainWindow
+    # to avoid double application and potential crashes
 
-    # Detect and apply modern theme
-    is_dark = detect_theme()
-    apply_modern_theme(app, is_dark)
-
-    # Initialize the service container
-    container = get_container()
-
-    # Create main window with container
+    # Create and show main window
+    container = None  # Service container if used
     win = MainWindow(container)
     win.show()
 
