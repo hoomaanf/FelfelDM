@@ -22,9 +22,19 @@ class BackendWorker(QThread):
             waiting = self.aria2.tell_waiting() or []
             stopped = self.aria2.tell_stopped() or []
 
+            downloads = active + waiting + stopped
+
+            for i, d in enumerate(downloads):
+                gid = d.get("gid")
+                if gid:
+                    full = self.aria2.tell_status(gid)
+                    if full:
+                        downloads[i] = full
+
             self.stats_updated.emit({
                 "connected": True,
                 "stat": stat,
+                "downloads": downloads,
                 "active": active,
                 "waiting": waiting,
                 "stopped": stopped,

@@ -24,6 +24,7 @@ class MainWindow(QMainWindow):
         self.setMinimumSize(1050, 680)
 
         self.store = DataStore()
+        self._pending_pause = set()
         
         default_exists = False
         for q in self.store.queues:
@@ -848,16 +849,43 @@ class MainWindow(QMainWindow):
             for url in d["urls"]:
                 gid = self.aria2.add_url(url, options)
                 if gid:
+                    self._all_downloads[gid] = {
+                        "gid": gid,
+                        "name": url.split("/")[-1] or "Unknown",
+                        "status": "waiting",
+                        "totalLength": 0,
+                        "completedLength": 0,
+                        "downloadSpeed": 0,
+                        "connections": 0,
+                        "files": [],
+                        "errorMessage": "",
+                        "category": "📁 Other",
+                    }
+
+                    self._refresh_table()
+                    QApplication.processEvents()
+                if gid:
                     if gid in self._cleared_gids:
                         self._cleared_gids.remove(gid)
                     q.downloads.append(gid)
                     new_gids.append(gid)
                     added += 1
-                    self.aria2.pause(gid)
-                    if gid in self._all_downloads:
-                        self._all_downloads[gid]["status"] = "paused"
-                        self._all_downloads[gid]["downloadSpeed"] = 0
+                    if gid:
+                        self._pending_pause.add(gid)
 
+                        self._all_downloads[gid] = {
+                            "gid": gid,
+                            "name": url.split("/")[-1] or "Unknown",
+                            "status": "waiting",
+                            "totalLength": 0,
+                            "completedLength": 0,
+                            "downloadSpeed": 0,
+                            "connections": 0,
+                            "files": [],
+                            "errorMessage": "",
+                            "category": "📁 Other"
+                        }
+            self._refresh_table()
             self.store.save()
             self._refresh_queue_list()
             self._update_queue_buttons()
@@ -875,6 +903,7 @@ class MainWindow(QMainWindow):
                                     QSystemTrayIcon.MessageIcon.Information, 2000)
 
             self._refresh_table()
+            
     def _add_single_download(self):
         dlg = SingleDownloadDialog(self)
 
@@ -1433,10 +1462,17 @@ class MainWindow(QMainWindow):
                     all_downloads_dict[gid] = data
 
         
-        for gid, old_data in self._all_downloads.items():
-            if gid in all_downloads_dict and old_data.get("status") == "paused":
-                all_downloads_dict[gid]["status"] = "paused"
-                all_downloads_dict[gid]["downloadSpeed"] = 0
+        for gid, data in all_downloads_dict.items():
+            if (
+                gid in self._pending_pause
+                and int(data.get("totalLength", 0)) > 0
+            ):
+                self.aria2.pause(gid)
+
+                data["status"] = "paused"
+                data["downloadSpeed"] = 0
+
+                self._pending_pause.remove(gid)
 
         self._all_downloads = all_downloads_dict
 
@@ -1520,6 +1556,8 @@ class MainWindow(QMainWindow):
         if "cannot be paused now" in message:
             return
         if "cannot be unpaused now" in message:
+            return
+        if "is not found" in message:
             return
         self.tray.showMessage("FelfelDM ⚠", message,
                             QSystemTrayIcon.MessageIcon.Warning, 3000)
