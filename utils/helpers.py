@@ -3,11 +3,12 @@
 # =============================================================================
 import os
 from typing import Union, List, Optional
+from pathlib import Path
 
 # Units for size formatting
 UNITS = ["B", "KB", "MB", "GB", "TB", "PB", "EB"]
 
-# Category mapping moved to module level
+# Category mapping moved to module level (fixes problem 46)
 CATEGORY_MAP = {
     "video": ["mp4", "mkv", "avi", "mov", "wmv", "flv", "webm"],
     "audio": ["mp3", "wav", "flac", "aac", "ogg", "wma"],
@@ -64,12 +65,15 @@ def is_valid_url(url: str) -> bool:
     return False
 
 
-def check_disk_space(path: str, required_bytes: int = 0) -> bool:
-    """Check if there is enough free space on the given path."""
+def check_disk_space(path: Union[str, Path], required_bytes: int = 0) -> bool:
+    """
+    Check if there is enough free space on the given path.
+    If required_bytes <= 0, returns True immediately.
+    """
     if required_bytes <= 0:
         return True
     try:
-        stat = os.statvfs(path)
+        stat = os.statvfs(str(path))
         free = stat.f_frsize * stat.f_bavail
         return free >= required_bytes
     except OSError:
