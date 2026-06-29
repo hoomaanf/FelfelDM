@@ -8,7 +8,7 @@ from PyQt6.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QPushButton,
     QTableView, QLineEdit, QLabel, QMessageBox, QHeaderView
 )
-from PyQt6.QtCore import Qt, QSortFilterProxyModel, QModelIndex
+from PyQt6.QtCore import Qt, QSortFilterProxyModel, QModelIndex, QTimer
 
 from ui.table_model import DownloadTableModel
 from ui.dialogs import AddDownloadDialog
@@ -86,13 +86,12 @@ class MainWindow(QMainWindow):
         self.worker.download_removed.connect(self._on_download_removed)
         self.worker.stats_updated.connect(self.update_status)
 
-        # Start worker
-        self.worker.start()
+        # Start worker after UI is fully loaded
+        QTimer.singleShot(0, self.worker.start)
 
     def _on_download_added(self, gid: str) -> None:
         if gid:
             logger.info(f"Download added: {gid}")
-        # else ignore
 
     def _on_download_removed(self, gid: str) -> None:
         if gid:
