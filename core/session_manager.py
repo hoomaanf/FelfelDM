@@ -21,9 +21,11 @@ class SessionManager(QObject):
     """
     Save and restore download sessions with rich metadata.
     Auto-saves periodically every 30 seconds.
+    Cleans up entries older than 7 days on load.
     """
 
     SESSION_FILE: Path = Path.home() / ".cache" / "felfelDM" / "session.json"
+    MAX_AGE_DAYS: int = 7
 
     def __init__(self, store: DataStore) -> None:
         super().__init__()
@@ -80,13 +82,60 @@ class SessionManager(QObject):
         if self._active_downloads:
             self._do_save()
 
+    def cleanup_old_sessions(self) -> None:
+        """
+        Remove session entries older than MAX_AGE_DAYS.
+        This is called automatically during load.
+        """
+        try:
+            if not self.SESSION_FILE.exists():
+                return
+
+            with self.SESSION_FILE.open("r", encoding="utf-8") as f:
+                data = json.load(f)
+
+            downloads = data.get("active_downloads", [])
+            now = datetime.datetime.now()
+            cutoff = now - datetime.timedelta(days=self.MAX_AGE_DAYS)
+
+            cleaned = []
+            for entry in downloads:
+                ts_str = entry.get("timestamp")
+                if ts_str:
+                    try:
+                        ts = datetime.datetime.fromisoformat(ts_str)
+                        if ts > cutoff:
+                            cleaned.append(entry)
+                    except ValueError:
+                        # If timestamp is invalid, keep the entry to be safe
+                        cleaned.append(entry)
+                else:
+                    # No timestamp, keep it
+                    cleaned.append(entry)
+
+            if len(cleaned) != len(downloads):
+                data["active_downloads"] = cleaned
+                with self.SESSION_FILE.open("w", encoding="utf-8") as f:
+                    json.dump(data, f, indent=2)
+                logger.info(
+                    "Cleaned up %d old session entries (older than %d days)",
+                    len(downloads) - len(cleaned),
+                    self.MAX_AGE_DAYS
+                )
+        except Exception as e:
+            logger.error("Failed to cleanup old sessions: %s", e)
+
     def load_session(self) -> List[Dict[str, Any]]:
         """
         Load list of active downloads with metadata from session file.
+        Automatically cleans up entries older than 7 days.
 
         Returns:
             List of dicts containing download metadata.
         """
+        # Clean up old sessions before loading
+        self.cleanup_old_sessions()
+
         try:
             if not self.SESSION_FILE.exists():
                 return []
