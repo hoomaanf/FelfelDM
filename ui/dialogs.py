@@ -7,7 +7,7 @@ and progress display.
 import logging
 import os
 import re
-from typing import List, Optional, Dict, Any, Union
+from typing import List, Optional, Dict, Any
 
 from PyQt6.QtCore import Qt, pyqtSignal
 from PyQt6.QtWidgets import (
@@ -19,26 +19,62 @@ from PyQt6.QtWidgets import (
 )
 
 from core.data_store import Queue, DataStore
-from utils.helpers import get_icon
+from ui.icons import get_icon
 
 logger = logging.getLogger(__name__)
 
 
 def is_valid_url(url: str) -> bool:
-    """Validate a URL or magnet link."""
+    """
+    Validate a URL or magnet link using comprehensive regex.
+
+    Supports:
+    - HTTP/HTTPS URLs
+    - FTP URLs
+    - Magnet links
+    - IPv4 and IPv6 addresses
+    - Localhost
+    """
     if not url or not url.strip():
         return False
+
     url = url.strip()
+
+    # Magnet links
     if url.startswith("magnet:?xt=urn:"):
         return True
-    try:
-        from urllib.parse import urlparse
-        parsed = urlparse(url)
-        if parsed.scheme and parsed.netloc:
-            return True
-        return False
-    except Exception:
-        return False
+
+    # Comprehensive URL pattern
+    # Supports: http://, https://, ftp://, ftps://
+    # Supports: domain.com, sub.domain.com, localhost
+    # Supports: IPv4 addresses, IPv6 addresses
+    # Supports: ports, paths, query parameters
+    pattern = re.compile(
+        r'^(?:[a-zA-Z][a-zA-Z0-9+\-.]*://)?'  # Optional scheme
+        r'(?:'
+        r'(?:[a-zA-Z0-9\-._~%!$&\'()*+,;=]+@)?'  # Optional user info
+        r'(?:'
+        r'\[[0-9a-fA-F:]+\]|'  # IPv6 address
+        r'[a-zA-Z0-9\-._~%]+'  # Domain name
+        r'|'
+        r'(?:[0-9]{1,3}\.){3}[0-9]{1,3}'  # IPv4 address
+        r'|'
+        r'localhost'  # localhost
+        r')'
+        r'(?::[0-9]{1,5})?'  # Optional port
+        r'(?:/[a-zA-Z0-9\-._~%!$&\'()*+,;=:@/]*)?'  # Path
+        r'(?:\?[a-zA-Z0-9\-._~%!$&\'()*+,;=:@/?]*)?'  # Query
+        r'(?:#[a-zA-Z0-9\-._~%!$&\'()*+,;=:@/?]*)?'  # Fragment
+        r')$'
+    )
+
+    # Also support raw IP/domain without scheme
+    if re.match(r'^[a-zA-Z0-9\-._~%]+\.[a-zA-Z]{2,}$', url):
+        return True
+    if re.match(r'^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}$', url):
+        return True
+
+    return bool(pattern.match(url))
 
 
 class UrlInputWidget(QWidget):
@@ -54,7 +90,7 @@ class UrlInputWidget(QWidget):
         self.url_edit.setMinimumHeight(80)
         layout.addWidget(self.url_edit)
 
-        import_btn = QPushButton(get_icon('document-open'), "Import from File")
+        import_btn = QPushButton(get_icon('document-new'), "Import from File")
         import_btn.clicked.connect(self._import_from_file)
         layout.addWidget(import_btn)
 
@@ -216,7 +252,7 @@ class TorrentFileSelectionDialog(QDialog):
                     from utils.helpers import format_size
                     item_text = f"{name} ({format_size(size)})"
                     item = QListWidgetItem(item_text)
-                    item.setData(Qt.ItemDataRole.UserRole, idx + 1)  # 1-based index for aria2
+                    item.setData(Qt.ItemDataRole.UserRole, idx + 1)
                     item.setCheckState(Qt.CheckState.Checked)
                     self.file_list.addItem(item)
 
@@ -253,7 +289,6 @@ class TorrentFileSelectionDialog(QDialog):
                 item.setCheckState(Qt.CheckState.Unchecked)
 
     def get_selected_files(self) -> List[int]:
-        """Return list of selected file indices (1-based)."""
         indices = []
         for i in range(self.file_list.count()):
             item = self.file_list.item(i)
@@ -315,15 +350,6 @@ class AddTorrentDialog(QDialog):
         if file_path:
             self._torrent_path = file_path
             self.file_label.setText(os.path.basename(file_path))
-            # Try to fetch torrent info
-            try:
-                from core import Aria2RPC
-                # Temporary RPC client just for info - will be reused later
-                # In practice, we'll use the main instance
-                self._torrent_info = None
-                self.file_label.setText(f"{os.path.basename(file_path)} (Info loaded)")
-            except Exception as e:
-                logger.warning("Could not load torrent info: %s", e)
 
     def get_torrent_path(self) -> Optional[str]:
         return self._torrent_path
@@ -339,13 +365,13 @@ class AddTorrentDialog(QDialog):
 
 
 class SettingsDialog(QDialog):
-    """Settings dialog with theme selection."""
+    """Settings dialog with theme selection and default download path."""
 
     def __init__(self, store: DataStore, parent: Optional[QWidget] = None) -> None:
         super().__init__(parent)
         self.store = store
         self.setWindowTitle("Settings")
-        self.setMinimumWidth(400)
+        self.setMinimumWidth(450)
         self._setup_ui()
 
     def _setup_ui(self) -> None:
@@ -379,6 +405,15 @@ class SettingsDialog(QDialog):
         self.auto_clear_check.setChecked(self.store.settings.get("auto_clear_completed", False))
         form.addRow("Auto-clear completed:", self.auto_clear_check)
 
+        # Default download path
+        default_path_layout = QHBoxLayout()
+        self.default_path_edit = QLineEdit(self.store.get_default_download_path())
+        default_path_layout.addWidget(self.default_path_edit)
+        browse_btn = QPushButton("Browse...")
+        browse_btn.clicked.connect(self._browse_default_path)
+        default_path_layout.addWidget(browse_btn)
+        form.addRow("Default Download Path:", default_path_layout)
+
         layout.addWidget(group)
 
         # Theme settings
@@ -404,6 +439,13 @@ class SettingsDialog(QDialog):
         buttons.rejected.connect(self.reject)
         layout.addWidget(buttons)
 
+    def _browse_default_path(self) -> None:
+        path = QFileDialog.getExistingDirectory(
+            self, "Select Default Download Location", self.default_path_edit.text()
+        )
+        if path:
+            self.default_path_edit.setText(path)
+
     def _save(self) -> None:
         self.store.settings["connections"] = self.connections_spin.value()
         self.store.settings["max_concurrent"] = self.max_concurrent_spin.value()
@@ -411,6 +453,7 @@ class SettingsDialog(QDialog):
         self.store.settings["shutdown_after_finish"] = self.shutdown_check.isChecked()
         self.store.settings["auto_clear_completed"] = self.auto_clear_check.isChecked()
         self.store.settings["theme"] = self.theme_combo.currentData()
+        self.store.set_default_download_path(self.default_path_edit.text())
         self.store.save()
         self.accept()
 
@@ -442,8 +485,9 @@ class AddDownloadDialog(QDialog):
         self.url_widget = UrlInputWidget()
         layout.addWidget(self.url_widget)
 
-        # Path selector
-        self.path_widget = PathSelectorWidget()
+        # Path selector with default from store
+        default_path = self._store.get_default_download_path()
+        self.path_widget = PathSelectorWidget(default_path)
         layout.addWidget(self.path_widget)
 
         # Options
