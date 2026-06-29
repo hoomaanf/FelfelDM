@@ -1,6 +1,6 @@
 # core/aria2_rpc.py
 """
-aria2 RPC client with batch call support via system.multicall,
+Aria2 RPC client with batch call support via system.multicall,
 SSL validation, and connection caching.
 """
 
@@ -17,7 +17,7 @@ logger = logging.getLogger(__name__)
 
 class Aria2RPC:
     """
-    aria2 RPC client with batch call support via system.multicall and SSL validation.
+    Aria2 RPC client with batch call support via system.multicall and SSL validation.
     Uses a persistent requests.Session with keep-alive for connection caching.
     """
 
@@ -79,53 +79,40 @@ class Aria2RPC:
             "params": p,
         }
 
-        timeout_sec = timeout if timeout is not None else self.timeout
+        timeout_sec = timeout if timeout is not None else max(self.timeout, 30)  # حداقل 30 ثانیه
 
         try:
             r = self._session.post(self.url, json=payload, timeout=timeout_sec)
             result = r.json()
-
             if "error" in result:
                 err = result["error"]
-                msg = f"aria2 error [{method}]: {err.get('message', err)} (code: {err.get('code')})"
-                logger.warning(msg)
+                msg = f"aria2 error: {err.get('message', err)}"
+                logger.warning("[%s]: %s", method, msg)
                 if self.on_error:
                     self.on_error(msg)
                 return None
-
             return result.get("result")
-
-        except requests.exceptions.ConnectionError as e:
-            msg = f"aria2 connection error [{method}]: {e}"
+        except requests.exceptions.ConnectionError:
+            msg = "aria2 disconnected"
             logger.warning(msg)
             if self.on_error:
                 self.on_error(msg)
             return None
-
-        except requests.exceptions.Timeout as e:
-            msg = f"aria2 timeout [{method}]: {e}"
+        except requests.exceptions.Timeout:
+            msg = f"aria2 timeout [{method}]"
             logger.warning(msg)
             if self.on_error:
                 self.on_error(msg)
             return None
-
         except Exception as e:
-            msg = f"aria2 error [{method}]: {e}"
-            logger.warning(msg)
+            msg = f"aria2 error: {e}"
+            logger.warning("[%s]: %s", method, msg)
             if self.on_error:
                 self.on_error(msg)
             return None
 
     def _prepare_multicall_params(self, calls: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-        """
-        Prepare parameters for system.multicall.
-
-        Args:
-            calls: List of call dicts with 'method' and optional 'params'
-
-        Returns:
-            List of params for the multicall
-        """
+        """Prepare parameters for system.multicall."""
         params = []
         for call in calls:
             method = call.get("method")
@@ -139,16 +126,7 @@ class Aria2RPC:
         return params
 
     def _process_multicall_results(self, raw_results: Any, expected_count: int) -> List[Any]:
-        """
-        Process results from system.multicall.
-
-        Args:
-            raw_results: Raw results from the RPC call
-            expected_count: Number of expected results
-
-        Returns:
-            Processed list of results
-        """
+        """Process results from system.multicall."""
         if not isinstance(raw_results, list):
             logger.warning("Unexpected multicall response type: %s", type(raw_results))
             return [None] * expected_count
@@ -167,7 +145,6 @@ class Aria2RPC:
             else:
                 processed.append(None)
 
-        # Pad with None if we got fewer results than expected
         while len(processed) < expected_count:
             processed.append(None)
 
@@ -183,11 +160,10 @@ class Aria2RPC:
 
         Args:
             calls: List of dicts with 'method' and optional 'params'
-            timeout: Override the default timeout (in seconds);
-                     if None, uses DEFAULT_BATCH_TIMEOUT (30s)
+            timeout: Override the batch timeout
 
         Returns:
-            List of results from each call, in the same order as calls.
+            List of results from each call, in the same order.
             If a sub‑call fails, its entry will be None.
         """
         if not calls:
@@ -203,7 +179,7 @@ class Aria2RPC:
             "params": [params],
         }
 
-        timeout_sec = timeout if timeout is not None else self.DEFAULT_BATCH_TIMEOUT
+        timeout_sec = timeout if timeout is not None else max(self.DEFAULT_BATCH_TIMEOUT, 30)
 
         try:
             r = self._session.post(self.url, json=payload, timeout=timeout_sec)
@@ -220,20 +196,18 @@ class Aria2RPC:
             raw_results = result.get("result")
             return self._process_multicall_results(raw_results, len(calls))
 
-        except requests.exceptions.ConnectionError as e:
-            msg = f"aria2 disconnected during batch call: {e}"
+        except requests.exceptions.ConnectionError:
+            msg = "aria2 disconnected during batch call"
             logger.warning(msg)
             if self.on_error:
                 self.on_error(msg)
             return [None] * len(calls)
-
-        except requests.exceptions.Timeout as e:
-            msg = f"aria2 timeout during batch call: {e}"
+        except requests.exceptions.Timeout:
+            msg = "aria2 timeout during batch call"
             logger.warning(msg)
             if self.on_error:
                 self.on_error(msg)
             return [None] * len(calls)
-
         except Exception as e:
             msg = f"aria2 batch error: {e}"
             logger.warning(msg)
@@ -241,13 +215,14 @@ class Aria2RPC:
                 self.on_error(msg)
             return [None] * len(calls)
 
+    # ---------- Public API ----------
+
     def is_connected(self) -> bool:
-        """Check if aria2 is reachable."""
+        """Check if aria2 is reachable by requesting global stat."""
         try:
-            response = self._session.get(self.url, timeout=5)
-            return response.status_code == 200
-        except Exception as e:
-            logger.debug("Connection check failed: %s", e)
+            result = self.get_global_stat()
+            return result is not None
+        except Exception:
             return False
 
     def add_url(self, url: str, options: Optional[Dict] = None) -> Optional[str]:
@@ -255,27 +230,62 @@ class Aria2RPC:
         Add a download URL and return the GID.
 
         Args:
-            url: The URL to download
-            options: Optional aria2 options (dir, max-connection-per-server, etc.)
+            url: Download URL as string
+            options: Optional aria2 options dict
 
         Returns:
-            GID string if successful, None otherwise
-        """
-        logger.info("Adding download URL: %s", url[:60] + ("..." if len(url) > 60 else ""))
+            GID string or None on failure
 
-        params = [url]
+        Note:
+            aria2.addUri expects the first parameter as a list of URIs.
+            So we pass [[url]] to comply with the RPC spec.
+        """
+        # CRITICAL: aria2.addUri expects [[url], options] where the first is a list
+        params = [[url]]  # ← لیست، نه رشته
         if options:
             params.append(options)
 
+        logger.info("Adding download URL: %s", url[:50] + "..." if len(url) > 50 else url)
         result = self._call("aria2.addUri", params)
-
         if result:
-            gid = str(result) if result else None
-            logger.info("Successfully added download. GID: %s", gid)
-            return gid
+            logger.info("Successfully added download, GID: %s", result)
         else:
-            logger.error("Failed to add download URL: %s", url)
-            return None
+            logger.error("Failed to add download URL: %s", url[:50] + "..." if len(url) > 50 else url)
+        return result
+
+    def add_urls(self, urls: List[str], options: Optional[Dict] = None) -> List[Optional[str]]:
+        """
+        Add multiple URLs using multicall.
+
+        Args:
+            urls: List of URL strings
+            options: Optional aria2 options dict
+
+        Returns:
+            List of GIDs (or None for failures)
+        """
+        if not urls:
+            return []
+
+        calls = []
+        for url in urls:
+            params = [[url]]
+            if options:
+                params.append(options)
+            calls.append({
+                "method": "aria2.addUri",
+                "params": params,
+            })
+
+        results = self.batch_call(calls)
+        # Each result is either a GID or None
+        gids = []
+        for res in results:
+            if isinstance(res, dict) and "result" in res:
+                gids.append(res["result"])
+            else:
+                gids.append(None)
+        return gids
 
     def add_torrent(
         self,
@@ -283,76 +293,99 @@ class Aria2RPC:
         options: Optional[Dict] = None,
         selected_files: Optional[List[int]] = None,
     ) -> Optional[str]:
-        """Add a torrent file and return the GID."""
-        with open(torrent_file, "rb") as f:
-            torrent_data = base64.b64encode(f.read()).decode("utf-8")
+        """
+        Add a torrent file and return the GID.
 
-        params = [torrent_data]
-        if options:
-            if selected_files:
-                options["select-file"] = ",".join(str(i) for i in selected_files)
-            params.append(options)
-        else:
-            if selected_files:
-                params.append({"select-file": ",".join(str(i) for i in selected_files)})
+        Args:
+            torrent_file: Path to torrent file
+            options: Optional aria2 options dict
+            selected_files: List of file indices to download
 
-        result = self._call("aria2.addTorrent", params)
-        return str(result) if result else None
+        Returns:
+            GID string or None on failure
+        """
+        try:
+            with open(torrent_file, "rb") as f:
+                torrent_data = base64.b64encode(f.read()).decode("utf-8")
+
+            params = [torrent_data]
+            if options:
+                if selected_files:
+                    options["select-file"] = ",".join(str(i) for i in selected_files)
+                params.append(options)
+            else:
+                if selected_files:
+                    params.append({"select-file": ",".join(str(i) for i in selected_files)})
+
+            result = self._call("aria2.addTorrent", params)
+            if result:
+                logger.info("Torrent added successfully, GID: %s", result)
+            else:
+                logger.error("Failed to add torrent")
+            return result
+        except Exception as e:
+            logger.error("Error adding torrent: %s", e)
+            return None
 
     def get_torrent_info(self, torrent_file: str) -> Optional[Dict[str, Any]]:
-        """Get information about a torrent file without starting the download."""
-        with open(torrent_file, "rb") as f:
-            torrent_data = base64.b64encode(f.read()).decode("utf-8")
+        """
+        Get information about a torrent file without starting the download.
 
-        params = [torrent_data]
-        result = self._call("aria2.getTorrentInfo", params)
-        return result
+        Args:
+            torrent_file: Path to torrent file
+
+        Returns:
+            Dictionary with torrent information or None on failure
+        """
+        try:
+            with open(torrent_file, "rb") as f:
+                torrent_data = base64.b64encode(f.read()).decode("utf-8")
+
+            params = [torrent_data]
+            result = self._call("aria2.getTorrentInfo", params)
+            if result:
+                logger.info("Retrieved torrent info successfully")
+            else:
+                logger.warning("Failed to get torrent info")
+            return result
+        except Exception as e:
+            logger.error("Error getting torrent info: %s", e)
+            return None
 
     def remove(self, gid: str) -> Optional[Any]:
-        """Remove a download by GID."""
         return self._call("aria2.remove", [gid])
 
     def pause(self, gid: str) -> Optional[Any]:
-        """Pause a download by GID."""
         return self._call("aria2.pause", [gid])
 
     def resume(self, gid: str) -> Optional[Any]:
-        """Resume a download by GID."""
         return self._call("aria2.unpause", [gid])
 
     def tell_status(self, gid: str, fields: Optional[List[str]] = None) -> Optional[Dict]:
-        """Get status of a download by GID."""
         params = [gid]
         if fields:
             params.append(fields)
         return self._call("aria2.tellStatus", params)
 
     def get_global_stat(self) -> Optional[Dict]:
-        """Get global statistics."""
         return self._call("aria2.getGlobalStat")
 
     def tell_active(self) -> Optional[List[Dict]]:
-        """Get active downloads."""
         return self._call("aria2.tellActive")
 
     def tell_waiting(self, offset: int = 0, num: int = 1000) -> Optional[List[Dict]]:
-        """Get waiting downloads."""
         return self._call("aria2.tellWaiting", [offset, num])
 
     def tell_stopped(self, offset: int = 0, num: int = 1000) -> Optional[List[Dict]]:
-        """Get stopped downloads."""
         return self._call("aria2.tellStopped", [offset, num])
 
     def purge_download_result(self) -> Optional[Any]:
-        """Purge completed/removed downloads from memory."""
         return self._call("aria2.purgeDownloadResult")
 
     def get_global_option(self) -> Optional[Dict]:
-        """Get global options."""
         return self._call("aria2.getGlobalOption")
 
     def change_global_option(self, options: Dict) -> Optional[Any]:
-        """Change global options."""
         return self._call("aria2.changeGlobalOption", [options])
 
     def change_option(self, gid: str, options: Dict) -> Optional[Any]:
@@ -360,16 +393,13 @@ class Aria2RPC:
         return self._call("aria2.changeOption", [gid, options])
 
     def set_secret(self, secret: str) -> None:
-        """Update the RPC secret."""
         self.secret = secret
         logger.debug("RPC secret updated")
 
     def get_certificate_fingerprint(self) -> Optional[str]:
-        """Get the certificate fingerprint."""
         return None
 
     def _ensure_session(self) -> None:
-        """Ensure the session is valid and recreate it if necessary."""
         old_verify = self._session.verify
         old_headers = self._session.headers.copy()
 
@@ -378,9 +408,8 @@ class Aria2RPC:
         self._session.verify = old_verify
         self._session.headers.update(old_headers)
         self._session.headers.update({"Connection": "keep-alive"})
-
         logger.debug("RPC session recreated")
 
     def close(self) -> None:
-        """Close the session."""
         self._session.close()
+        logger.debug("RPC session closed")
