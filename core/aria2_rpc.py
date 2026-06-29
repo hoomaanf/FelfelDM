@@ -20,6 +20,7 @@ class Aria2RPC:
     """
 
     DEFAULT_TIMEOUT: int = 15
+    DEFAULT_BATCH_TIMEOUT: int = 30
 
     def __init__(
         self,
@@ -45,8 +46,23 @@ class Aria2RPC:
                 "SSL verification is disabled. This is insecure and should only be used for testing."
             )
 
-    def _call(self, method: str, params: Optional[List] = None) -> Optional[Any]:
-        """Execute a single RPC call."""
+    def _call(
+        self,
+        method: str,
+        params: Optional[List] = None,
+        timeout: Optional[int] = None,
+    ) -> Optional[Any]:
+        """
+        Execute a single RPC call.
+
+        Args:
+            method: RPC method name
+            params: List of parameters
+            timeout: Override the default timeout (in seconds)
+
+        Returns:
+            Result of the RPC call, or None on error
+        """
         self._id += 1
         token = f"token:{self.secret}" if self.secret else None
         if token:
@@ -61,8 +77,10 @@ class Aria2RPC:
             "params": p,
         }
 
+        timeout_sec = timeout if timeout is not None else self.timeout
+
         try:
-            r = self._session.post(self.url, json=payload, timeout=self.timeout)
+            r = self._session.post(self.url, json=payload, timeout=timeout_sec)
             result = r.json()
             if "error" in result:
                 err = result["error"]
@@ -148,12 +166,18 @@ class Aria2RPC:
 
         return processed
 
-    def batch_call(self, calls: List[Dict[str, Any]]) -> List[Any]:
+    def batch_call(
+        self,
+        calls: List[Dict[str, Any]],
+        timeout: Optional[int] = None,
+    ) -> List[Any]:
         """
         Execute multiple RPC calls in a single request using system.multicall.
 
         Args:
             calls: List of dicts with 'method' and optional 'params'
+            timeout: Override the default timeout (in seconds);
+                     if None, uses DEFAULT_BATCH_TIMEOUT (30s)
 
         Returns:
             List of results from each call, in the same order as calls.
@@ -172,8 +196,10 @@ class Aria2RPC:
             "params": [params],
         }
 
+        timeout_sec = timeout if timeout is not None else self.DEFAULT_BATCH_TIMEOUT
+
         try:
-            r = self._session.post(self.url, json=payload, timeout=self.timeout)
+            r = self._session.post(self.url, json=payload, timeout=timeout_sec)
             result = r.json()
 
             if "error" in result:
