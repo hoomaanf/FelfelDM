@@ -1,110 +1,117 @@
 # ui/delegates.py
 """
-Custom delegates for table rendering.
+Custom delegates for table view: progress bar and status rendering.
 """
 
-import logging
 from typing import Optional
 
-from PyQt6.QtCore import Qt, QRect, QModelIndex, QSize
-from PyQt6.QtGui import QColor, QPainter, QPen, QBrush
-from PyQt6.QtWidgets import QStyledItemDelegate, QStyleOptionViewItem, QWidget
-
-from utils.helpers import format_size
-
-logger = logging.getLogger(__name__)
-
+from PyQt6.QtCore import Qt, QRect, QSize
+from PyQt6.QtGui import QColor, QPalette, QPainter
+from PyQt6.QtWidgets import (
+    QStyledItemDelegate, QStyle, QApplication, QStyleOptionProgressBar,
+)
 
 class ProgressDelegate(QStyledItemDelegate):
     """
-    Custom delegate that renders a progress bar with color coding based on status.
+    Delegate that renders a progress bar for the Progress column.
     """
 
-    def paint(
-        self,
-        painter: QPainter,
-        option: QStyleOptionViewItem,
-        index: QModelIndex,
-    ) -> None:
-        """Paint the progress bar with color coding."""
-        # Get data from the model
+    def __init__(self, parent=None) -> None:
+        super().__init__(parent)
+
+    def paint(self, painter: QPainter, option, index) -> None:
         progress_data = index.data(Qt.ItemDataRole.DisplayRole)
         if progress_data is None:
-            # No data to paint, fallback to default
             super().paint(painter, option, index)
             return
 
-        # Try to parse progress
         try:
-            # progress_data might be like "45%" or just "45"
-            if isinstance(progress_data, str) and progress_data.endswith('%'):
-                progress_str = progress_data[:-1]
+            if isinstance(progress_data, str) and progress_data.endswith("%"):
+                value = float(progress_data[:-1])
             else:
-                progress_str = str(progress_data)
-
-            if not progress_str:
-                # Empty string
-                super().paint(painter, option, index)
-                return
-
-            progress = int(float(progress_str))
+                value = float(progress_data)
         except (ValueError, TypeError):
-            # Invalid progress data, fallback
-            super().paint(painter, option, index)
-            return
+            value = 0
 
-        # Get status from the same row (assuming status is in column 5)
-        status_index = index.sibling(index.row(), 5)
-        status = status_index.data(Qt.ItemDataRole.DisplayRole) if status_index.isValid() else ""
-        status_str = str(status) if status is not None else ""
-
-        # Determine color based on status and progress
-        if "Error" in status_str:
-            color = QColor(192, 57, 43)  # Red
-        elif "Paused" in status_str:
-            color = QColor(241, 196, 15)  # Orange
-        elif progress == 100:
-            color = QColor(46, 204, 113)  # Green
-        elif "Downloading" in status_str or "Active" in status_str:
-            if progress < 30:
-                color = QColor(231, 76, 60)  # Red-orange
-            elif progress < 70:
-                color = QColor(241, 196, 15)  # Orange
-            else:
-                color = QColor(46, 204, 113)  # Green
-        else:
-            color = QColor(61, 174, 233)  # Blue (default)
-
-        # Draw background
-        painter.save()
-        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-
-        # Background rectangle
         rect = option.rect
-        margin = 2
-        bar_rect = QRect(rect.x() + margin, rect.y() + margin,
-                         rect.width() - 2 * margin, rect.height() - 2 * margin)
+        rect.setLeft(rect.left() + 2)
+        rect.setRight(rect.right() - 2)
+        rect.setTop(rect.top() + 2)
+        rect.setBottom(rect.bottom() - 2)
 
-        # Draw background
-        painter.setPen(Qt.PenStyle.NoPen)
-        painter.setBrush(QColor(240, 240, 240) if option.state & QStyle.StateFlag.State_Selected else QColor(45, 45, 45))
-        painter.drawRoundedRect(bar_rect, 3, 3)
+        painter.save()
+        palette = option.palette
+        bg_color = palette.color(QPalette.ColorRole.Window)
+        painter.fillRect(rect, bg_color)
 
-        # Draw progress chunk
-        if progress > 0:
-            progress_width = int(bar_rect.width() * (progress / 100.0))
-            if progress_width > 0:
-                chunk_rect = QRect(bar_rect.x(), bar_rect.y(),
-                                   progress_width, bar_rect.height())
-                painter.setBrush(color)
-                painter.drawRoundedRect(chunk_rect, 3, 3)
+        if value > 0:
+            fill_rect = QRect(rect)
+            fill_width = int((value / 100) * rect.width())
+            fill_rect.setWidth(fill_width)
+            # Get status from the row's Status column (column 5)
+            status_idx = index.sibling(index.row(), 5)
+            status_text = ""
+            if status_idx.isValid():
+                status_text = status_idx.data(Qt.ItemDataRole.DisplayRole) or ""
 
-        # Draw text
-        painter.setPen(Qt.GlobalColor.white if option.state & QStyle.StateFlag.State_Selected else Qt.GlobalColor.black)
-        painter.drawText(bar_rect, Qt.AlignmentFlag.AlignCenter, f"{progress}%")
+            # Choose color based on status
+            if "Error" in status_text:
+                color = QColor(231, 76, 60)
+            elif "Paused" in status_text:
+                color = QColor(243, 156, 18)
+            elif "Complete" in status_text:
+                color = QColor(46, 204, 113)
+            else:
+                color = QColor(52, 152, 219)
 
+            painter.fillRect(fill_rect, color)
+
+        painter.setPen(palette.color(QPalette.ColorRole.Text))
+        painter.drawText(rect, Qt.AlignmentFlag.AlignCenter, f"{value:.1f}%")
         painter.restore()
 
-    def sizeHint(self, option: QStyleOptionViewItem, index: QModelIndex) -> QSize:
-        """Provide a size hint for the progress bar."""
+    def sizeHint(self, option, index) -> QSize:
         return QSize(100, 24)
+
+
+class StatusDelegate(QStyledItemDelegate):
+    """
+    Delegate that renders status as colored rounded labels.
+    """
+
+    def __init__(self, parent=None) -> None:
+        super().__init__(parent)
+        self.status_colors = {
+            "Downloading": QColor(46, 204, 113),
+            "Waiting": QColor(241, 196, 15),
+            "Paused": QColor(52, 73, 94),
+            "Error": QColor(231, 76, 60),
+            "Complete": QColor(46, 204, 113),
+            "Removed": QColor(149, 165, 166),
+        }
+
+    def paint(self, painter: QPainter, option, index) -> None:
+        status = index.data(Qt.ItemDataRole.DisplayRole)
+        if not status:
+            super().paint(painter, option, index)
+            return
+
+        color = self.status_colors.get(status, QColor(149, 165, 166))
+
+        rect = option.rect
+        rect.setLeft(rect.left() + 4)
+        rect.setRight(rect.right() - 4)
+        rect.setTop(rect.top() + 2)
+        rect.setBottom(rect.bottom() - 2)
+
+        painter.save()
+        painter.setBrush(color)
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.drawRoundedRect(rect, 4, 4)
+
+        painter.setPen(QColor(255, 255, 255))
+        painter.drawText(rect, Qt.AlignmentFlag.AlignCenter, status)
+        painter.restore()
+
+    def sizeHint(self, option, index) -> QSize:
+        return QSize(80, 24)
