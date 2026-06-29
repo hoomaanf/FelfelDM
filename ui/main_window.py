@@ -9,7 +9,9 @@ from typing import List, Optional
 from PyQt6.QtCore import (
     Qt, QTimer, pyqtSignal, QObject, QSortFilterProxyModel, QModelIndex,
 )
-from PyQt6.QtGui import QAction, QKeyEvent, QIcon, QPalette, QColor, QPainter, QPixmap
+from PyQt6.QtGui import (
+    QAction, QKeyEvent, QIcon, QPalette, QColor, QPainter, QPixmap, QPainterPath,
+)
 from PyQt6.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QPushButton, QTableView, QHeaderView, QComboBox,
@@ -318,6 +320,7 @@ class MainWindow(QMainWindow):
         # Apply initial theme
         self._apply_theme_from_settings()
 
+        # Set tray icon
         self._update_tray_icon()
 
     def _ensure_default_queue(self) -> None:
@@ -616,6 +619,7 @@ class MainWindow(QMainWindow):
         self._setup_worker()
 
     def _apply_theme_from_settings(self) -> None:
+        """Apply the theme based on settings."""
         try:
             theme_setting = self.store.settings.theme
             if theme_setting == "system":
@@ -626,7 +630,6 @@ class MainWindow(QMainWindow):
                 is_dark = False
 
             apply_theme(self, is_dark)
-
             clear_icon_cache()
             self._update_tray_icon()
             self.update()
@@ -694,31 +697,56 @@ class MainWindow(QMainWindow):
         pass
 
     def _update_tray_icon(self) -> None:
-        is_dark = False
+        """Update the tray icon with themed icon."""
         try:
+            is_dark = False
             palette = self.palette()
             bg = palette.color(QPalette.ColorRole.Window)
             brightness = (bg.red() * 299 + bg.green() * 587 + bg.blue() * 114) / 1000
             is_dark = brightness < 128
-        except Exception:
-            pass
 
-        icon = get_icon("download", is_dark)
-        if icon.isNull():
-            icon = QIcon.fromTheme("download")
-        if icon.isNull():
-            icon = QIcon.fromTheme("folder-download")
-        if icon.isNull():
-            pixmap = QPixmap(64, 64)
-            pixmap.fill(QColor(0, 0, 0, 0))
-            painter = QPainter(pixmap)
-            painter.setBrush(QColor("#e67e22"))
-            painter.setPen(QColor("#e67e22"))
-            painter.drawRoundedRect(10, 10, 44, 44, 8, 8)
-            painter.end()
-            icon = QIcon(pixmap)
+            # Try to get icon from theme
+            icon = get_icon("download", is_dark)
 
-        self.tray_controller.set_icon(icon)
+            if icon.isNull():
+                # Fallback: create a simple icon using QPainterPath
+                pixmap = QPixmap(64, 64)
+                pixmap.fill(QColor(0, 0, 0, 0))  # transparent
+                painter = QPainter(pixmap)
+                painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+
+                # Draw a circle
+                painter.setBrush(QColor("#e67e22"))
+                painter.setPen(Qt.PenStyle.NoPen)
+                painter.drawEllipse(8, 8, 48, 48)
+
+                # Draw a download arrow inside the circle
+                painter.setBrush(QColor(255, 255, 255))
+                path = QPainterPath()
+                path.moveTo(32, 16)
+                path.lineTo(16, 32)
+                path.lineTo(24, 32)
+                path.lineTo(24, 48)
+                path.lineTo(40, 48)
+                path.lineTo(40, 32)
+                path.lineTo(48, 32)
+                path.closeSubpath()
+                painter.drawPath(path)
+                painter.end()
+
+                icon = QIcon(pixmap)
+
+            self.tray_controller.set_icon(icon)
+        except Exception as e:
+            logger.warning("Failed to set tray icon: %s", e)
+            # Fallback: use system icon
+            fallback = QIcon.fromTheme("download")
+            if fallback.isNull():
+                fallback = QIcon.fromTheme("folder-download")
+            if fallback.isNull():
+                fallback = QIcon.fromTheme("applications-internet")
+            if not fallback.isNull():
+                self.tray_controller.set_icon(fallback)
 
     def _on_search_text_changed(self, text: str) -> None:
         self._search_timer.start(300)
@@ -746,6 +774,7 @@ class MainWindow(QMainWindow):
         )
 
     def _quit_app(self) -> None:
+        """Cleanly quit the application."""
         logger.info("Quitting application...")
 
         if hasattr(self, 'worker'):
