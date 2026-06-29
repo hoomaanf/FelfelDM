@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Optional
 
 from core.constants import ARIA2_CONFIG_DIR, ARIA2_SECRET_FILE
+from core.aria2_rpc import Aria2RPC
 
 logger = logging.getLogger(__name__)
 
@@ -16,7 +17,6 @@ def _save_secret_to_file(secret: str) -> None:
     """Save aria2 secret to a file with restricted permissions (atomic creation)."""
     try:
         ARIA2_SECRET_FILE.parent.mkdir(parents=True, exist_ok=True)
-        # Try to create the file exclusively with mode 0o600
         fd = os.open(
             ARIA2_SECRET_FILE,
             os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_TRUNC,
@@ -25,7 +25,6 @@ def _save_secret_to_file(secret: str) -> None:
         with os.fdopen(fd, 'w', encoding='utf-8') as f:
             f.write(secret)
     except FileExistsError:
-        # File exists, write with restricted mode
         with open(ARIA2_SECRET_FILE, 'w', encoding='utf-8') as f:
             f.write(secret)
         os.chmod(ARIA2_SECRET_FILE, 0o600)
@@ -50,10 +49,11 @@ def _get_secret_from_file() -> Optional[str]:
         return None
 
 
-def start_aria2(secret: str, rpc_port: int = 6800, download_dir: Optional[str] = None) -> bool:
-    """Start the aria2 daemon with the given secret."""
+def start_aria2(secret: str, rpc_port: int = 6800,
+                download_dir: Optional[str] = None,
+                speed_limit: int = 0) -> bool:
+    """Start the aria2 daemon with the given secret and speed limit."""
     try:
-        # Save secret to file
         _save_secret_to_file(secret)
 
         cmd = [
@@ -70,12 +70,37 @@ def start_aria2(secret: str, rpc_port: int = 6800, download_dir: Optional[str] =
             "--split", "5",
             "--min-split-size", "20M",
         ]
-        # Start as daemon
+        # Apply speed limit if set
+        if speed_limit > 0:
+            cmd.extend(["--max-overall-download-limit", f"{speed_limit}K"])
+            cmd.extend(["--max-overall-upload-limit", f"{speed_limit}K"])
+        else:
+            cmd.extend(["--max-overall-download-limit", "0"])
+            cmd.extend(["--max-overall-upload-limit", "0"])
+
         subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
-        logger.info("aria2 started with secret")
+        logger.info("aria2 started with secret, speed limit: %s", speed_limit if speed_limit > 0 else "unlimited")
         return True
     except Exception as e:
         logger.error("Failed to start aria2: %s", e)
+        return False
+
+
+def apply_speed_limit(secret: str, speed_limit: int,
+                      host: str = "127.0.0.1", port: int = 6800) -> bool:
+    """Dynamically apply speed limit via RPC."""
+    try:
+        rpc = Aria2RPC(host, port, secret, verify_ssl=False)
+        options = {
+            "max-overall-download-limit": f"{speed_limit}K" if speed_limit > 0 else "0",
+            "max-overall-upload-limit": f"{speed_limit}K" if speed_limit > 0 else "0",
+        }
+        result = rpc.change_global_option(options)
+        if result:
+            logger.info("Speed limit updated to: %s", speed_limit if speed_limit > 0 else "unlimited")
+        return result
+    except Exception as e:
+        logger.error("Failed to apply speed limit: %s", e)
         return False
 
 
