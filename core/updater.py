@@ -11,10 +11,10 @@ import os
 import subprocess
 import tempfile
 from pathlib import Path
-from typing import Optional, Dict, Any
+from typing import Any, Dict, Optional
 
-from packaging.version import parse
 import requests
+from packaging.version import parse
 from PyQt6.QtCore import QObject, pyqtSignal
 
 logger: logging.Logger = logging.getLogger(__name__)
