@@ -6,14 +6,16 @@ Main application window - UI coordinator with modern design.
 import logging
 from typing import List, Optional
 
-from PyQt6.QtCore import Qt, QTimer, pyqtSignal, QObject
+from PyQt6.QtCore import (
+    Qt, QTimer, pyqtSignal, QObject, QSortFilterProxyModel, QModelIndex,
+)
 from PyQt6.QtGui import QAction, QKeyEvent, QIcon
 from PyQt6.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QPushButton, QTableView, QHeaderView, QComboBox,
     QLabel, QToolBar, QMenu, QSystemTrayIcon, QMenuBar,
     QMessageBox, QLineEdit, QFileDialog, QApplication, QStatusBar,
-    QInputDialog,
+    QInputDialog, QDialog,  # ← QDialog اضافه شد
 )
 
 from core import Aria2RPC, BackendWorker, DataStore, LocalServer
@@ -210,11 +212,14 @@ class SearchProxyModel(QSortFilterProxyModel):
         self._filter_text = text.lower()
         self.invalidateFilter()
 
-    def filterAcceptsRow(self, source_row: int, source_parent) -> bool:
+    def filterAcceptsRow(self, source_row: int, source_parent: QModelIndex) -> bool:
         if not self._filter_text:
             return True
 
         model = self.sourceModel()
+        if model is None:
+            return False
+
         name_index = model.index(source_row, 0)
         name = model.data(name_index, Qt.ItemDataRole.DisplayRole)
         if name and self._filter_text in str(name).lower():
@@ -327,7 +332,6 @@ class MainWindow(QMainWindow):
         if async_mode:
             from core.async_worker import AsyncWorker
             from core.aria2_rpc_async import AsyncAria2RPC
-            # Use async worker
             async_aria2 = AsyncAria2RPC(
                 host=self.aria2.url.rsplit(':', 1)[0],
                 port=int(self.aria2.url.rsplit(':', 1)[1].split('/')[0]),
@@ -521,7 +525,6 @@ class MainWindow(QMainWindow):
             self.queue_controller.current_index,
             self
         )
-        # استفاده از exec_ به جای exec برای سازگاری
         if dialog.exec() == QDialog.DialogCode.Accepted:
             urls = dialog.get_urls()
             queue_idx = dialog.get_queue_index()
