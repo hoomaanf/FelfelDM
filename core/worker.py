@@ -5,7 +5,7 @@ import asyncio
 import logging
 import threading
 from abc import ABC, abstractmethod, ABCMeta
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, List
 
 from PyQt6.QtCore import QObject, pyqtSignal, QThread
 
@@ -25,6 +25,7 @@ class BaseBackendWorker(QObject, ABC, metaclass=QABCMeta):
     """Base class for backend workers providing common signals and cache."""
 
     stats_updated = pyqtSignal(dict)
+    downloads_updated = pyqtSignal(list)  # list of download dicts
     download_added = pyqtSignal(str)
     download_removed = pyqtSignal(str)
     error_occurred = pyqtSignal(str)
@@ -38,7 +39,9 @@ class BaseBackendWorker(QObject, ABC, metaclass=QABCMeta):
         self.store: DataStore = store
         self._running: bool = False
         self._cached_stats: Dict[str, Any] = {}
+        self._cached_downloads: List[Dict[str, Any]] = []
         self._stats_lock = threading.Lock()
+        self._downloads_lock = threading.Lock()
         self._poll_interval: int = RPC_POLL_INTERVAL
         self._thread: Optional[QThread] = None
 
@@ -60,6 +63,11 @@ class BaseBackendWorker(QObject, ABC, metaclass=QABCMeta):
         """Thread-safe getter for cached statistics."""
         with self._stats_lock:
             return self._cached_stats.copy()
+
+    def get_cached_downloads(self) -> List[Dict[str, Any]]:
+        """Thread-safe getter for cached downloads list."""
+        with self._downloads_lock:
+            return self._cached_downloads.copy()
 
 
 class SyncBackendWorker(BaseBackendWorker):
@@ -83,10 +91,22 @@ class SyncBackendWorker(BaseBackendWorker):
 
     def _poll(self) -> None:
         try:
+            # Fetch global stats
             stats = self.aria2.get_global_stat()
             with self._stats_lock:
                 self._cached_stats = stats
             self.stats_updated.emit(stats)
+
+            # Fetch download lists
+            active = self.aria2.tell_active() or []
+            waiting = self.aria2.tell_waiting(0, 100) or []
+            stopped = self.aria2.tell_stopped(0, 100) or []
+            all_downloads = active + waiting + stopped
+
+            with self._downloads_lock:
+                self._cached_downloads = all_downloads
+            self.downloads_updated.emit(all_downloads)
+
             # Reset error counter on success
             self._error_count = 0
         except Exception as e:
@@ -133,13 +153,25 @@ class AsyncBackendWorker(BaseBackendWorker):
     async def _async_poll_loop(self) -> None:
         while self._running:
             try:
+                # Fetch global stats
                 stats = await self.async_aria2.get_global_stat()
                 if stats is not None:
                     with self._stats_lock:
                         self._cached_stats = stats
                     self.stats_updated.emit(stats)
-                    # Reset error counter on success
-                    self._error_count = 0
+
+                # Fetch download lists
+                active = await self.async_aria2.tell_active() or []
+                waiting = await self.async_aria2.tell_waiting(0, 100) or []
+                stopped = await self.async_aria2.tell_stopped(0, 100) or []
+                all_downloads = active + waiting + stopped
+
+                with self._downloads_lock:
+                    self._cached_downloads = all_downloads
+                self.downloads_updated.emit(all_downloads)
+
+                # Reset error counter on success
+                self._error_count = 0
             except asyncio.CancelledError:
                 logger.info("Async poll loop cancelled internally")
                 break
