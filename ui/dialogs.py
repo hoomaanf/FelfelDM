@@ -1,58 +1,48 @@
 # ui/dialogs.py
 """
 Dialog windows for adding downloads, settings, torrent file selection,
-and progress display.
+schedule configuration, and progress display.
 """
 
 import logging
 import os
 from typing import List, Optional, Dict, Any
 
-from PyQt6.QtCore import Qt, pyqtSignal
+from PyQt6.QtCore import Qt, pyqtSignal, QDate, QTime
 from PyQt6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QFormLayout,
     QGroupBox, QLineEdit, QTextEdit, QPushButton,
     QComboBox, QSpinBox, QCheckBox, QLabel,
     QFileDialog, QDialogButtonBox, QWidget,
     QListWidget, QListWidgetItem, QMessageBox,
+    QCalendarWidget, QTimeEdit, QTabWidget,
 )
 
 import validators
 from core.data_store import Queue, DataStore
+from core.constants import DEFAULT_DOWNLOAD_PATH
+from core.history import HistoryManager
 from ui.icons import get_icon
 
 logger = logging.getLogger(__name__)
 
 
 def is_valid_url(url: str) -> bool:
-    """
-    Validate a URL or magnet link using the validators library.
-
-    Supports:
-    - HTTP/HTTPS URLs
-    - FTP URLs
-    - Magnet links
-    - IPv4 and IPv6 addresses
-    - Localhost
-    """
+    """Validate a URL or magnet link using validators library."""
     if not url or not url.strip():
         return False
 
     url = url.strip()
 
-    # Magnet links
     if url.startswith("magnet:?xt=urn:"):
         return True
 
-    # Use validators library for comprehensive validation
     if validators.url(url):
         return True
 
-    # Also support raw IP/domain without scheme
     if validators.domain(url) or validators.ip_address.ipv4(url) or validators.ip_address.ipv6(url):
         return True
 
-    # Support localhost
     if url == "localhost" or url.startswith("localhost:"):
         return True
 
@@ -114,7 +104,7 @@ class PathSelectorWidget(QWidget):
         layout = QHBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
 
-        self.path_edit = QLineEdit(default_path or os.path.expanduser("~/Downloads"))
+        self.path_edit = QLineEdit(default_path or str(DEFAULT_DOWNLOAD_PATH))
         self.path_edit.textChanged.connect(self.path_changed.emit)
         layout.addWidget(self.path_edit)
 
@@ -135,7 +125,7 @@ class PathSelectorWidget(QWidget):
 
 
 class OptionsWidget(QWidget):
-    """Widget for download options."""
+    """Widget for download options including speed limit."""
 
     def __init__(self, queues: List[Queue], default_queue: int = 0, parent: Optional[QWidget] = None) -> None:
         super().__init__(parent)
@@ -165,6 +155,13 @@ class OptionsWidget(QWidget):
         self.retry_spin.setSpecialValueText("Unlimited")
         layout.addRow("Max Tries:", self.retry_spin)
 
+        # Speed limit per download
+        self.speed_limit_spin = QSpinBox()
+        self.speed_limit_spin.setRange(0, 1000000)
+        self.speed_limit_spin.setSpecialValueText("Unlimited")
+        self.speed_limit_spin.setValue(0)
+        layout.addRow("Speed Limit (KB/s):", self.speed_limit_spin)
+
         self.pause_check = QCheckBox("Start Paused")
         self.pause_check.setChecked(False)
         layout.addRow("", self.pause_check)
@@ -184,6 +181,9 @@ class OptionsWidget(QWidget):
             options["max-tries"] = str(self.retry_spin.value())
         if self.pause_check.isChecked():
             options["pause"] = "true"
+        speed_limit = self.speed_limit_spin.value()
+        if speed_limit > 0:
+            options["max-download-limit"] = f"{speed_limit}K"
         return options
 
     def get_pause(self) -> bool:
@@ -205,7 +205,6 @@ class TorrentFileSelectionDialog(QDialog):
         super().__init__(parent)
         self.torrent_info = torrent_info
         self.torrent_path = torrent_path
-        self.selected_indices: List[int] = []
 
         self.setWindowTitle("Select Torrent Files")
         self.setMinimumWidth(500)
@@ -215,7 +214,6 @@ class TorrentFileSelectionDialog(QDialog):
     def _setup_ui(self) -> None:
         layout = QVBoxLayout(self)
 
-        # Info label
         info_text = f"Torrent: {self.torrent_info.get('name', 'Unknown')}"
         if 'totalLength' in self.torrent_info:
             from utils.helpers import format_size
@@ -223,7 +221,6 @@ class TorrentFileSelectionDialog(QDialog):
         info_label = QLabel(info_text)
         layout.addWidget(info_label)
 
-        # File list
         self.file_list = QListWidget()
         files = self.torrent_info.get('files', [])
         if isinstance(files, list):
@@ -238,7 +235,6 @@ class TorrentFileSelectionDialog(QDialog):
                     item.setCheckState(Qt.CheckState.Checked)
                     self.file_list.addItem(item)
 
-        # Select all / None buttons
         btn_layout = QHBoxLayout()
         select_all_btn = QPushButton("Select All")
         select_all_btn.clicked.connect(self._select_all)
@@ -252,7 +248,6 @@ class TorrentFileSelectionDialog(QDialog):
         layout.addLayout(btn_layout)
         layout.addWidget(self.file_list)
 
-        # Buttons
         buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
         buttons.accepted.connect(self.accept)
         buttons.rejected.connect(self.reject)
@@ -281,167 +276,78 @@ class TorrentFileSelectionDialog(QDialog):
         return indices
 
 
-class AddTorrentDialog(QDialog):
-    """Dialog for adding a torrent with file selection."""
+class ScheduleWidget(QWidget):
+    """Widget for advanced scheduling with calendar and time selection."""
 
-    def __init__(
-        self,
-        queues: List[Queue],
-        store: DataStore,
-        default_queue: int = 0,
-        parent: Optional[QWidget] = None,
-    ) -> None:
+    schedule_changed = pyqtSignal()
+
+    def __init__(self, parent: Optional[QWidget] = None) -> None:
         super().__init__(parent)
-        self._queues = queues
-        self._store = store
-        self._default_queue = default_queue
-        self._torrent_path: Optional[str] = None
-        self._torrent_info: Optional[Dict[str, Any]] = None
-        self._selected_files: List[int] = []
-
-        self.setWindowTitle("Add Torrent")
-        self.setMinimumWidth(500)
         self._setup_ui()
 
     def _setup_ui(self) -> None:
         layout = QVBoxLayout(self)
 
-        # Torrent file selection
-        file_layout = QHBoxLayout()
-        self.file_label = QLabel("No torrent selected")
-        file_layout.addWidget(self.file_label)
-        browse_btn = QPushButton("Browse...")
-        browse_btn.clicked.connect(self._browse_torrent)
-        file_layout.addWidget(browse_btn)
-        layout.addLayout(file_layout)
+        # Calendar for date selection (multiple select)
+        self.calendar = QCalendarWidget()
+        self.calendar.setGridVisible(True)
+        self.calendar.setSelectionMode(QCalendarWidget.SelectionMode.MultiSelection)
+        layout.addWidget(self.calendar)
 
-        # Options
-        self.options_widget = OptionsWidget(self._queues, self._default_queue)
-        layout.addWidget(self.options_widget)
+        # Time selection
+        time_layout = QHBoxLayout()
+        time_layout.addWidget(QLabel("Times (HH:MM, one per line):"))
 
-        # Buttons
-        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
-        buttons.accepted.connect(self.accept)
-        buttons.rejected.connect(self.reject)
-        layout.addWidget(buttons)
+        self.time_edit = QTextEdit()
+        self.time_edit.setPlaceholderText("08:00\n12:00\n18:00")
+        self.time_edit.setMaximumHeight(60)
+        time_layout.addWidget(self.time_edit)
 
-    def _browse_torrent(self) -> None:
-        file_path, _ = QFileDialog.getOpenFileName(
-            self, "Select Torrent File", "", "Torrent Files (*.torrent);;All Files (*)"
-        )
-        if file_path:
-            self._torrent_path = file_path
-            self.file_label.setText(os.path.basename(file_path))
+        layout.addLayout(time_layout)
 
-    def get_torrent_path(self) -> Optional[str]:
-        return self._torrent_path
+        # Buttons to clear selections
+        btn_layout = QHBoxLayout()
+        clear_dates_btn = QPushButton("Clear Dates")
+        clear_dates_btn.clicked.connect(self._clear_dates)
+        btn_layout.addWidget(clear_dates_btn)
 
-    def get_queue_index(self) -> int:
-        return self.options_widget.get_queue_index()
+        clear_times_btn = QPushButton("Clear Times")
+        clear_times_btn.clicked.connect(self._clear_times)
+        btn_layout.addWidget(clear_times_btn)
 
-    def get_options(self) -> Dict[str, Any]:
-        return self.options_widget.get_options()
+        btn_layout.addStretch()
+        layout.addLayout(btn_layout)
 
-    def get_selected_files(self) -> List[int]:
-        return self._selected_files
+    def _clear_dates(self) -> None:
+        self.calendar.clearSelection()
 
+    def _clear_times(self) -> None:
+        self.time_edit.clear()
 
-class SettingsDialog(QDialog):
-    """Settings dialog with theme selection and default download path."""
+    def get_selected_dates(self) -> List[str]:
+        """Return selected dates as ISO strings."""
+        selected = self.calendar.selectedDates()
+        return [d.toString(Qt.DateFormat.ISODate) for d in selected]
 
-    def __init__(self, store: DataStore, parent: Optional[QWidget] = None) -> None:
-        super().__init__(parent)
-        self.store = store
-        self.setWindowTitle("Settings")
-        self.setMinimumWidth(450)
-        self._setup_ui()
-
-    def _setup_ui(self) -> None:
-        layout = QVBoxLayout(self)
-
-        # General settings
-        group = QGroupBox("General")
-        form = QFormLayout(group)
-
-        self.connections_spin = QSpinBox()
-        self.connections_spin.setRange(1, 32)
-        self.connections_spin.setValue(self.store.settings.connections)
-        form.addRow("Max Connections:", self.connections_spin)
-
-        self.max_concurrent_spin = QSpinBox()
-        self.max_concurrent_spin.setRange(1, 20)
-        self.max_concurrent_spin.setValue(self.store.settings.max_concurrent)
-        form.addRow("Max Concurrent:", self.max_concurrent_spin)
-
-        self.speed_limit_spin = QSpinBox()
-        self.speed_limit_spin.setRange(0, 1000000)
-        self.speed_limit_spin.setSpecialValueText("Unlimited")
-        self.speed_limit_spin.setValue(self.store.settings.speed_limit)
-        form.addRow("Speed Limit (KB/s):", self.speed_limit_spin)
-
-        self.shutdown_check = QCheckBox()
-        self.shutdown_check.setChecked(self.store.settings.shutdown_after_finish)
-        form.addRow("Shutdown after finish:", self.shutdown_check)
-
-        self.auto_clear_check = QCheckBox()
-        self.auto_clear_check.setChecked(self.store.settings.auto_clear_completed)
-        form.addRow("Auto-clear completed:", self.auto_clear_check)
-
-        # Default download path
-        default_path_layout = QHBoxLayout()
-        self.default_path_edit = QLineEdit(self.store.get_default_download_path())
-        default_path_layout.addWidget(self.default_path_edit)
-        browse_btn = QPushButton("Browse...")
-        browse_btn.clicked.connect(self._browse_default_path)
-        default_path_layout.addWidget(browse_btn)
-        form.addRow("Default Download Path:", default_path_layout)
-
-        layout.addWidget(group)
-
-        # Theme settings
-        theme_group = QGroupBox("Appearance")
-        theme_form = QFormLayout(theme_group)
-
-        self.theme_combo = QComboBox()
-        self.theme_combo.addItem("System (Auto)", "system")
-        self.theme_combo.addItem("Dark", "dark")
-        self.theme_combo.addItem("Light", "light")
-
-        current_theme = self.store.settings.theme
-        idx = self.theme_combo.findData(current_theme)
-        if idx >= 0:
-            self.theme_combo.setCurrentIndex(idx)
-        theme_form.addRow("Theme:", self.theme_combo)
-
-        layout.addWidget(theme_group)
-
-        # Buttons
-        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
-        buttons.accepted.connect(self._save)
-        buttons.rejected.connect(self.reject)
-        layout.addWidget(buttons)
-
-    def _browse_default_path(self) -> None:
-        path = QFileDialog.getExistingDirectory(
-            self, "Select Default Download Location", self.default_path_edit.text()
-        )
-        if path:
-            self.default_path_edit.setText(path)
-
-    def _save(self) -> None:
-        self.store.settings.connections = self.connections_spin.value()
-        self.store.settings.max_concurrent = self.max_concurrent_spin.value()
-        self.store.settings.speed_limit = self.speed_limit_spin.value()
-        self.store.settings.shutdown_after_finish = self.shutdown_check.isChecked()
-        self.store.settings.auto_clear_completed = self.auto_clear_check.isChecked()
-        self.store.settings.theme = self.theme_combo.currentData()
-        self.store.set_default_download_path(self.default_path_edit.text())
-        self.store.save()
-        self.accept()
+    def get_times(self) -> List[str]:
+        """Return times as list of "HH:MM" strings."""
+        text = self.time_edit.toPlainText()
+        times = []
+        for line in text.splitlines():
+            line = line.strip()
+            if line:
+                # Validate time format
+                parts = line.split(":")
+                if len(parts) == 2 and parts[0].isdigit() and parts[1].isdigit():
+                    h = int(parts[0])
+                    m = int(parts[1])
+                    if 0 <= h < 24 and 0 <= m < 60:
+                        times.append(f"{h:02d}:{m:02d}")
+        return times
 
 
 class AddDownloadDialog(QDialog):
-    """Dialog for adding multiple downloads with advanced options."""
+    """Dialog for adding multiple downloads with advanced options including speed limit."""
 
     def __init__(
         self,
@@ -472,11 +378,11 @@ class AddDownloadDialog(QDialog):
         self.path_widget = PathSelectorWidget(default_path)
         layout.addWidget(self.path_widget)
 
-        # Options
+        # Options (with speed limit)
         self.options_widget = OptionsWidget(self._queues, self._default_queue)
         layout.addWidget(self.options_widget)
 
-        # Advanced tab
+        # Advanced options
         advanced_group = QGroupBox("Advanced Options")
         advanced_layout = QFormLayout(advanced_group)
 
@@ -538,3 +444,174 @@ class AddDownloadDialog(QDialog):
 
     def get_clear(self) -> bool:
         return self.options_widget.get_clear()
+
+
+class AddTorrentDialog(QDialog):
+    """Dialog for adding a torrent with file selection and options."""
+
+    def __init__(
+        self,
+        queues: List[Queue],
+        store: DataStore,
+        default_queue: int = 0,
+        parent: Optional[QWidget] = None,
+    ) -> None:
+        super().__init__(parent)
+        self._queues = queues
+        self._store = store
+        self._default_queue = default_queue
+        self._torrent_path: Optional[str] = None
+        self._torrent_info: Optional[Dict[str, Any]] = None
+
+        self.setWindowTitle("Add Torrent")
+        self.setMinimumWidth(500)
+        self._setup_ui()
+
+    def _setup_ui(self) -> None:
+        layout = QVBoxLayout(self)
+
+        # Torrent file selection
+        file_layout = QHBoxLayout()
+        self.file_label = QLabel("No torrent selected")
+        file_layout.addWidget(self.file_label)
+        browse_btn = QPushButton("Browse...")
+        browse_btn.clicked.connect(self._browse_torrent)
+        file_layout.addWidget(browse_btn)
+        layout.addLayout(file_layout)
+
+        # Options
+        self.options_widget = OptionsWidget(self._queues, self._default_queue)
+        layout.addWidget(self.options_widget)
+
+        # Buttons
+        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
+        buttons.accepted.connect(self.accept)
+        buttons.rejected.connect(self.reject)
+        layout.addWidget(buttons)
+
+    def _browse_torrent(self) -> None:
+        file_path, _ = QFileDialog.getOpenFileName(
+            self, "Select Torrent File", "", "Torrent Files (*.torrent);;All Files (*)"
+        )
+        if file_path:
+            self._torrent_path = file_path
+            self.file_label.setText(os.path.basename(file_path))
+
+    def get_torrent_path(self) -> Optional[str]:
+        return self._torrent_path
+
+    def get_queue_index(self) -> int:
+        return self.options_widget.get_queue_index()
+
+    def get_options(self) -> Dict[str, Any]:
+        return self.options_widget.get_options()
+
+    def get_pause(self) -> bool:
+        return self.options_widget.get_pause()
+
+    def get_clear(self) -> bool:
+        return self.options_widget.get_clear()
+
+
+class SettingsDialog(QDialog):
+    """Settings dialog with theme, default path, and async option."""
+
+    def __init__(self, store: DataStore, parent: Optional[QWidget] = None) -> None:
+        super().__init__(parent)
+        self.store = store
+        self.setWindowTitle("Settings")
+        self.setMinimumWidth(450)
+        self._setup_ui()
+
+    def _setup_ui(self) -> None:
+        layout = QVBoxLayout(self)
+
+        # General settings
+        group = QGroupBox("General")
+        form = QFormLayout(group)
+
+        self.connections_spin = QSpinBox()
+        self.connections_spin.setRange(1, 32)
+        self.connections_spin.setValue(self.store.settings.connections)
+        form.addRow("Max Connections:", self.connections_spin)
+
+        self.max_concurrent_spin = QSpinBox()
+        self.max_concurrent_spin.setRange(1, 20)
+        self.max_concurrent_spin.setValue(self.store.settings.max_concurrent)
+        form.addRow("Max Concurrent:", self.max_concurrent_spin)
+
+        self.speed_limit_spin = QSpinBox()
+        self.speed_limit_spin.setRange(0, 1000000)
+        self.speed_limit_spin.setSpecialValueText("Unlimited")
+        self.speed_limit_spin.setValue(self.store.settings.speed_limit)
+        form.addRow("Speed Limit (KB/s):", self.speed_limit_spin)
+
+        self.shutdown_check = QCheckBox()
+        self.shutdown_check.setChecked(self.store.settings.shutdown_after_finish)
+        form.addRow("Shutdown after finish:", self.shutdown_check)
+
+        self.auto_clear_check = QCheckBox()
+        self.auto_clear_check.setChecked(self.store.settings.auto_clear_completed)
+        form.addRow("Auto-clear completed:", self.auto_clear_check)
+
+        default_path_layout = QHBoxLayout()
+        self.default_path_edit = QLineEdit(self.store.get_default_download_path())
+        default_path_layout.addWidget(self.default_path_edit)
+        browse_btn = QPushButton("Browse...")
+        browse_btn.clicked.connect(self._browse_default_path)
+        default_path_layout.addWidget(browse_btn)
+        form.addRow("Default Download Path:", default_path_layout)
+
+        layout.addWidget(group)
+
+        # Theme settings
+        theme_group = QGroupBox("Appearance")
+        theme_form = QFormLayout(theme_group)
+
+        self.theme_combo = QComboBox()
+        self.theme_combo.addItem("System (Auto)", "system")
+        self.theme_combo.addItem("Dark", "dark")
+        self.theme_combo.addItem("Light", "light")
+
+        current_theme = self.store.settings.theme
+        idx = self.theme_combo.findData(current_theme)
+        if idx >= 0:
+            self.theme_combo.setCurrentIndex(idx)
+        theme_form.addRow("Theme:", self.theme_combo)
+
+        layout.addWidget(theme_group)
+
+        # Async mode option
+        async_group = QGroupBox("Performance")
+        async_form = QFormLayout(async_group)
+
+        self.async_check = QCheckBox()
+        self.async_check.setChecked(self.store.settings.get("async_mode", False))
+        async_form.addRow("Use Async Mode (experimental):", self.async_check)
+
+        layout.addWidget(async_group)
+
+        # Buttons
+        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
+        buttons.accepted.connect(self._save)
+        buttons.rejected.connect(self.reject)
+        layout.addWidget(buttons)
+
+    def _browse_default_path(self) -> None:
+        path = QFileDialog.getExistingDirectory(
+            self, "Select Default Download Location", self.default_path_edit.text()
+        )
+        if path:
+            self.default_path_edit.setText(path)
+
+    def _save(self) -> None:
+        self.store.settings.connections = self.connections_spin.value()
+        self.store.settings.max_concurrent = self.max_concurrent_spin.value()
+        self.store.settings.speed_limit = self.speed_limit_spin.value()
+        self.store.settings.shutdown_after_finish = self.shutdown_check.isChecked()
+        self.store.settings.auto_clear_completed = self.auto_clear_check.isChecked()
+        self.store.settings.theme = self.theme_combo.currentData()
+        self.store.set_default_download_path(self.default_path_edit.text())
+        self.store.settings["async_mode"] = self.async_check.isChecked()
+        self.store.save()
+        self.accept()
