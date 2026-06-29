@@ -5,34 +5,112 @@ and certificate generation with fingerprint pinning.
 """
 
 import datetime
+import hashlib
 import logging
 import os
 import shutil
 import socket
 import subprocess
-import tempfile
 import time
 from pathlib import Path
 from threading import Lock
 from typing import Optional, List, Dict, Any
 
-import keyring
 from cryptography import x509
 from cryptography.x509.oid import NameOID
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
 from cryptography.hazmat.backends import default_backend
 
-from core.constants import (
-    CONFIG_DIR,
-    CERT_DIR,
-    KEYRING_SERVICE,
-    KEYRING_KEY,
-    DEFAULT_TIMEOUT,
-)
+from core.constants import CONFIG_DIR, CERT_DIR, KEYRING_SERVICE, KEYRING_KEY
 
 logger = logging.getLogger(__name__)
 
+# =============================================================================
+# Secret Manager (fallback if keyring is not available)
+# =============================================================================
+
+SECRET_FILE = CONFIG_DIR / "aria2_secret.txt"
+
+
+def _get_secret_from_file() -> Optional[str]:
+    """Read secret from file."""
+    try:
+        if SECRET_FILE.exists():
+            with open(SECRET_FILE, "r", encoding="utf-8") as f:
+                return f.read().strip()
+    except Exception as e:
+        logger.warning("Failed to read secret from file: %s", e)
+    return None
+
+
+def _save_secret_to_file(secret: str) -> None:
+    """Save secret to file."""
+    try:
+        SECRET_FILE.parent.mkdir(parents=True, exist_ok=True)
+        with open(SECRET_FILE, "w", encoding="utf-8") as f:
+            f.write(secret)
+        os.chmod(SECRET_FILE, 0o600)
+        logger.debug("Secret saved to file")
+    except Exception as e:
+        logger.warning("Failed to save secret to file: %s", e)
+
+
+# Try to import keyring, but fallback if not available
+try:
+    import keyring
+    KEYRING_AVAILABLE = True
+    logger.debug("Keyring module loaded successfully")
+except ImportError:
+    keyring = None
+    KEYRING_AVAILABLE = False
+    logger.warning("Keyring not available, using file-based secret storage")
+
+
+def _get_secret_from_keyring() -> Optional[str]:
+    """Get secret from keyring."""
+    if KEYRING_AVAILABLE and keyring is not None:
+        try:
+            secret = keyring.get_password(KEYRING_SERVICE, KEYRING_KEY)
+            if secret is not None:
+                return secret
+        except Exception as e:
+            logger.warning("Failed to get secret from keyring: %s", e)
+    return None
+
+
+def _save_secret_to_keyring(secret: str) -> bool:
+    """Save secret to keyring."""
+    if KEYRING_AVAILABLE and keyring is not None:
+        try:
+            keyring.set_password(KEYRING_SERVICE, KEYRING_KEY, secret)
+            logger.debug("Secret saved to keyring")
+            return True
+        except Exception as e:
+            logger.warning("Failed to save secret to keyring: %s", e)
+            return False
+    return False
+
+
+def get_secret_from_storage() -> Optional[str]:
+    """Get secret from keyring or file fallback."""
+    secret = _get_secret_from_keyring()
+    if secret is not None:
+        return secret
+    return _get_secret_from_file()
+
+
+def save_secret_to_storage(secret: str) -> None:
+    """Save secret to keyring and file fallback."""
+    # Always save to file as fallback
+    _save_secret_to_file(secret)
+    # Also try keyring if available
+    _save_secret_to_keyring(secret)
+
+
+# =============================================================================
+# Certificate Manager
+# =============================================================================
 
 class CertificateManager:
     """
@@ -46,15 +124,9 @@ class CertificateManager:
 
     @classmethod
     def ensure_certificates(cls) -> bool:
-        """
-        Ensure certificates exist. Generate if missing.
-        
-        Returns:
-            True if certificates are available, False otherwise
-        """
+        """Ensure certificates exist. Generate if missing."""
         if cls._certificates_exist():
             return True
-        
         logger.info("Generating self-signed certificate for aria2 HTTPS...")
         return cls._generate_certificates()
 
@@ -131,7 +203,6 @@ class CertificateManager:
 
             # Compute SHA-256 fingerprint for certificate pinning
             der = cert.public_bytes(serialization.Encoding.DER)
-            import hashlib
             fingerprint = hashlib.sha256(der).hexdigest()
             with open(cls.FINGERPRINT_FILE, "w") as f:
                 f.write(fingerprint)
@@ -148,7 +219,7 @@ class CertificateManager:
         """Return the stored certificate fingerprint."""
         if cls.FINGERPRINT_FILE.exists():
             try:
-                with open(cls.FINGERPRINT_FILE, "r") as f:
+                with open(cls.FINGERPRINT_FILE, "r", encoding="utf-8") as f:
                     return f.read().strip()
             except Exception:
                 pass
@@ -156,17 +227,23 @@ class CertificateManager:
 
     @classmethod
     def get_cert_path(cls) -> Optional[Path]:
+        """Return the certificate file path if it exists."""
         return cls.CERT_FILE if cls.CERT_FILE.exists() else None
 
     @classmethod
     def get_key_path(cls) -> Optional[Path]:
+        """Return the private key file path if it exists."""
         return cls.KEY_FILE if cls.KEY_FILE.exists() else None
 
+
+# =============================================================================
+# Aria2 Manager
+# =============================================================================
 
 class Aria2Manager:
     """
     Manages the lifecycle and configuration of the aria2 subprocess.
-    Uses CertificateManager for SSL certificates and stores secret in keyring.
+    Uses CertificateManager for SSL certificates and stores secret securely.
     """
 
     ARIA2_BIN: str = "aria2c"
@@ -181,32 +258,24 @@ class Aria2Manager:
 
     def _get_or_create_secret(self) -> str:
         """
-        Get secret from keyring or create a new one.
+        Get secret from storage or create a new one.
         Ensures the same secret is used across application restarts.
         
         Returns:
             The secret string
         """
-        try:
-            secret = keyring.get_password(KEYRING_SERVICE, KEYRING_KEY)
-            if secret:
-                logger.debug("Secret retrieved from keyring")
-                self._secret = secret
-                return secret
-        except Exception as e:
-            logger.warning("Failed to retrieve secret from keyring: %s", e)
+        # Try to get existing secret
+        secret = get_secret_from_storage()
+        if secret:
+            self._secret = secret
+            return secret
 
         # Generate new secret
         import secrets
         secret = secrets.token_urlsafe(32)
-        
-        try:
-            keyring.set_password(KEYRING_SERVICE, KEYRING_KEY, secret)
-            logger.info("New secret generated and stored in keyring")
-        except Exception as e:
-            logger.warning("Failed to store secret in keyring: %s", e)
-        
+        save_secret_to_storage(secret)
         self._secret = secret
+        logger.info("New secret generated and stored")
         return secret
 
     def _find_aria2(self) -> Optional[str]:
@@ -322,7 +391,6 @@ class Aria2Manager:
                 return False
 
             logger.info("Starting aria2 on port %d...", self._port)
-            logger.debug("Command: %s", " ".join(cmd))
 
             try:
                 # Create log directory
