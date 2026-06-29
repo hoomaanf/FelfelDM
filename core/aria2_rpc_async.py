@@ -23,13 +23,24 @@ class AsyncAria2RPC(BaseAria2RPC):
         self._session: Optional[aiohttp.ClientSession] = None
 
     async def _ensure_session(self) -> None:
-        if self._session is None:
+        """Ensure aiohttp session exists, recreating if closed."""
+        if self._session is None or self._session.closed:
+            # Close the old session if it exists but is closed
+            if self._session is not None and self._session.closed:
+                logger.debug("Session was closed, creating new one")
             connector = aiohttp.TCPConnector(ssl=self.verify_ssl)
             self._session = aiohttp.ClientSession(connector=connector)
 
     async def _send_request_async(self, payload: Dict[str, Any]) -> Optional[Any]:
         """Send request asynchronously using aiohttp."""
-        await self._ensure_session()
+        try:
+            await self._ensure_session()
+        except RuntimeError as e:
+            if "Event loop is closed" in str(e):
+                logger.error("Event loop is closed, cannot send request")
+                return None
+            raise
+
         url = self._build_url()
         async with self._semaphore:
             try:
@@ -40,6 +51,9 @@ class AsyncAria2RPC(BaseAria2RPC):
                     return await resp.json()
             except asyncio.CancelledError:
                 raise
+            except aiohttp.ClientError as e:
+                logger.error("HTTP client error: %s", e)
+                return None
             except Exception as e:
                 logger.error("RPC exception: %s", e)
                 return None
@@ -119,6 +133,6 @@ class AsyncAria2RPC(BaseAria2RPC):
         return results
 
     async def close(self) -> None:
-        if self._session:
+        if self._session and not self._session.closed:
             await self._session.close()
             self._session = None
