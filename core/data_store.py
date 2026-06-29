@@ -9,6 +9,8 @@ from pathlib import Path
 from threading import Lock
 from typing import List, Optional, Dict, Any
 
+import keyring
+
 from core.constants import DATA_FILE, BACKUP_FILE
 from core.queue_model import Queue, Settings
 
@@ -21,11 +23,61 @@ class DataStore:
     PATH = DATA_FILE
     BACKUP_PATH = BACKUP_FILE
 
-    def __init__(self):
+    def __init__(self) -> None:
         self._lock = Lock()
         self.queues: List[Queue] = []
         self.settings: Settings = Settings()
+        self._check_keyring()
         self.load()
+
+    def _check_keyring(self) -> None:
+        """Check keyring availability and load secret if possible, with fallback."""
+        try:
+            # Try to get secret from keyring
+            secret = keyring.get_password("felfeldm", "aria2_secret")
+            if secret:
+                self.settings.aria2_secret = secret
+                logger.info("Loaded secret from keyring")
+                return
+        except Exception as e:
+            logger.warning("Keyring not available: %s", e)
+
+        # Fallback: try to load from a secure file
+        secret_file = Path.home() / ".felfeldm" / "aria2_secret.txt"
+        try:
+            if secret_file.exists():
+                with open(secret_file, "r", encoding="utf-8") as f:
+                    secret = f.read().strip()
+                if secret:
+                    self.settings.aria2_secret = secret
+                    logger.info("Loaded secret from fallback file")
+                    return
+        except Exception as e:
+            logger.error("Failed to read fallback secret file: %s", e)
+
+        # If still no secret, leave empty
+        logger.warning("No secret found; aria2 may not be secured")
+
+    def _save_secret_to_keyring(self, secret: str) -> None:
+        """Save secret to keyring, fallback to file if needed."""
+        try:
+            keyring.set_password("felfeldm", "aria2_secret", secret)
+            logger.info("Saved secret to keyring")
+            return
+        except Exception as e:
+            logger.warning("Failed to save to keyring: %s", e)
+
+        # Fallback: save to file with restricted permissions
+        secret_file = Path.home() / ".felfeldm" / "aria2_secret.txt"
+        try:
+            secret_file.parent.mkdir(parents=True, exist_ok=True)
+            # Write with restricted permissions
+            fd = os.open(secret_file, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+            with os.fdopen(fd, 'w', encoding='utf-8') as f:
+                f.write(secret)
+            logger.info("Saved secret to fallback file")
+        except Exception as e:
+            logger.error("Failed to save secret to fallback file: %s", e)
 
     def load(self) -> None:
         """Load data from file with error handling and backup recovery."""
@@ -42,19 +94,16 @@ class DataStore:
                 logger.info("Data loaded successfully")
             except (json.JSONDecodeError, OSError, KeyError) as e:
                 logger.error("Failed to load data: %s", e)
-                # Try backup recovery
                 if self.BACKUP_PATH.exists():
                     try:
                         with open(self.BACKUP_PATH, 'r', encoding='utf-8') as f:
                             backup_data = json.load(f)
                         self._from_dict(backup_data)
                         logger.info("Data recovered from backup")
-                        # Save recovered data to main file
                         self.save()
                         return
                     except Exception as backup_e:
                         logger.error("Backup recovery failed: %s", backup_e)
-                # If all fails, start with defaults but keep existing file for inspection
                 logger.warning("Starting with default data due to corruption")
                 self._reset_defaults()
 
@@ -65,7 +114,6 @@ class DataStore:
 
     def _from_dict(self, data: Dict[str, Any]) -> None:
         """Populate from dict."""
-        # Expecting keys: "queues", "settings"
         self.queues = [Queue.from_dict(q) for q in data.get("queues", [])]
         settings_data = data.get("settings", {})
         self.settings = Settings(
@@ -74,6 +122,9 @@ class DataStore:
             max_concurrent=settings_data.get("max_concurrent", 5),
             aria2_secret=settings_data.get("aria2_secret", "")
         )
+        # If secret is set in settings, save to keyring/fallback
+        if self.settings.aria2_secret:
+            self._save_secret_to_keyring(self.settings.aria2_secret)
 
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dict for serialization."""
@@ -87,7 +138,6 @@ class DataStore:
         """Save data to file, creating backup first."""
         with self._lock:
             try:
-                # Backup existing file
                 if self.PATH.exists():
                     shutil.copy2(self.PATH, self.BACKUP_PATH)
 
@@ -98,7 +148,6 @@ class DataStore:
             except Exception as e:
                 logger.error("Failed to save data: %s", e)
 
-    # Additional methods for manipulating queues, etc.
     def add_queue(self, queue: Queue) -> None:
         with self._lock:
             self.queues.append(queue)
