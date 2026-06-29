@@ -6,6 +6,7 @@ Supports Drag & Drop for torrent files.
 """
 
 import logging
+import os
 from typing import List, Optional
 
 from PyQt6.QtCore import Qt, QTimer, pyqtSignal, QObject, QSortFilterProxyModel
@@ -553,7 +554,8 @@ class MainWindow(QMainWindow):
         pause_action.triggered.connect(self._pause_selected)
         toolbar.addAction(pause_action)
 
-        remove_action = QAction("✕", "Remove", self)
+        # Fixed: use QAction with icon and text correctly
+        remove_action = QAction(get_icon("edit-delete"), "Remove", self)
         remove_action.triggered.connect(self._remove_selected)
         toolbar.addAction(remove_action)
 
