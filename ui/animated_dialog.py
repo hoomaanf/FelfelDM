@@ -150,6 +150,8 @@ class AnimatedDialog(QDialog):
         return btn
 
     def closeEvent(self, event):
+        # Remove graphics effect to prevent memory leak
+        self.setGraphicsEffect(None)
         if self._content_widget:
             self.content_layout.removeWidget(self._content_widget)
             self._content_widget.deleteLater()
