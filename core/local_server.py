@@ -75,7 +75,7 @@ class LocalServerHandler(BaseHTTPRequestHandler):
 
 
 class LocalServer:
-    """HTTP server for browser extension integration with flexible port binding."""
+    """HTTP server for browser extension integration with port fallback."""
 
     def __init__(self, host: str = "127.0.0.1", port: Optional[int] = None):
         self.host = host
@@ -113,7 +113,7 @@ class LocalServer:
         return None
 
     def start(self) -> bool:
-        """Start the HTTP server on an available port."""
+        """Start the HTTP server on an available port, falling back if busy."""
         if self._running:
             return True
 
