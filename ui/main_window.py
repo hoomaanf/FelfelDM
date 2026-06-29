@@ -554,7 +554,6 @@ class MainWindow(QMainWindow):
         pause_action.triggered.connect(self._pause_selected)
         toolbar.addAction(pause_action)
 
-        # Fixed: use QAction with icon and text correctly
         remove_action = QAction(get_icon("edit-delete"), "Remove", self)
         remove_action.triggered.connect(self._remove_selected)
         toolbar.addAction(remove_action)
@@ -600,6 +599,7 @@ class MainWindow(QMainWindow):
             self.queue_controller.delete_queue(idx)
 
     def _show_add_dialog(self) -> None:
+        """Show the Add Download dialog with animation."""
         dialog = AddDownloadDialog(
             self.queue_controller.get_queues(),
             self.store,
@@ -617,6 +617,7 @@ class MainWindow(QMainWindow):
                 self.download_controller.add_urls(urls, queue_idx, options)
 
     def _show_add_torrent_dialog(self) -> None:
+        """Show the Add Torrent dialog with animation."""
         dialog = AddTorrentDialog(
             self.queue_controller.get_queues(),
             self.store,
@@ -629,6 +630,17 @@ class MainWindow(QMainWindow):
 
         if animated_dialog.exec():
             self._process_torrent_dialog(dialog)
+
+    def _show_settings(self) -> None:
+        """Show the Settings dialog with animation."""
+        dialog = SettingsDialog(self.store, self)
+        animated_dialog = AnimatedDialog(self)
+        animated_dialog.set_content_widget(dialog)
+        animated_dialog.setWindowTitle("Settings")
+        if animated_dialog.exec():
+            self._apply_theme_from_settings()
+            async_mode = self.store.settings.get("async_mode", False)
+            self.async_mode_indicator.set_mode(async_mode)
 
     def _start_selected(self) -> None:
         selection = self.table.selectionModel().selectedRows()
@@ -654,16 +666,6 @@ class MainWindow(QMainWindow):
             if gid:
                 self.download_controller.remove(gid)
         self.table_model.refresh()
-
-    def _show_settings(self) -> None:
-        dialog = SettingsDialog(self.store, self)
-        animated_dialog = AnimatedDialog(self)
-        animated_dialog.set_content_widget(dialog)
-        animated_dialog.setWindowTitle("Settings")
-        if animated_dialog.exec():
-            self._apply_theme_from_settings()
-            async_mode = self.store.settings.get("async_mode", False)
-            self.async_mode_indicator.set_mode(async_mode)
 
     def _apply_theme_from_settings(self) -> None:
         theme_setting = self.store.settings.get("theme", "system")
