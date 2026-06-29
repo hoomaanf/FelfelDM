@@ -27,7 +27,6 @@ Thumbs.db
 *.tmp
 
 # Project
-*.json
 !manifest.json
 *.db
 *.sqlite

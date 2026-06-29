@@ -1,12 +1,11 @@
-// FelfelDM Extension - Background Script
-// Compatible with both Firefox and Chrome
-
 const SERVER = "http://localhost:8765";
 const ICON_URL = browser.runtime.getURL("icons/icon128.png");
 
-// ============================================
-// Ping & Send
-// ============================================
+async function isCatchEnabled() {
+  const data = await browser.storage.local.get("catchDownloads");
+
+  return data.catchDownloads !== undefined ? data.catchDownloads : true;
+}
 
 async function ping() {
   try {
@@ -42,7 +41,6 @@ async function send(urls) {
     });
 
     if (r.ok) {
-      const data = await r.json();
       browser.notifications.create({
         type: "basic",
         iconUrl: ICON_URL,
@@ -58,18 +56,16 @@ async function send(urls) {
   }
 }
 
-// ============================================
-// Download Interception
-// ============================================
-
 const ignored = new Set();
 
 browser.downloads.onCreated.addListener(async (item) => {
   if (!item.url || !item.url.startsWith("http")) return;
 
-  // Get storage setting
-  const data = await browser.storage.local.get("catchDownloads");
-  if (data.catchDownloads === false) return;
+  const enabled = await isCatchEnabled();
+  if (!enabled) {
+    console.log("⛔ Download catching is disabled");
+    return;
+  }
 
   if (ignored.has(item.url)) {
     ignored.delete(item.url);
@@ -92,12 +88,7 @@ browser.downloads.onCreated.addListener(async (item) => {
   }
 });
 
-// ============================================
-// Context Menus
-// ============================================
-
 browser.runtime.onInstalled.addListener(() => {
-  // Clear existing menus first (for Chrome)
   if (browser.contextMenus.removeAll) {
     browser.contextMenus.removeAll();
   }
@@ -139,11 +130,18 @@ browser.runtime.onInstalled.addListener(() => {
   });
 });
 
-// ============================================
-// Context Menu Handler
-// ============================================
-
 browser.contextMenus.onClicked.addListener(async (info, tab) => {
+  const enabled = await isCatchEnabled();
+  if (!enabled) {
+    browser.notifications.create({
+      type: "basic",
+      iconUrl: ICON_URL,
+      title: "🌶️ FelfelDM",
+      message: "⛔ Download catching is disabled. Enable it from the popup.",
+    });
+    return;
+  }
+
   try {
     switch (info.menuItemId) {
       case "download-link":
@@ -165,14 +163,12 @@ browser.contextMenus.onClicked.addListener(async (info, tab) => {
 
       case "download-selected-links": {
         try {
-          // For Firefox: sendMessage, For Chrome: scripting
           let links = [];
           if (typeof browser.tabs.sendMessage === "function") {
             links = await browser.tabs.sendMessage(tab.id, {
               type: "getSelectedLinks",
             });
           } else {
-            // Chrome uses scripting.executeScript
             const results = await browser.scripting.executeScript({
               target: { tabId: tab.id },
               func: () => {
@@ -217,3 +213,31 @@ browser.contextMenus.onClicked.addListener(async (info, tab) => {
     console.error(e);
   }
 });
+
+browser.runtime.onMessage.addListener((message, sender, sendResponse) => {
+  console.log("📨 Message received:", message);
+
+  if (message.action === "toggle_catch") {
+    console.log(
+      `🔄 Download catching: ${message.enabled ? "ON 🟢" : "OFF 🔴"}`,
+    );
+
+    return;
+  }
+
+  if (message.action === "add_urls") {
+    send(message.urls).then((result) => {
+      sendResponse({ status: result ? "success" : "error" });
+    });
+    return true;
+  }
+
+  if (message.action === "ping") {
+    ping().then((result) => {
+      sendResponse({ status: result ? "ok" : "error" });
+    });
+    return true;
+  }
+});
+
+console.log("🌶️ FelfelDM Extension loaded!");

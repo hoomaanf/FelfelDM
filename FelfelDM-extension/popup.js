@@ -22,16 +22,52 @@ async function ping() {
   }
 }
 
-ping();
-
 const checkbox = document.getElementById("catchDownloads");
+const statusText = document.getElementById("catchStatus");
+const toggleContainer = document.getElementById("toggleContainer");
 
 browser.storage.local.get("catchDownloads").then((data) => {
-  checkbox.checked = data.catchDownloads ?? true;
+  const isEnabled =
+    data.catchDownloads !== undefined ? data.catchDownloads : true;
+  checkbox.checked = isEnabled;
+  updateStatusText(isEnabled);
+  console.log("Loaded catchDownloads:", isEnabled);
 });
 
-checkbox.addEventListener("change", () => {
-  browser.storage.local.set({
-    catchDownloads: checkbox.checked,
-  });
+function toggleCatch() {
+  const isEnabled = !checkbox.checked;
+  checkbox.checked = isEnabled;
+  console.log("Toggle changed to:", isEnabled);
+
+  browser.storage.local.set({ catchDownloads: isEnabled });
+  updateStatusText(isEnabled);
+
+  browser.runtime
+    .sendMessage({
+      action: "toggle_catch",
+      enabled: isEnabled,
+    })
+    .catch((err) => console.log("Message error:", err));
+}
+
+checkbox.addEventListener("change", toggleCatch);
+
+toggleContainer.addEventListener("click", (e) => {
+  if (e.target.tagName !== "INPUT") {
+    toggleCatch();
+  }
 });
+
+function updateStatusText(enabled) {
+  if (enabled) {
+    statusText.textContent = "✅ Active - Downloads will be intercepted";
+    statusText.className = "status-text active";
+  } else {
+    statusText.textContent = "⛔ Inactive - Downloads will NOT be intercepted";
+    statusText.className = "status-text inactive";
+  }
+}
+
+ping();
+
+setInterval(ping, 10000);

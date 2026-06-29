@@ -5,11 +5,12 @@
     <meta charset="utf-8">
     <style>
         body {
-            width: 250px;
+            width: 260px;
             padding: 15px;
             font-family: sans-serif;
             background: #2d2d30;
             color: #efeff1;
+            border-radius: 8px;
         }
 
         .header {
@@ -29,21 +30,6 @@
             margin: 0;
             color: #efeff1;
             font-size: 16px;
-        }
-
-        button {
-            width: 100%;
-            margin-top: 10px;
-            padding: 8px;
-            background: #3daee9;
-            color: white;
-            border: none;
-            border-radius: 4px;
-            cursor: pointer;
-        }
-
-        button:hover {
-            background: #3498db;
         }
 
         #status {
@@ -67,17 +53,89 @@
         .option-row {
             display: flex;
             align-items: center;
-            gap: 8px;
+            gap: 10px;
             margin-top: 10px;
-            padding: 8px;
+            padding: 10px 14px;
             background: #1e1e20;
-            border-radius: 4px;
+            border-radius: 6px;
+            justify-content: space-between;
+            cursor: pointer;
         }
 
-        .option-row input[type="checkbox"] {
-            accent-color: #3daee9;
-            width: 18px;
+        .option-row label {
+            color: #efeff1;
+            font-size: 13px;
+            cursor: pointer;
+            flex: 1;
+        }
+
+        /* Toggle Switch */
+        .switch {
+            position: relative;
+            width: 44px;
+            height: 24px;
+            flex-shrink: 0;
+        }
+
+        .switch input {
+            opacity: 0;
+            width: 0;
+            height: 0;
+        }
+
+        .slider {
+            position: absolute;
+            cursor: pointer;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background-color: #e74c3c;
+            transition: 0.3s;
+            border-radius: 24px;
+        }
+
+        .slider::before {
+            content: "";
+            position: absolute;
             height: 18px;
+            width: 18px;
+            left: 3px;
+            bottom: 3px;
+            background-color: #efeff1;
+            transition: 0.3s;
+            border-radius: 50%;
+        }
+
+        .switch input:checked+.slider {
+            background-color: #3daee9;
+        }
+
+        .switch input:checked+.slider::before {
+            transform: translateX(20px);
+        }
+
+        .switch input:disabled+.slider {
+            opacity: 0.4;
+            cursor: not-allowed;
+        }
+
+        .status-text {
+            font-size: 11px;
+            margin-top: 4px;
+            padding: 4px 8px;
+            border-radius: 4px;
+            text-align: center;
+        }
+
+        .status-text.active {
+            color: #27ae60;
+            background: #1a3a2a;
+        }
+
+        .status-text.inactive {
+            color: #e74c3c;
+            background: #3a1a1a;
         }
     </style>
 </head>
@@ -91,10 +149,14 @@
 
     <div id="status" class="disconnected">Checking...</div>
 
-    <div class="option-row">
-        <input type="checkbox" id="catchDownloads" checked>
-        <label for="catchDownloads">Catch browser downloads</label>
+    <div class="option-row" id="toggleContainer">
+        <label for="catchDownloads">🛡️ Catch Downloads</label>
+        <div class="switch">
+            <input type="checkbox" id="catchDownloads">
+            <span class="slider"></span>
+        </div>
     </div>
+    <div id="catchStatus" class="status-text active">✅ Active</div>
 
     <script src="popup.js"></script>
 
