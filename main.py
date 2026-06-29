@@ -1,4 +1,4 @@
-# main.py
+#!/usr/bin/env python3
 """
 FelfelDM - Download Manager with modern UI.
 """
@@ -27,6 +27,43 @@ def setup_logging() -> None:
     )
 
 
+def setup_font() -> None:
+    """
+    Load and apply the Inter font if available.
+    Fallback to system font.
+    """
+    # Try to load Inter font from local resources
+    font_paths = [
+        os.path.join(os.path.dirname(os.path.abspath(__file__)), "fonts", "Inter-Regular.ttf"),
+        os.path.join(os.path.dirname(os.path.abspath(__file__)), "fonts", "Inter-Variable.ttf"),
+    ]
+
+    font_family = None
+    for path in font_paths:
+        if os.path.exists(path):
+            font_id = QFontDatabase.addApplicationFont(path)
+            if font_id != -1:
+                families = QFontDatabase.applicationFontFamilies(font_id)
+                if families:
+                    font_family = families[0]
+                    break
+
+    # If Inter not found, use system font
+    if font_family is None:
+        # Try to use Inter from system if available
+        if "Inter" in QFontDatabase.families():
+            font_family = "Inter"
+        else:
+            # Fallback to Segoe UI or system default
+            font_family = "Segoe UI" if sys.platform == "win32" else "sans-serif"
+
+    app = QApplication.instance()
+    if app:
+        font = QFont(font_family, 10)
+        app.setFont(font)
+        logging.info("Font loaded: %s", font_family)
+
+
 def main() -> None:
     """Application entry point."""
     setup_logging()
@@ -40,13 +77,8 @@ def main() -> None:
 
     app = QApplication(sys.argv)
 
-    # Load modern font (Inter if available, otherwise fallback to system)
-    font_id = QFontDatabase.addApplicationFont(":/fonts/Inter-Regular.ttf")
-    if font_id != -1:
-        font_family = QFontDatabase.applicationFontFamilies(font_id)[0]
-        app.setFont(QFont(font_family, 10))
-    else:
-        app.setFont(QFont("Segoe UI", 10))
+    # Load modern font
+    setup_font()
 
     # Set window icon
     if getattr(sys, 'frozen', False) and hasattr(sys, '_MEIPASS'):
