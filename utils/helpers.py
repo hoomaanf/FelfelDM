@@ -7,19 +7,19 @@ from typing import Union, List, Optional
 # Units for size formatting
 UNITS = ["B", "KB", "MB", "GB", "TB", "PB", "EB"]
 
+# Category mapping moved to module level
+CATEGORY_MAP = {
+    "video": ["mp4", "mkv", "avi", "mov", "wmv", "flv", "webm"],
+    "audio": ["mp3", "wav", "flac", "aac", "ogg", "wma"],
+    "image": ["jpg", "jpeg", "png", "gif", "bmp", "svg", "webp"],
+    "document": ["pdf", "doc", "docx", "xls", "xlsx", "ppt", "pptx", "txt", "rtf"],
+    "archive": ["zip", "rar", "7z", "tar", "gz", "bz2", "xz"],
+    "executable": ["exe", "msi", "deb", "rpm", "dmg", "pkg"],
+}
+
 
 def _format_with_units(value: Union[int, float], units: List[str], suffix: str = "") -> str:
-    """
-    Format a numeric value with appropriate unit suffix.
-
-    Args:
-        value: The value to format (must be >= 0).
-        units: List of unit names (e.g., ["B", "KB", ...]).
-        suffix: Optional suffix to append (e.g., "/s").
-
-    Returns:
-        Formatted string like "1.5 MB/s".
-    """
+    """Format a numeric value with appropriate unit suffix."""
     if value <= 0:
         return f"0 {units[0]}{suffix}"
 
@@ -56,12 +56,10 @@ def is_valid_url(url: str) -> bool:
         return False
     url = url.strip()
     if url.startswith(("http://", "https://")):
-        # Simple check: must contain a dot and at least one slash after protocol
         parts = url.split("://", 1)
         if len(parts) == 2 and parts[1]:
             return True
     elif url.startswith("magnet:?xt=urn:"):
-        # Very basic magnet validation
         return True
     return False
 
@@ -76,16 +74,6 @@ def check_disk_space(path: str, required_bytes: int = 0) -> bool:
         return free >= required_bytes
     except OSError:
         return False
-
-
-CATEGORY_MAP = {
-    "video": ["mp4", "mkv", "avi", "mov", "wmv", "flv", "webm"],
-    "audio": ["mp3", "wav", "flac", "aac", "ogg", "wma"],
-    "image": ["jpg", "jpeg", "png", "gif", "bmp", "svg", "webp"],
-    "document": ["pdf", "doc", "docx", "xls", "xlsx", "ppt", "pptx", "txt", "rtf"],
-    "archive": ["zip", "rar", "7z", "tar", "gz", "bz2", "xz"],
-    "executable": ["exe", "msi", "deb", "rpm", "dmg", "pkg"],
-}
 
 
 def get_category(filename: str) -> str:
