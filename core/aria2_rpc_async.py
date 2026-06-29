@@ -28,7 +28,6 @@ class AsyncAria2RPC(BaseAria2RPC):
             self._session = aiohttp.ClientSession(connector=connector)
 
     async def _send_request_async(self, payload: Dict[str, Any]) -> Optional[Any]:
-        """Send request asynchronously using aiohttp."""
         await self._ensure_session()
         url = self._build_url()
         async with self._semaphore:
@@ -44,7 +43,6 @@ class AsyncAria2RPC(BaseAria2RPC):
                 logger.error("RPC exception: %s", e)
                 return None
 
-    # Override _call to be async
     async def _call_async(self, method: str, params: Optional[List] = None) -> Optional[Any]:
         payload = self._prepare_payload(method, params)
         response = await self._send_request_async(payload)
