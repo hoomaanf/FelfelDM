@@ -79,7 +79,7 @@ sudo dnf install python3 python3-pip aria2 git
 **One-line installation:**
 
 ```bash
-bash <(curl -s https://raw.githubusercontent.com/hoomaanf/FelfelDM/main/build_and_install.sh)
+bash <(curl -s https://raw.githubusercontent.com/hoomaanf/FelfelDM/main/install.sh)
 ```
 
 **Or manually:**
