@@ -211,6 +211,7 @@ class Aria2Manager:
         self._secret: str = self._generate_secret()
         self._lock: Lock = Lock()
         self._started: bool = False
+        self._start_error: Optional[str] = None
 
         self._cert_manager = CertificateManager()
         self._cert_manager.generate_certificates()
@@ -246,6 +247,10 @@ class Aria2Manager:
     def fingerprint(self) -> Optional[str]:
         return self._cert_manager.fingerprint
 
+    @property
+    def start_error(self) -> Optional[str]:
+        return self._start_error
+
     def set_custom_certificate(self, cert_path: Path, key_path: Path) -> bool:
         """Set a custom certificate for aria2."""
         return self._cert_manager.set_custom_certificate(cert_path, key_path)
@@ -256,8 +261,11 @@ class Aria2Manager:
             if self._started:
                 return True
 
+            self._start_error = None
+
             if not self._cert_manager.is_generated:
-                logger.error("Certificates not generated, cannot start aria2 with HTTPS")
+                self._start_error = "Certificates not generated"
+                logger.error(self._start_error)
                 return False
 
             cmd: List[str] = [
@@ -295,14 +303,26 @@ class Aria2Manager:
 
             try:
                 logger.info("Starting aria2 with HTTPS on port %d", self._port)
+                logger.debug("aria2 command: %s", " ".join(cmd))
+
                 self._process = subprocess.Popen(
                     cmd,
                     stdout=subprocess.DEVNULL,
                     stderr=subprocess.DEVNULL,
                     start_new_session=True,
                 )
+
+                # Give aria2 a moment to start
                 import time
-                time.sleep(1)
+                time.sleep(1.5)
+
+                # Check if process is still running
+                if self._process.poll() is not None:
+                    self._start_error = f"aria2 exited immediately with code {self._process.returncode}"
+                    logger.error(self._start_error)
+                    self._process = None
+                    return False
+
                 self._started = True
 
                 # Log certificate type
@@ -312,11 +332,14 @@ class Aria2Manager:
                     logger.info("Using custom certificate for aria2")
 
                 return True
+
             except FileNotFoundError:
-                logger.error("aria2c not found in PATH")
+                self._start_error = "aria2c not found in PATH. Please install aria2."
+                logger.error(self._start_error)
                 return False
             except Exception as e:
-                logger.error("Failed to start aria2: %s", e)
+                self._start_error = f"Failed to start aria2: {e}"
+                logger.error(self._start_error)
                 return False
 
     def stop(self) -> None:
@@ -334,11 +357,15 @@ class Aria2Manager:
                         pass
                 self._process = None
                 self._started = False
+                self._start_error = None
                 logger.info("aria2 stopped")
 
     def restart(self) -> bool:
         """Restart the aria2 subprocess."""
         self.stop()
+        # Small delay before restart
+        import time
+        time.sleep(0.5)
         return self.start()
 
     def is_running(self) -> bool:
@@ -349,6 +376,8 @@ class Aria2Manager:
         if poll is None:
             return True
         self._started = False
+        self._start_error = f"aria2 process exited with code {poll}"
+        logger.warning(self._start_error)
         return False
 
     def get_port(self) -> int:
