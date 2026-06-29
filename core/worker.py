@@ -17,12 +17,11 @@ from core.constants import RPC_POLL_INTERVAL
 logger = logging.getLogger(__name__)
 
 # Custom metaclass to resolve QObject and ABC metaclass conflict
-from PyQt6.QtCore import pyqtWrapperType
+# In PyQt6, the metaclass of QObject is accessible via type(QObject)
 from abc import ABCMeta
 
-
-class QABCMeta(pyqtWrapperType, ABCMeta):
-    """Metaclass that combines Qt's pyqtWrapperType and ABCMeta."""
+class QABCMeta(type(QObject), ABCMeta):
+    """Metaclass that combines Qt's QObject metaclass and ABCMeta."""
     pass
 
 
