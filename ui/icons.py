@@ -27,6 +27,7 @@ class IconLoader:
     _dark_icons: Optional[Path] = None
     _light_icons: Optional[Path] = None
     _cache: dict = {}
+    _current_theme: Optional[bool] = None
 
     def __new__(cls):
         if cls._instance is None:
@@ -44,6 +45,11 @@ class IconLoader:
         if light_path.exists():
             self._light_icons = light_path
 
+    def clear_cache(self) -> None:
+        """Clear the icon cache to force reloading icons."""
+        self._cache.clear()
+        self._current_theme = None
+
     def get_icon(self, name: str, size: int = 24) -> QIcon:
         """
         Get an icon by name with the appropriate theme (dark/light).
@@ -55,11 +61,19 @@ class IconLoader:
         Returns:
             QIcon instance
         """
-        cache_key = f"{name}_{size}"
+        # Detect current theme
+        is_dark = detect_theme()
+
+        # If theme changed, clear cache to reload icons
+        if self._current_theme is not None and self._current_theme != is_dark:
+            self.clear_cache()
+
+        self._current_theme = is_dark
+
+        cache_key = f"{name}_{size}_{is_dark}"
         if cache_key in self._cache:
             return self._cache[cache_key]
 
-        is_dark = detect_theme()
         icons_path = self._dark_icons if is_dark else self._light_icons
 
         icon = QIcon()
@@ -117,3 +131,8 @@ def get_icon_path(name: str) -> Optional[Path]:
             if icon_file.exists():
                 return icon_file
     return None
+
+
+def clear_icon_cache() -> None:
+    """Clear the icon cache globally."""
+    _loader.clear_cache()
