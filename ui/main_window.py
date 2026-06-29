@@ -9,11 +9,11 @@ from typing import List, Optional
 from PyQt6.QtCore import (
     Qt, QTimer, pyqtSignal, QObject, QSortFilterProxyModel, QModelIndex,
 )
-from PyQt6.QtGui import QAction, QKeyEvent, QIcon
+from PyQt6.QtGui import QAction, QKeyEvent, QIcon, QPalette, QColor, QPainter, QPixmap
 from PyQt6.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QPushButton, QTableView, QHeaderView, QComboBox,
-    QLabel, QToolBar, QMenu, QSystemTrayIcon, QMenuBar,
+    QLabel, QToolBar, QMenu, QSystemTrayIcon,
     QMessageBox, QLineEdit, QFileDialog, QApplication, QStatusBar,
     QInputDialog, QDialog,
 )
@@ -25,7 +25,6 @@ from ui.delegates import ProgressDelegate
 from ui.dialogs import AddDownloadDialog, SettingsDialog, AddTorrentDialog, TorrentFileSelectionDialog
 from ui.table_model import DownloadTableModel
 from ui.icons import get_icon, clear_icon_cache
-from ui.animated_dialog import AnimatedDialog
 from utils.helpers import format_speed
 from utils.style import apply_theme, detect_theme
 
@@ -175,7 +174,6 @@ class TrayController(QObject):
         self.tray.show()
 
     def _on_quit_clicked(self) -> None:
-        """Handle quit action from tray menu."""
         self.quit_requested.emit()
 
     def _on_tray_activated(self, reason: QSystemTrayIcon.ActivationReason) -> None:
@@ -276,7 +274,7 @@ class MainWindow(QMainWindow):
         self.aria2_manager = Aria2Manager()
         self.aria2_manager.start()
 
-        # aria2 RPC client - استفاده از attribute به جای .get()
+        # aria2 RPC client
         self.aria2 = Aria2RPC(
             self.store.settings.aria2_host,
             self.store.settings.aria2_port,
@@ -328,7 +326,6 @@ class MainWindow(QMainWindow):
             self.store.save()
 
     def _setup_worker(self) -> None:
-        # استفاده از attribute
         async_mode = self.store.settings.async_mode
         if async_mode:
             from core.async_worker import AsyncWorker
@@ -447,7 +444,6 @@ class MainWindow(QMainWindow):
 
     def _create_async_mode_indicator(self) -> AsyncModeIndicator:
         self.async_mode_indicator = AsyncModeIndicator()
-        # استفاده از attribute
         async_mode = self.store.settings.async_mode
         self.async_mode_indicator.set_mode(async_mode)
         return self.async_mode_indicator
@@ -520,7 +516,6 @@ class MainWindow(QMainWindow):
                 QMessageBox.warning(self, "Cannot Delete", "Cannot delete the Default queue.")
 
     def _show_add_dialog(self) -> None:
-        """Show the Add Download dialog."""
         dialog = AddDownloadDialog(
             self.queue_controller.get_queues(),
             self.store,
@@ -535,7 +530,6 @@ class MainWindow(QMainWindow):
                 self.download_controller.add_urls(urls, queue_idx, options)
 
     def _show_add_torrent_dialog(self) -> None:
-        """Show the Add Torrent dialog."""
         dialog = AddTorrentDialog(
             self.queue_controller.get_queues(),
             self.store,
@@ -551,7 +545,6 @@ class MainWindow(QMainWindow):
                 QMessageBox.warning(self, "Error", "No torrent file selected.")
                 return
 
-            # Try to get torrent info for file selection
             try:
                 torrent_info = self.aria2.get_torrent_info(torrent_path)
                 if torrent_info and torrent_info.get('files'):
@@ -573,7 +566,6 @@ class MainWindow(QMainWindow):
             except Exception as e:
                 logger.warning("Could not get torrent info: %s", e)
 
-            # Fallback: add without file selection
             gid = self.download_controller.add_torrent(torrent_path, queue_idx, options)
             if gid:
                 QMessageBox.information(self, "Success", "Torrent added successfully.")
@@ -611,25 +603,19 @@ class MainWindow(QMainWindow):
             self.table_model.refresh()
 
     def _show_settings(self) -> None:
-        """Show the Settings dialog."""
         dialog = SettingsDialog(self.store, self)
         if dialog.exec() == QDialog.DialogCode.Accepted:
-            # Reload settings
             self._apply_theme_from_settings()
-            # استفاده از attribute
             async_mode = self.store.settings.async_mode
             self.async_mode_indicator.set_mode(async_mode)
-            # Restart worker if async mode changed
             self._restart_worker()
 
     def _restart_worker(self) -> None:
-        """Restart the backend worker."""
         if hasattr(self, 'worker'):
             self.worker.stop()
         self._setup_worker()
 
     def _apply_theme_from_settings(self) -> None:
-        """Apply the theme based on settings."""
         try:
             theme_setting = self.store.settings.theme
             if theme_setting == "system":
@@ -641,10 +627,8 @@ class MainWindow(QMainWindow):
 
             apply_theme(self, is_dark)
 
-            # Clear icon cache and update icons
             clear_icon_cache()
             self._update_tray_icon()
-            # Force UI update
             self.update()
             logger.info("Theme applied: %s", "Dark" if is_dark else "Light")
         except Exception as e:
@@ -707,11 +691,9 @@ class MainWindow(QMainWindow):
                 self.download_controller.add_urls(urls, queue_idx, options)
 
     def _update_ui(self) -> None:
-        """Periodic UI updates."""
         pass
 
     def _update_tray_icon(self) -> None:
-        """Update the tray icon with themed icon."""
         is_dark = False
         try:
             palette = self.palette()
@@ -721,17 +703,14 @@ class MainWindow(QMainWindow):
         except Exception:
             pass
 
-        # Use a simple built-in icon
         icon = get_icon("download", is_dark)
         if icon.isNull():
             icon = QIcon.fromTheme("download")
         if icon.isNull():
             icon = QIcon.fromTheme("folder-download")
         if icon.isNull():
-            # Fallback: create a simple icon
             pixmap = QPixmap(64, 64)
             pixmap.fill(QColor(0, 0, 0, 0))
-            from PyQt6.QtGui import QPainter, QColor
             painter = QPainter(pixmap)
             painter.setBrush(QColor("#e67e22"))
             painter.setPen(QColor("#e67e22"))
@@ -767,24 +746,18 @@ class MainWindow(QMainWindow):
         )
 
     def _quit_app(self) -> None:
-        """Cleanly quit the application."""
         logger.info("Quitting application...")
 
-        # Stop worker
         if hasattr(self, 'worker'):
             self.worker.stop()
 
-        # Stop local server
         if hasattr(self, 'local_server'):
             self.local_server.stop()
 
-        # Stop aria2
         if hasattr(self, 'aria2_manager'):
             self.aria2_manager.stop()
 
-        # Close RPC connection
         if hasattr(self, 'aria2'):
             self.aria2.close()
 
-        # Quit application
         QApplication.quit()
