@@ -8,8 +8,7 @@ import logging
 import secrets
 import threading
 from http.server import HTTPServer, BaseHTTPRequestHandler
-from urllib.parse import parse_qs, urlparse
-from typing import Optional, List, Dict, Any
+from typing import Optional
 
 from PyQt6.QtCore import QObject, pyqtSignal
 
@@ -77,12 +76,25 @@ class LocalServer(QObject):
             def do_POST(self):
                 self._handle_request()
 
-            def _handle_request(self):
-                # CORS headers
+            def do_OPTIONS(self):
+                self._handle_options()
+
+            def _handle_options(self):
+                """Handle CORS preflight requests."""
                 self.send_response(200)
+                self._send_cors_headers()
+                self.end_headers()
+
+            def _send_cors_headers(self):
+                """Send CORS headers."""
                 self.send_header("Access-Control-Allow-Origin", "http://localhost")
                 self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
                 self.send_header("Access-Control-Allow-Headers", "X-Auth-Token, Content-Type")
+                self.send_header("Access-Control-Max-Age", "86400")
+
+            def _handle_request(self):
+                # CORS headers
+                self._send_cors_headers()
                 self.end_headers()
 
                 # Handle OPTIONS preflight
@@ -95,12 +107,16 @@ class LocalServer(QObject):
                     self.wfile.write(b'{"error": "Missing token"}')
                     return
 
-                # Use secrets.compare_digest for timing-attack resistance
                 if not secrets.compare_digest(token_header, handler._token):
                     self.wfile.write(b'{"error": "Invalid token"}')
                     return
 
-                # Parse request
+                # Handle GET requests - no token in response
+                if self.command == "GET":
+                    self.wfile.write(b'{"status": "ok"}')
+                    return
+
+                # Handle POST requests
                 if self.command == "POST":
                     content_length = int(self.headers.get("Content-Length", 0))
                     body = self.rfile.read(content_length).decode("utf-8")
@@ -109,13 +125,11 @@ class LocalServer(QObject):
                         urls = data.get("urls", [])
                         if urls:
                             handler.urls_received.emit(urls)
-                            self.wfile.write(b'{"status": "ok", "count": %d}' % len(urls))
+                            self.wfile.write(f'{{"status": "ok", "count": {len(urls)}}}'.encode())
                         else:
                             self.wfile.write(b'{"error": "No URLs provided"}')
                     except json.JSONDecodeError:
                         self.wfile.write(b'{"error": "Invalid JSON"}')
-                elif self.command == "GET":
-                    self.wfile.write(b'{"status": "ok", "token": "%s"}' % handler._token.encode())
 
             def log_message(self, format, *args):
                 # Suppress default logging
