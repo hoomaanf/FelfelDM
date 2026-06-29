@@ -537,30 +537,36 @@ class MainWindow(QMainWindow):
         toolbar.setMovable(False)
 
         add_action = QAction(get_icon("list-add"), "Add Download", self)
+        add_action.setObjectName("addAction")
         add_action.triggered.connect(self._show_add_dialog)
         toolbar.addAction(add_action)
 
         torrent_action = QAction(get_icon("torrent"), "Add Torrent", self)
+        torrent_action.setObjectName("torrentAction")
         torrent_action.triggered.connect(self._show_add_torrent_dialog)
         toolbar.addAction(torrent_action)
 
         toolbar.addSeparator()
 
         start_action = QAction(get_icon("media-playback-start"), "Start", self)
+        start_action.setObjectName("startAction")
         start_action.triggered.connect(self._start_selected)
         toolbar.addAction(start_action)
 
         pause_action = QAction(get_icon("media-playback-pause"), "Pause", self)
+        pause_action.setObjectName("pauseAction")
         pause_action.triggered.connect(self._pause_selected)
         toolbar.addAction(pause_action)
 
         remove_action = QAction(get_icon("edit-delete"), "Remove", self)
+        remove_action.setObjectName("removeAction")
         remove_action.triggered.connect(self._remove_selected)
         toolbar.addAction(remove_action)
 
         toolbar.addSeparator()
 
         settings_action = QAction(get_icon("preferences-system"), "Settings", self)
+        settings_action.setObjectName("settingsAction")
         settings_action.triggered.connect(self._show_settings)
         toolbar.addAction(settings_action)
 
@@ -599,7 +605,6 @@ class MainWindow(QMainWindow):
             self.queue_controller.delete_queue(idx)
 
     def _show_add_dialog(self) -> None:
-        """Show the Add Download dialog with animation."""
         dialog = AddDownloadDialog(
             self.queue_controller.get_queues(),
             self.store,
@@ -617,7 +622,6 @@ class MainWindow(QMainWindow):
                 self.download_controller.add_urls(urls, queue_idx, options)
 
     def _show_add_torrent_dialog(self) -> None:
-        """Show the Add Torrent dialog with animation."""
         dialog = AddTorrentDialog(
             self.queue_controller.get_queues(),
             self.store,
@@ -632,7 +636,6 @@ class MainWindow(QMainWindow):
             self._process_torrent_dialog(dialog)
 
     def _show_settings(self) -> None:
-        """Show the Settings dialog with animation."""
         dialog = SettingsDialog(self.store, self)
         animated_dialog = AnimatedDialog(self)
         animated_dialog.set_content_widget(dialog)
@@ -668,14 +671,46 @@ class MainWindow(QMainWindow):
         self.table_model.refresh()
 
     def _apply_theme_from_settings(self) -> None:
+        """Apply theme from settings and refresh UI accordingly."""
         theme_setting = self.store.settings.get("theme", "system")
         if theme_setting == "system":
             is_dark = detect_theme()
         elif theme_setting == "dark":
             is_dark = True
-        else:
+        else:  # "light"
             is_dark = False
+
+        # Apply theme to the whole application
         apply_theme(self, is_dark)
+
+        # Refresh icons to reflect the new theme
+        self._refresh_icons()
+
+    def _refresh_icons(self) -> None:
+        """Refresh all icons in the UI after theme change."""
+        # Clear the icon cache
+        from ui.icons import clear_icon_cache
+        clear_icon_cache()
+
+        # Update toolbar actions
+        toolbar = self.findChild(QToolBar)
+        if toolbar:
+            for action in toolbar.actions():
+                if action.objectName() == "addAction":
+                    action.setIcon(get_icon("list-add"))
+                elif action.objectName() == "torrentAction":
+                    action.setIcon(get_icon("torrent"))
+                elif action.objectName() == "startAction":
+                    action.setIcon(get_icon("media-playback-start"))
+                elif action.objectName() == "pauseAction":
+                    action.setIcon(get_icon("media-playback-pause"))
+                elif action.objectName() == "removeAction":
+                    action.setIcon(get_icon("edit-delete"))
+                elif action.objectName() == "settingsAction":
+                    action.setIcon(get_icon("preferences-system"))
+
+        # Update tray icon
+        self._update_tray_icon()
 
     def _on_aria2_error(self, msg: str) -> None:
         logger.error("aria2 error: %s", msg)
@@ -773,9 +808,49 @@ class MainWindow(QMainWindow):
         )
 
     def _quit_app(self) -> None:
+        """Quit the application gracefully."""
+        logger.info("Quitting application...")
+
+        # Stop the worker (sync or async)
         if hasattr(self, 'worker') and hasattr(self.worker, 'stop'):
-            self.worker.stop()
+            try:
+                self.worker.stop()
+                logger.debug("Worker stopped")
+            except Exception as e:
+                logger.warning("Error stopping worker: %s", e)
+
+        # Stop the local server
         if hasattr(self, 'local_server'):
-            self.local_server.stop()
-        self.aria2_manager.stop()
+            try:
+                self.local_server.stop()
+                logger.debug("Local server stopped")
+            except Exception as e:
+                logger.warning("Error stopping local server: %s", e)
+
+        # Stop aria2
+        if hasattr(self, 'aria2_manager'):
+            try:
+                self.aria2_manager.stop()
+                logger.debug("Aria2 stopped")
+            except Exception as e:
+                logger.warning("Error stopping aria2: %s", e)
+
+        # Close the RPC session
+        if hasattr(self, 'aria2') and hasattr(self.aria2, 'close'):
+            try:
+                self.aria2.close()
+                logger.debug("RPC session closed")
+            except Exception as e:
+                logger.warning("Error closing RPC session: %s", e)
+
+        # Hide the tray icon before quitting
+        if hasattr(self, 'tray_controller') and hasattr(self.tray_controller, 'tray'):
+            try:
+                self.tray_controller.tray.hide()
+                logger.debug("Tray icon hidden")
+            except Exception as e:
+                logger.warning("Error hiding tray icon: %s", e)
+
+        # Quit the application
+        logger.info("Application quit successfully")
         QApplication.quit()
