@@ -59,18 +59,6 @@ class DownloadController(QObject):
         super().__init__(parent)
         self._worker = worker
 
-    def _run_async(self, coro):
-        """Run an async coroutine in a new event loop."""
-        try:
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
-            result = loop.run_until_complete(coro)
-            loop.close()
-            return result
-        except Exception as e:
-            logger.error("Async execution failed: %s", e)
-            return None
-
     def add_download(self, uri: str, options: Optional[dict] = None) -> Optional[str]:
         """Add a download via the worker."""
         try:
@@ -78,8 +66,7 @@ class DownloadController(QObject):
                 coro = self._worker.async_aria2.add_magnet(uri, options)
             else:
                 coro = self._worker.async_aria2.add_uri([uri], options)
-
-            gid = self._run_async(coro)
+            gid = asyncio.run(coro)
             if gid:
                 self.download_added.emit(gid)
             return gid
@@ -90,7 +77,7 @@ class DownloadController(QObject):
     def remove_download(self, gid: str) -> bool:
         """Remove a download."""
         try:
-            result = self._run_async(self._worker.async_aria2.remove(gid))
+            result = asyncio.run(self._worker.async_aria2.remove(gid))
             if result:
                 self.download_removed.emit(gid)
             return bool(result)
@@ -101,7 +88,7 @@ class DownloadController(QObject):
     def pause_download(self, gid: str) -> bool:
         """Pause a download."""
         try:
-            result = self._run_async(self._worker.async_aria2.pause(gid))
+            result = asyncio.run(self._worker.async_aria2.pause(gid))
             if result:
                 self.download_paused.emit(gid)
             return bool(result)
@@ -112,7 +99,7 @@ class DownloadController(QObject):
     def resume_download(self, gid: str) -> bool:
         """Resume a paused download."""
         try:
-            result = self._run_async(self._worker.async_aria2.unpause(gid))
+            result = asyncio.run(self._worker.async_aria2.unpause(gid))
             if result:
                 self.download_resumed.emit(gid)
             return bool(result)
