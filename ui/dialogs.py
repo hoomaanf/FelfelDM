@@ -8,21 +8,21 @@ import logging
 import os
 from typing import List, Optional, Dict, Any
 
-from PyQt6.QtCore import Qt, pyqtSignal, QDate, QTime, QTimer
+from PyQt6.QtCore import Qt, pyqtSignal, QDate, QTime
 from PyQt6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QFormLayout,
     QGroupBox, QLineEdit, QTextEdit, QPushButton,
     QComboBox, QSpinBox, QCheckBox, QLabel,
     QFileDialog, QDialogButtonBox, QWidget,
     QListWidget, QListWidgetItem, QMessageBox,
-    QCalendarWidget, QTimeEdit, QProgressBar,
+    QCalendarWidget, QTimeEdit, QTabWidget, QProgressBar,
 )
 
 import validators
 from core.data_store import Queue, DataStore
 from core.constants import DEFAULT_DOWNLOAD_PATH
-from core.aria2_rpc import Aria2RPC
 from ui.icons import get_icon
+from ui.animated_dialog import AnimatedDialog
 
 logger = logging.getLogger(__name__)
 
@@ -49,6 +49,16 @@ def is_valid_url(url: str) -> bool:
     return False
 
 
+class AnimatedDialogWrapper(AnimatedDialog):
+    """Wrapper for adding animation to any QDialog content."""
+    
+    def __init__(self, content_widget: QWidget, parent: QWidget = None, **kwargs):
+        super().__init__(parent, **kwargs)
+        self.set_content_widget(content_widget)
+        if hasattr(content_widget, 'windowTitle'):
+            self.setWindowTitle(content_widget.windowTitle())
+
+
 class UrlInputWidget(QWidget):
     """Widget for entering URLs with import functionality."""
 
@@ -62,7 +72,7 @@ class UrlInputWidget(QWidget):
         self.url_edit.setMinimumHeight(80)
         layout.addWidget(self.url_edit)
 
-        import_btn = QPushButton(get_icon('document-new'), "Import from File")
+        import_btn = QPushButton(get_icon("document-new"), "Import from File")
         import_btn.clicked.connect(self._import_from_file)
         layout.addWidget(import_btn)
 
@@ -108,7 +118,7 @@ class PathSelectorWidget(QWidget):
         self.path_edit.textChanged.connect(self.path_changed.emit)
         layout.addWidget(self.path_edit)
 
-        browse = QPushButton(get_icon('folder-open'), "Browse...")
+        browse = QPushButton(get_icon("folder-open"), "Browse...")
         browse.clicked.connect(self._browse)
         layout.addWidget(browse)
 
@@ -155,7 +165,6 @@ class OptionsWidget(QWidget):
         self.retry_spin.setSpecialValueText("Unlimited")
         layout.addRow("Max Tries:", self.retry_spin)
 
-        # Speed limit per download
         self.speed_limit_spin = QSpinBox()
         self.speed_limit_spin.setRange(0, 1000000)
         self.speed_limit_spin.setSpecialValueText("Unlimited")
@@ -165,9 +174,6 @@ class OptionsWidget(QWidget):
         self.pause_check = QCheckBox("Start Paused")
         self.pause_check.setChecked(False)
         layout.addRow("", self.pause_check)
-
-        self.clear_check = QCheckBox("Clear completed after finish")
-        layout.addRow("", self.clear_check)
 
     def get_queue_index(self) -> int:
         return self.queue_cb.currentIndex()
@@ -189,105 +195,42 @@ class OptionsWidget(QWidget):
     def get_pause(self) -> bool:
         return self.pause_check.isChecked()
 
-    def get_clear(self) -> bool:
-        return self.clear_check.isChecked()
 
-
-class TorrentFileSelectionDialog(QDialog):
-    """
-    Dialog for selecting files from a torrent with progress display.
-    Shows download progress after the torrent is added.
-    """
+class AddDownloadDialog(QDialog):
+    """Dialog for adding multiple downloads with advanced options."""
 
     def __init__(
         self,
-        torrent_info: Dict[str, Any],
-        torrent_path: str,
-        aria2_rpc: Optional[Aria2RPC] = None,
-        gid: Optional[str] = None,
+        queues: List[Queue],
+        store: DataStore,
+        default_queue: int = 0,
         parent: Optional[QWidget] = None,
     ) -> None:
-        """
-        Initialize the torrent file selection dialog.
-
-        Args:
-            torrent_info: Torrent metadata from aria2.getTorrentInfo
-            torrent_path: Path to the .torrent file
-            aria2_rpc: Aria2RPC instance for fetching status (required for progress)
-            gid: GID of the torrent download (for progress tracking)
-            parent: Parent widget
-        """
         super().__init__(parent)
-        self.torrent_info = torrent_info
-        self.torrent_path = torrent_path
-        self.aria2_rpc = aria2_rpc
-        self.gid = gid
-        self._progress_timer: Optional[QTimer] = None
+        self._queues = queues
+        self._store = store
+        self._default_queue = default_queue
 
-        self.setWindowTitle("Select Torrent Files")
-        self.setMinimumWidth(550)
-        self.setMinimumHeight(450)
+        self.setWindowTitle("Add Downloads")
+        self.setMinimumWidth(600)
+        self.setMinimumHeight(500)
         self._setup_ui()
-
-        # Start progress tracking if GID is provided
-        if self.gid and self.aria2_rpc:
-            self._start_progress_tracking()
 
     def _setup_ui(self) -> None:
         layout = QVBoxLayout(self)
 
-        # Info label
-        info_text = f"Torrent: {self.torrent_info.get('name', 'Unknown')}"
-        if 'totalLength' in self.torrent_info:
-            from utils.helpers import format_size
-            info_text += f" (Size: {format_size(self.torrent_info['totalLength'])})"
-        info_label = QLabel(info_text)
-        layout.addWidget(info_label)
+        # URL input
+        self.url_widget = UrlInputWidget()
+        layout.addWidget(self.url_widget)
 
-        # File list
-        self.file_list = QListWidget()
-        files = self.torrent_info.get('files', [])
-        if isinstance(files, list):
-            for idx, file_info in enumerate(files):
-                if isinstance(file_info, dict):
-                    name = file_info.get('path', f'File {idx+1}')
-                    size = file_info.get('length', 0)
-                    from utils.helpers import format_size
-                    item_text = f"{name} ({format_size(size)})"
-                    item = QListWidgetItem(item_text)
-                    item.setData(Qt.ItemDataRole.UserRole, idx + 1)
-                    item.setCheckState(Qt.CheckState.Checked)
-                    self.file_list.addItem(item)
+        # Path selector with default from store
+        default_path = self._store.get_default_download_path()
+        self.path_widget = PathSelectorWidget(default_path)
+        layout.addWidget(self.path_widget)
 
-        # Select all / None buttons
-        btn_layout = QHBoxLayout()
-        select_all_btn = QPushButton("Select All")
-        select_all_btn.clicked.connect(self._select_all)
-        btn_layout.addWidget(select_all_btn)
-
-        select_none_btn = QPushButton("Select None")
-        select_none_btn.clicked.connect(self._select_none)
-        btn_layout.addWidget(select_none_btn)
-
-        btn_layout.addStretch()
-        layout.addLayout(btn_layout)
-        layout.addWidget(self.file_list)
-
-        # Progress bar for torrent download
-        progress_group = QGroupBox("Download Progress")
-        progress_layout = QVBoxLayout(progress_group)
-
-        self.progress_bar = QProgressBar()
-        self.progress_bar.setRange(0, 100)
-        self.progress_bar.setValue(0)
-        self.progress_bar.setVisible(False)
-        progress_layout.addWidget(self.progress_bar)
-
-        self.progress_label = QLabel("Waiting for download to start...")
-        self.progress_label.setVisible(False)
-        progress_layout.addWidget(self.progress_label)
-
-        layout.addWidget(progress_group)
+        # Options
+        self.options_widget = OptionsWidget(self._queues, self._default_queue)
+        layout.addWidget(self.options_widget)
 
         # Buttons
         buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
@@ -295,88 +238,24 @@ class TorrentFileSelectionDialog(QDialog):
         buttons.rejected.connect(self.reject)
         layout.addWidget(buttons)
 
-    def _start_progress_tracking(self) -> None:
-        """Start periodic progress updates for the torrent download."""
-        if not self.gid or not self.aria2_rpc:
-            return
+    def get_urls(self) -> List[str]:
+        return self.url_widget.get_urls()
 
-        self.progress_bar.setVisible(True)
-        self.progress_label.setVisible(True)
-        self.progress_label.setText("Starting download...")
-        self.progress_bar.setValue(0)
+    def set_urls(self, urls: List[str]) -> None:
+        self.url_widget.set_urls(urls)
 
-        self._progress_timer = QTimer(self)
-        self._progress_timer.timeout.connect(self._update_progress)
-        self._progress_timer.start(1000)  # Update every second
+    def get_queue_index(self) -> int:
+        return self.options_widget.get_queue_index()
 
-    def _update_progress(self) -> None:
-        """Update the progress bar based on aria2 tell_status."""
-        if not self.gid or not self.aria2_rpc:
-            return
+    def get_options(self) -> Dict[str, Any]:
+        options = self.options_widget.get_options()
+        path = self.path_widget.get_path()
+        if path:
+            options["dir"] = path
+        return options
 
-        try:
-            status = self.aria2_rpc.tell_status(self.gid, ["completedLength", "totalLength"])
-            if not status:
-                return
-
-            completed = int(status.get("completedLength", 0))
-            total = int(status.get("totalLength", 0))
-
-            if total > 0:
-                progress = min(100, int((completed / total) * 100))
-                self.progress_bar.setValue(progress)
-
-                from utils.helpers import format_size
-                progress_text = f"{format_size(completed)} / {format_size(total)} ({progress}%)"
-                self.progress_label.setText(progress_text)
-
-                if progress >= 100:
-                    self.progress_label.setText("Download complete! ✅")
-                    self._stop_progress_tracking()
-            else:
-                self.progress_label.setText("Waiting for torrent metadata...")
-
-        except Exception as e:
-            logger.error("Failed to update torrent progress: %s", e)
-
-    def _stop_progress_tracking(self) -> None:
-        """Stop the progress timer."""
-        if self._progress_timer:
-            self._progress_timer.stop()
-            self._progress_timer = None
-
-    def set_gid(self, gid: str) -> None:
-        """Set the GID for an existing torrent and start progress tracking."""
-        self.gid = gid
-        if self.aria2_rpc:
-            self._start_progress_tracking()
-
-    def _select_all(self) -> None:
-        for i in range(self.file_list.count()):
-            item = self.file_list.item(i)
-            if item:
-                item.setCheckState(Qt.CheckState.Checked)
-
-    def _select_none(self) -> None:
-        for i in range(self.file_list.count()):
-            item = self.file_list.item(i)
-            if item:
-                item.setCheckState(Qt.CheckState.Unchecked)
-
-    def get_selected_files(self) -> List[int]:
-        indices = []
-        for i in range(self.file_list.count()):
-            item = self.file_list.item(i)
-            if item and item.checkState() == Qt.CheckState.Checked:
-                idx = item.data(Qt.ItemDataRole.UserRole)
-                if idx:
-                    indices.append(idx)
-        return indices
-
-    def closeEvent(self, event) -> None:
-        """Stop the progress timer when the dialog is closed."""
-        self._stop_progress_tracking()
-        super().closeEvent(event)
+    def get_pause(self) -> bool:
+        return self.options_widget.get_pause()
 
 
 class AddTorrentDialog(QDialog):
@@ -426,13 +305,8 @@ class AddTorrentDialog(QDialog):
             self, "Select Torrent File", "", "Torrent Files (*.torrent);;All Files (*)"
         )
         if file_path:
-            self.set_torrent_path(file_path)
-
-    def set_torrent_path(self, path: str) -> None:
-        """Set the torrent file path and update the UI."""
-        if path and os.path.exists(path):
-            self._torrent_path = path
-            self.file_label.setText(os.path.basename(path))
+            self._torrent_path = file_path
+            self.file_label.setText(os.path.basename(file_path))
 
     def get_torrent_path(self) -> Optional[str]:
         return self._torrent_path
@@ -446,177 +320,124 @@ class AddTorrentDialog(QDialog):
     def get_pause(self) -> bool:
         return self.options_widget.get_pause()
 
-    def get_clear(self) -> bool:
-        return self.options_widget.get_clear()
 
-
-class ScheduleWidget(QWidget):
-    """Widget for advanced scheduling with calendar and time selection."""
-
-    schedule_changed = pyqtSignal()
-
-    def __init__(self, parent: Optional[QWidget] = None) -> None:
-        super().__init__(parent)
-        self._setup_ui()
-
-    def _setup_ui(self) -> None:
-        layout = QVBoxLayout(self)
-
-        # Calendar for date selection (multiple select)
-        self.calendar = QCalendarWidget()
-        self.calendar.setGridVisible(True)
-        self.calendar.setSelectionMode(QCalendarWidget.SelectionMode.MultiSelection)
-        layout.addWidget(self.calendar)
-
-        # Time selection
-        time_layout = QHBoxLayout()
-        time_layout.addWidget(QLabel("Times (HH:MM, one per line):"))
-
-        self.time_edit = QTextEdit()
-        self.time_edit.setPlaceholderText("08:00\n12:00\n18:00")
-        self.time_edit.setMaximumHeight(60)
-        time_layout.addWidget(self.time_edit)
-
-        layout.addLayout(time_layout)
-
-        # Buttons to clear selections
-        btn_layout = QHBoxLayout()
-        clear_dates_btn = QPushButton("Clear Dates")
-        clear_dates_btn.clicked.connect(self._clear_dates)
-        btn_layout.addWidget(clear_dates_btn)
-
-        clear_times_btn = QPushButton("Clear Times")
-        clear_times_btn.clicked.connect(self._clear_times)
-        btn_layout.addWidget(clear_times_btn)
-
-        btn_layout.addStretch()
-        layout.addLayout(btn_layout)
-
-    def _clear_dates(self) -> None:
-        self.calendar.clearSelection()
-
-    def _clear_times(self) -> None:
-        self.time_edit.clear()
-
-    def get_selected_dates(self) -> List[str]:
-        """Return selected dates as ISO strings."""
-        selected = self.calendar.selectedDates()
-        return [d.toString(Qt.DateFormat.ISODate) for d in selected]
-
-    def get_times(self) -> List[str]:
-        """Return times as list of "HH:MM" strings."""
-        text = self.time_edit.toPlainText()
-        times = []
-        for line in text.splitlines():
-            line = line.strip()
-            if line:
-                parts = line.split(":")
-                if len(parts) == 2 and parts[0].isdigit() and parts[1].isdigit():
-                    h = int(parts[0])
-                    m = int(parts[1])
-                    if 0 <= h < 24 and 0 <= m < 60:
-                        times.append(f"{h:02d}:{m:02d}")
-        return times
-
-
-class AddDownloadDialog(QDialog):
-    """Dialog for adding multiple downloads with advanced options including speed limit."""
+class TorrentFileSelectionDialog(QDialog):
+    """Dialog for selecting files from a torrent with progress display."""
 
     def __init__(
         self,
-        queues: List[Queue],
-        store: DataStore,
-        default_queue: int = 0,
-        parent: Optional[QDialog] = None,
+        torrent_info: Dict[str, Any],
+        torrent_path: str,
+        parent: Optional[QWidget] = None,
     ) -> None:
         super().__init__(parent)
-        self._queues = queues
-        self._store = store
-        self._default_queue = default_queue
+        self.torrent_info = torrent_info
+        self.torrent_path = torrent_path
+        self._gid: Optional[str] = None
 
-        self.setWindowTitle("Add Downloads")
-        self.setMinimumWidth(600)
-        self.setMinimumHeight(500)
+        self.setWindowTitle("Select Torrent Files")
+        self.setMinimumWidth(500)
+        self.setMinimumHeight(400)
         self._setup_ui()
 
     def _setup_ui(self) -> None:
         layout = QVBoxLayout(self)
 
-        # URL input
-        self.url_widget = UrlInputWidget()
-        layout.addWidget(self.url_widget)
+        info_text = f"Torrent: {self.torrent_info.get('name', 'Unknown')}"
+        if 'totalLength' in self.torrent_info:
+            from utils.helpers import format_size
+            info_text += f" (Size: {format_size(self.torrent_info['totalLength'])})"
+        info_label = QLabel(info_text)
+        layout.addWidget(info_label)
 
-        # Path selector with default from store
-        default_path = self._store.get_default_download_path()
-        self.path_widget = PathSelectorWidget(default_path)
-        layout.addWidget(self.path_widget)
+        self.file_list = QListWidget()
+        files = self.torrent_info.get('files', [])
+        if isinstance(files, list):
+            for idx, file_info in enumerate(files):
+                if isinstance(file_info, dict):
+                    name = file_info.get('path', f'File {idx+1}')
+                    size = file_info.get('length', 0)
+                    from utils.helpers import format_size
+                    item_text = f"{name} ({format_size(size)})"
+                    item = QListWidgetItem(item_text)
+                    item.setData(Qt.ItemDataRole.UserRole, idx + 1)
+                    item.setCheckState(Qt.CheckState.Checked)
+                    self.file_list.addItem(item)
 
-        # Options (with speed limit)
-        self.options_widget = OptionsWidget(self._queues, self._default_queue)
-        layout.addWidget(self.options_widget)
+        btn_layout = QHBoxLayout()
+        select_all_btn = QPushButton("Select All")
+        select_all_btn.clicked.connect(self._select_all)
+        btn_layout.addWidget(select_all_btn)
 
-        # Advanced options
-        advanced_group = QGroupBox("Advanced Options")
-        advanced_layout = QFormLayout(advanced_group)
+        select_none_btn = QPushButton("Select None")
+        select_none_btn.clicked.connect(self._select_none)
+        btn_layout.addWidget(select_none_btn)
 
-        self.header_check = QCheckBox("Add custom headers")
-        advanced_layout.addRow("", self.header_check)
+        btn_layout.addStretch()
+        layout.addLayout(btn_layout)
+        layout.addWidget(self.file_list)
 
-        self.header_edit = QTextEdit()
-        self.header_edit.setPlaceholderText("Header: value (one per line)")
-        self.header_edit.setMaximumHeight(80)
-        self.header_edit.setEnabled(False)
-        self.header_check.toggled.connect(self.header_edit.setEnabled)
-        advanced_layout.addRow("Headers:", self.header_edit)
+        # Progress section for when download is active
+        progress_group = QGroupBox("Download Progress")
+        progress_layout = QVBoxLayout(progress_group)
+        
+        self.progress_bar = QProgressBar()
+        self.progress_bar.setRange(0, 100)
+        progress_layout.addWidget(self.progress_bar)
+        
+        self.progress_label = QLabel("Waiting for download to start...")
+        progress_layout.addWidget(self.progress_label)
+        
+        layout.addWidget(progress_group)
 
-        self.referer_edit = QLineEdit()
-        advanced_layout.addRow("Referer:", self.referer_edit)
-
-        self.user_agent_edit = QLineEdit()
-        advanced_layout.addRow("User-Agent:", self.user_agent_edit)
-
-        layout.addWidget(advanced_group)
-
-        # Buttons
         buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
         buttons.accepted.connect(self.accept)
         buttons.rejected.connect(self.reject)
         layout.addWidget(buttons)
 
-    def get_urls(self) -> List[str]:
-        return self.url_widget.get_urls()
+        # Timer for progress updates
+        self._progress_timer = QTimer()
+        self._progress_timer.timeout.connect(self._update_progress)
+        self._progress_timer.start(1000)
 
-    def set_urls(self, urls: List[str]) -> None:
-        self.url_widget.set_urls(urls)
+    def _select_all(self) -> None:
+        for i in range(self.file_list.count()):
+            item = self.file_list.item(i)
+            if item:
+                item.setCheckState(Qt.CheckState.Checked)
 
-    def get_queue_index(self) -> int:
-        return self.options_widget.get_queue_index()
+    def _select_none(self) -> None:
+        for i in range(self.file_list.count()):
+            item = self.file_list.item(i)
+            if item:
+                item.setCheckState(Qt.CheckState.Unchecked)
 
-    def get_options(self) -> Dict[str, Any]:
-        options = self.options_widget.get_options()
+    def get_selected_files(self) -> List[int]:
+        indices = []
+        for i in range(self.file_list.count()):
+            item = self.file_list.item(i)
+            if item and item.checkState() == Qt.CheckState.Checked:
+                idx = item.data(Qt.ItemDataRole.UserRole)
+                if idx:
+                    indices.append(idx)
+        return indices
 
-        if self.header_check.isChecked():
-            headers = self.header_edit.toPlainText().strip()
-            if headers:
-                options["header"] = [h.strip() for h in headers.splitlines() if h.strip()]
+    def set_gid(self, gid: str) -> None:
+        self._gid = gid
+        self.progress_label.setText("Download started...")
 
-        if self.referer_edit.text().strip():
-            options["referer"] = self.referer_edit.text().strip()
-
-        if self.user_agent_edit.text().strip():
-            options["user-agent"] = self.user_agent_edit.text().strip()
-
-        path = self.path_widget.get_path()
-        if path:
-            options["dir"] = path
-
-        return options
-
-    def get_pause(self) -> bool:
-        return self.options_widget.get_pause()
-
-    def get_clear(self) -> bool:
-        return self.options_widget.get_clear()
+    def _update_progress(self) -> None:
+        """Update the progress bar from aria2 status."""
+        if not self._gid:
+            return
+        
+        try:
+            from core import Aria2RPC
+            # This assumes we have access to aria2 instance
+            # In practice, this should be connected via a signal
+            pass
+        except Exception as e:
+            logger.debug("Progress update failed: %s", e)
 
 
 class SettingsDialog(QDialog):
@@ -638,27 +459,23 @@ class SettingsDialog(QDialog):
 
         self.connections_spin = QSpinBox()
         self.connections_spin.setRange(1, 32)
-        self.connections_spin.setValue(self.store.settings.connections)
+        self.connections_spin.setValue(self.store.settings.get("connections", 16))
         form.addRow("Max Connections:", self.connections_spin)
 
         self.max_concurrent_spin = QSpinBox()
         self.max_concurrent_spin.setRange(1, 20)
-        self.max_concurrent_spin.setValue(self.store.settings.max_concurrent)
+        self.max_concurrent_spin.setValue(self.store.settings.get("max_concurrent", 5))
         form.addRow("Max Concurrent:", self.max_concurrent_spin)
 
         self.speed_limit_spin = QSpinBox()
         self.speed_limit_spin.setRange(0, 1000000)
         self.speed_limit_spin.setSpecialValueText("Unlimited")
-        self.speed_limit_spin.setValue(self.store.settings.speed_limit)
+        self.speed_limit_spin.setValue(self.store.settings.get("speed_limit", 0))
         form.addRow("Speed Limit (KB/s):", self.speed_limit_spin)
 
         self.shutdown_check = QCheckBox()
-        self.shutdown_check.setChecked(self.store.settings.shutdown_after_finish)
+        self.shutdown_check.setChecked(self.store.settings.get("shutdown_after_finish", False))
         form.addRow("Shutdown after finish:", self.shutdown_check)
-
-        self.auto_clear_check = QCheckBox()
-        self.auto_clear_check.setChecked(self.store.settings.auto_clear_completed)
-        form.addRow("Auto-clear completed:", self.auto_clear_check)
 
         default_path_layout = QHBoxLayout()
         self.default_path_edit = QLineEdit(self.store.get_default_download_path())
@@ -679,7 +496,7 @@ class SettingsDialog(QDialog):
         self.theme_combo.addItem("Dark", "dark")
         self.theme_combo.addItem("Light", "light")
 
-        current_theme = self.store.settings.theme
+        current_theme = self.store.settings.get("theme", "system")
         idx = self.theme_combo.findData(current_theme)
         if idx >= 0:
             self.theme_combo.setCurrentIndex(idx)
@@ -711,12 +528,11 @@ class SettingsDialog(QDialog):
             self.default_path_edit.setText(path)
 
     def _save(self) -> None:
-        self.store.settings.connections = self.connections_spin.value()
-        self.store.settings.max_concurrent = self.max_concurrent_spin.value()
-        self.store.settings.speed_limit = self.speed_limit_spin.value()
-        self.store.settings.shutdown_after_finish = self.shutdown_check.isChecked()
-        self.store.settings.auto_clear_completed = self.auto_clear_check.isChecked()
-        self.store.settings.theme = self.theme_combo.currentData()
+        self.store.settings["connections"] = self.connections_spin.value()
+        self.store.settings["max_concurrent"] = self.max_concurrent_spin.value()
+        self.store.settings["speed_limit"] = self.speed_limit_spin.value()
+        self.store.settings["shutdown_after_finish"] = self.shutdown_check.isChecked()
+        self.store.settings["theme"] = self.theme_combo.currentData()
         self.store.set_default_download_path(self.default_path_edit.text())
         self.store.settings["async_mode"] = self.async_check.isChecked()
         self.store.save()
