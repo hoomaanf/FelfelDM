@@ -8,11 +8,33 @@ import logging
 import secrets
 import threading
 from http.server import HTTPServer, BaseHTTPRequestHandler
-from typing import Optional, Any
+from typing import Optional, Protocol, List, Any, runtime_checkable
 
 from PyQt6.QtCore import QObject, pyqtSignal
 
 logger = logging.getLogger(__name__)
+
+
+@runtime_checkable
+class DownloadControllerProtocol(Protocol):
+    """
+    Protocol defining the interface required by LocalServer.
+    Any download controller must implement this interface.
+    """
+
+    def add_urls(self, urls: List[str], queue_idx: int, options: dict) -> List[str]:
+        """
+        Add URLs to the download queue.
+
+        Args:
+            urls: List of URLs to download
+            queue_idx: Index of the queue to add to
+            options: Download options
+
+        Returns:
+            List of GIDs for the added downloads
+        """
+        ...
 
 
 class LocalServer(QObject):
@@ -23,12 +45,13 @@ class LocalServer(QObject):
 
     urls_received = pyqtSignal(list)
 
-    def __init__(self, download_controller: Any, port: int = 8080) -> None:
+    def __init__(self, download_controller: DownloadControllerProtocol, port: int = 8080) -> None:
         """
         Initialize the local server.
 
         Args:
-            download_controller: The download controller instance (must have add_urls method)
+            download_controller: The download controller instance (must implement
+                                 DownloadControllerProtocol)
             port: Port to listen on (default: 8080)
         """
         super().__init__()
