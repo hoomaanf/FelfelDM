@@ -9,12 +9,11 @@ import subprocess
 from typing import Optional
 
 from PyQt6.QtCore import Qt
-from PyQt6.QtGui import QColor, QPalette, QFont
+from PyQt6.QtGui import QColor, QPalette
 from PyQt6.QtWidgets import QApplication, QProxyStyle, QStyle, QWidget
 
-
 # =============================================================================
-# Modern Color Palettes with Gradients
+# Modern Color Palettes
 # =============================================================================
 
 class ThemeColors:
@@ -501,15 +500,29 @@ class ModernProxyStyle(QProxyStyle):
 # =============================================================================
 
 def apply_modern_theme(target, is_dark: bool) -> None:
-    """Apply the modern theme to the application or a widget."""
+    """
+    Apply the modern theme to the application or a widget.
+    If target is not QApplication, apply to QApplication.instance().
+    """
+    # Always apply to the main application instance
+    app = QApplication.instance()
+    if app is None:
+        return  # No application running
+
+    # Build palette and stylesheet
     palette = build_palette(is_dark)
-    if isinstance(target, QApplication):
+    stylesheet = build_stylesheet(is_dark)
+
+    # Apply to application
+    app.setPalette(palette)
+    app.setStyleSheet(stylesheet)
+    app.setStyle(ModernProxyStyle())
+
+    # If target is a widget, also apply to it (but this is usually not needed)
+    if isinstance(target, QWidget) and target is not app:
+        # Optionally, apply to the widget as well
         target.setPalette(palette)
-        target.setStyleSheet(build_stylesheet(is_dark))
-        target.setStyle(ModernProxyStyle())
-    else:
-        target.setPalette(palette)
-        target.setStyleSheet(build_stylesheet(is_dark))
+        target.setStyleSheet(stylesheet)
 
 
 def build_palette(is_dark: bool) -> QPalette:
