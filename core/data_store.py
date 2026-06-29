@@ -1,5 +1,5 @@
 # =============================================================================
-# core/data_store.py (updated comments and type consistency)
+# core/data_store.py
 # =============================================================================
 import json
 import logging
@@ -32,7 +32,6 @@ class DataStore:
         self.load()
 
     def _check_keyring(self) -> None:
-        """Check keyring availability and load secret if possible, with fallback."""
         try:
             secret = keyring.get_password("felfeldm", "aria2_secret")
             if secret:
@@ -57,7 +56,6 @@ class DataStore:
         logger.warning("No secret found; aria2 may not be secured")
 
     def _save_secret_to_keyring(self, secret: str) -> None:
-        """Save secret to keyring, fallback to file if needed."""
         try:
             keyring.set_password("felfeldm", "aria2_secret", secret)
             logger.info("Saved secret to keyring")
@@ -120,18 +118,22 @@ class DataStore:
             self._save_secret_to_keyring(self.settings.aria2_secret)
 
     def to_dict(self) -> Dict[str, Any]:
-        with self._lock:
-            return {
-                "queues": [q.to_dict() for q in self.queues],
-                "settings": self.settings.to_dict()
-            }
+        """
+        Convert data to dictionary WITHOUT locking.
+        Caller must hold the lock if thread-safety is required.
+        """
+        return {
+            "queues": [q.to_dict() for q in self.queues],
+            "settings": self.settings.to_dict()
+        }
 
     def save(self) -> None:
+        """Save data to file, creating backup first (thread-safe)."""
         with self._lock:
             try:
                 if self.PATH.exists():
                     shutil.copy2(self.PATH, self.BACKUP_PATH)
-                data = self.to_dict()
+                data = self.to_dict()  # No lock inside
                 with open(self.PATH, 'w', encoding='utf-8') as f:
                     json.dump(data, f, indent=2, ensure_ascii=False)
                 logger.info("Data saved")
@@ -141,12 +143,12 @@ class DataStore:
     def add_queue(self, queue: Queue) -> None:
         with self._lock:
             self.queues.append(queue)
-            self.save()
+        self.save()  # save acquires lock internally
 
     def remove_queue(self, queue_id: str) -> None:
         with self._lock:
             self.queues = [q for q in self.queues if q.id != queue_id]
-            self.save()
+        self.save()
 
     def get_queue(self, queue_id: str) -> Optional[Queue]:
         with self._lock:
@@ -161,10 +163,9 @@ class DataStore:
                 if q.id == queue.id:
                     self.queues[i] = queue
                     break
-            self.save()
+        self.save()
 
     def apply_speed_limit(self) -> bool:
-        """Apply the current speed_limit setting to aria2 via RPC."""
         if not self.settings.aria2_secret:
             logger.error("No aria2 secret set; cannot apply speed limit")
             return False
@@ -172,6 +173,3 @@ class DataStore:
             secret=self.settings.aria2_secret,
             speed_limit=self.settings.speed_limit
         )
-
-
-# Note: max_tries is not used; if needed, it should be documented.
