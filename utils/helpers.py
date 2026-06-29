@@ -2,48 +2,52 @@
 # utils/helpers.py
 # =============================================================================
 import os
-from typing import Optional
+from typing import Union, List, Optional
 
-# Constants for size formatting
+# Units for size formatting
 UNITS = ["B", "KB", "MB", "GB", "TB", "PB", "EB"]
 
 
-def format_size(size: int) -> str:
-    """Format a size in bytes to human-readable string."""
-    if size <= 0:
-        return "0 B"
-    size_float = float(size)
+def _format_with_units(value: Union[int, float], units: List[str], suffix: str = "") -> str:
+    """
+    Format a numeric value with appropriate unit suffix.
+
+    Args:
+        value: The value to format (must be >= 0).
+        units: List of unit names (e.g., ["B", "KB", ...]).
+        suffix: Optional suffix to append (e.g., "/s").
+
+    Returns:
+        Formatted string like "1.5 MB/s".
+    """
+    if value <= 0:
+        return f"0 {units[0]}{suffix}"
+
+    size_float = float(value)
     unit_index = 0
-    while size_float >= 1024 and unit_index < len(UNITS) - 1:
+    while size_float >= 1024 and unit_index < len(units) - 1:
         size_float /= 1024
         unit_index += 1
+
     if unit_index == 0:
-        return f"{int(size)} {UNITS[0]}"
+        return f"{int(value)} {units[0]}{suffix}"
+
     if size_float < 10:
-        return f"{size_float:.2f} {UNITS[unit_index]}"
+        return f"{size_float:.2f} {units[unit_index]}{suffix}"
     elif size_float < 100:
-        return f"{size_float:.1f} {UNITS[unit_index]}"
+        return f"{size_float:.1f} {units[unit_index]}{suffix}"
     else:
-        return f"{int(size_float)} {UNITS[unit_index]}"
+        return f"{int(size_float)} {units[unit_index]}{suffix}"
+
+
+def format_size(size: int) -> str:
+    """Format a size in bytes to a human-readable string."""
+    return _format_with_units(size, UNITS)
 
 
 def format_speed(bytes_per_sec: int) -> str:
-    """Format speed in bytes/sec to human-readable."""
-    if bytes_per_sec <= 0:
-        return "0 B/s"
-    size_float = float(bytes_per_sec)
-    unit_index = 0
-    while size_float >= 1024 and unit_index < len(UNITS) - 1:
-        size_float /= 1024
-        unit_index += 1
-    if unit_index == 0:
-        return f"{int(size_float)} {UNITS[0]}/s"
-    if size_float < 10:
-        return f"{size_float:.2f} {UNITS[unit_index]}/s"
-    elif size_float < 100:
-        return f"{size_float:.1f} {UNITS[unit_index]}/s"
-    else:
-        return f"{int(size_float)} {UNITS[unit_index]}/s"
+    """Format speed in bytes per second to a human-readable string."""
+    return _format_with_units(bytes_per_sec, UNITS, "/s")
 
 
 def is_valid_url(url: str) -> bool:
@@ -74,7 +78,6 @@ def check_disk_space(path: str, required_bytes: int = 0) -> bool:
         return False
 
 
-# Category mapping (can be moved to a constant)
 CATEGORY_MAP = {
     "video": ["mp4", "mkv", "avi", "mov", "wmv", "flv", "webm"],
     "audio": ["mp3", "wav", "flac", "aac", "ogg", "wma"],
