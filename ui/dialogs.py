@@ -8,20 +8,21 @@ import logging
 import os
 from typing import List, Optional, Dict, Any
 
-from PyQt6.QtCore import Qt, pyqtSignal, QDate, QTime
+from PyQt6.QtCore import Qt, pyqtSignal, QDate, QTime, QTimer
 from PyQt6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QFormLayout,
     QGroupBox, QLineEdit, QTextEdit, QPushButton,
     QComboBox, QSpinBox, QCheckBox, QLabel,
     QFileDialog, QDialogButtonBox, QWidget,
     QListWidget, QListWidgetItem, QMessageBox,
-    QCalendarWidget, QTimeEdit, QTabWidget,
+    QCalendarWidget, QTimeEdit, QTabWidget, QProgressBar,
 )
 
 import validators
 from core.data_store import Queue, DataStore
 from core.constants import DEFAULT_DOWNLOAD_PATH
 from core.history import HistoryManager
+from core.aria2_rpc import Aria2RPC
 from ui.icons import get_icon
 
 logger = logging.getLogger(__name__)
@@ -194,26 +195,49 @@ class OptionsWidget(QWidget):
 
 
 class TorrentFileSelectionDialog(QDialog):
-    """Dialog for selecting files from a torrent."""
+    """
+    Dialog for selecting files from a torrent with progress display.
+    Shows download progress after the torrent is added.
+    """
 
     def __init__(
         self,
         torrent_info: Dict[str, Any],
         torrent_path: str,
+        aria2_rpc: Optional[Aria2RPC] = None,
+        gid: Optional[str] = None,
         parent: Optional[QWidget] = None,
     ) -> None:
+        """
+        Initialize the torrent file selection dialog.
+
+        Args:
+            torrent_info: Torrent metadata from aria2.getTorrentInfo
+            torrent_path: Path to the .torrent file
+            aria2_rpc: Aria2RPC instance for fetching status (required for progress)
+            gid: GID of the torrent download (for progress tracking)
+            parent: Parent widget
+        """
         super().__init__(parent)
         self.torrent_info = torrent_info
         self.torrent_path = torrent_path
+        self.aria2_rpc = aria2_rpc
+        self.gid = gid
+        self._progress_timer: Optional[QTimer] = None
 
         self.setWindowTitle("Select Torrent Files")
-        self.setMinimumWidth(500)
-        self.setMinimumHeight(400)
+        self.setMinimumWidth(550)
+        self.setMinimumHeight(450)
         self._setup_ui()
+
+        # Start progress tracking if GID is provided
+        if self.gid and self.aria2_rpc:
+            self._start_progress_tracking()
 
     def _setup_ui(self) -> None:
         layout = QVBoxLayout(self)
 
+        # Info label
         info_text = f"Torrent: {self.torrent_info.get('name', 'Unknown')}"
         if 'totalLength' in self.torrent_info:
             from utils.helpers import format_size
@@ -221,6 +245,7 @@ class TorrentFileSelectionDialog(QDialog):
         info_label = QLabel(info_text)
         layout.addWidget(info_label)
 
+        # File list
         self.file_list = QListWidget()
         files = self.torrent_info.get('files', [])
         if isinstance(files, list):
@@ -235,6 +260,7 @@ class TorrentFileSelectionDialog(QDialog):
                     item.setCheckState(Qt.CheckState.Checked)
                     self.file_list.addItem(item)
 
+        # Select all / None buttons
         btn_layout = QHBoxLayout()
         select_all_btn = QPushButton("Select All")
         select_all_btn.clicked.connect(self._select_all)
@@ -248,10 +274,83 @@ class TorrentFileSelectionDialog(QDialog):
         layout.addLayout(btn_layout)
         layout.addWidget(self.file_list)
 
+        # Progress bar for torrent download
+        progress_group = QGroupBox("Download Progress")
+        progress_layout = QVBoxLayout(progress_group)
+
+        self.progress_bar = QProgressBar()
+        self.progress_bar.setRange(0, 100)
+        self.progress_bar.setValue(0)
+        self.progress_bar.setVisible(False)
+        progress_layout.addWidget(self.progress_bar)
+
+        self.progress_label = QLabel("Waiting for download to start...")
+        self.progress_label.setVisible(False)
+        progress_layout.addWidget(self.progress_label)
+
+        layout.addWidget(progress_group)
+
+        # Buttons
         buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
         buttons.accepted.connect(self.accept)
         buttons.rejected.connect(self.reject)
         layout.addWidget(buttons)
+
+    def _start_progress_tracking(self) -> None:
+        """Start periodic progress updates for the torrent download."""
+        if not self.gid or not self.aria2_rpc:
+            return
+
+        self.progress_bar.setVisible(True)
+        self.progress_label.setVisible(True)
+        self.progress_label.setText("Starting download...")
+        self.progress_bar.setValue(0)
+
+        self._progress_timer = QTimer(self)
+        self._progress_timer.timeout.connect(self._update_progress)
+        self._progress_timer.start(1000)  # Update every second
+
+    def _update_progress(self) -> None:
+        """Update the progress bar based on aria2 tell_status."""
+        if not self.gid or not self.aria2_rpc:
+            return
+
+        try:
+            status = self.aria2_rpc.tell_status(self.gid, ["completedLength", "totalLength"])
+            if not status:
+                return
+
+            completed = int(status.get("completedLength", 0))
+            total = int(status.get("totalLength", 0))
+
+            if total > 0:
+                progress = min(100, int((completed / total) * 100))
+                self.progress_bar.setValue(progress)
+
+                from utils.helpers import format_size
+                progress_text = f"{format_size(completed)} / {format_size(total)} ({progress}%)"
+                self.progress_label.setText(progress_text)
+
+                if progress >= 100:
+                    self.progress_label.setText("Download complete! ✅")
+                    self._stop_progress_tracking()
+            else:
+                self.progress_label.setText("Waiting for torrent metadata...")
+
+        except Exception as e:
+            logger.error("Failed to update torrent progress: %s", e)
+
+    def _stop_progress_tracking(self) -> None:
+        """Stop the progress timer."""
+        if self._progress_timer:
+            self._progress_timer.stop()
+            self._progress_timer = None
+
+    def set_gid(self, gid: str) -> None:
+        """Set the GID for an existing torrent and start progress tracking."""
+        self.gid = gid
+        if self.aria2_rpc:
+            self._start_progress_tracking()
 
     def _select_all(self) -> None:
         for i in range(self.file_list.count()):
@@ -274,6 +373,82 @@ class TorrentFileSelectionDialog(QDialog):
                 if idx:
                     indices.append(idx)
         return indices
+
+    def closeEvent(self, event) -> None:
+        """Stop the progress timer when the dialog is closed."""
+        self._stop_progress_tracking()
+        super().closeEvent(event)
+
+
+class AddTorrentDialog(QDialog):
+    """Dialog for adding a torrent with file selection and options."""
+
+    def __init__(
+        self,
+        queues: List[Queue],
+        store: DataStore,
+        default_queue: int = 0,
+        parent: Optional[QWidget] = None,
+    ) -> None:
+        super().__init__(parent)
+        self._queues = queues
+        self._store = store
+        self._default_queue = default_queue
+        self._torrent_path: Optional[str] = None
+
+        self.setWindowTitle("Add Torrent")
+        self.setMinimumWidth(500)
+        self._setup_ui()
+
+    def _setup_ui(self) -> None:
+        layout = QVBoxLayout(self)
+
+        # Torrent file selection
+        file_layout = QHBoxLayout()
+        self.file_label = QLabel("No torrent selected")
+        file_layout.addWidget(self.file_label)
+        browse_btn = QPushButton("Browse...")
+        browse_btn.clicked.connect(self._browse_torrent)
+        file_layout.addWidget(browse_btn)
+        layout.addLayout(file_layout)
+
+        # Options
+        self.options_widget = OptionsWidget(self._queues, self._default_queue)
+        layout.addWidget(self.options_widget)
+
+        # Buttons
+        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
+        buttons.accepted.connect(self.accept)
+        buttons.rejected.connect(self.reject)
+        layout.addWidget(buttons)
+
+    def _browse_torrent(self) -> None:
+        file_path, _ = QFileDialog.getOpenFileName(
+            self, "Select Torrent File", "", "Torrent Files (*.torrent);;All Files (*)"
+        )
+        if file_path:
+            self.set_torrent_path(file_path)
+
+    def set_torrent_path(self, path: str) -> None:
+        """Set the torrent file path and update the UI."""
+        if path and os.path.exists(path):
+            self._torrent_path = path
+            self.file_label.setText(os.path.basename(path))
+
+    def get_torrent_path(self) -> Optional[str]:
+        return self._torrent_path
+
+    def get_queue_index(self) -> int:
+        return self.options_widget.get_queue_index()
+
+    def get_options(self) -> Dict[str, Any]:
+        return self.options_widget.get_options()
+
+    def get_pause(self) -> bool:
+        return self.options_widget.get_pause()
+
+    def get_clear(self) -> bool:
+        return self.options_widget.get_clear()
 
 
 class ScheduleWidget(QWidget):
@@ -336,7 +511,6 @@ class ScheduleWidget(QWidget):
         for line in text.splitlines():
             line = line.strip()
             if line:
-                # Validate time format
                 parts = line.split(":")
                 if len(parts) == 2 and parts[0].isdigit() and parts[1].isdigit():
                     h = int(parts[0])
@@ -438,73 +612,6 @@ class AddDownloadDialog(QDialog):
             options["dir"] = path
 
         return options
-
-    def get_pause(self) -> bool:
-        return self.options_widget.get_pause()
-
-    def get_clear(self) -> bool:
-        return self.options_widget.get_clear()
-
-
-class AddTorrentDialog(QDialog):
-    """Dialog for adding a torrent with file selection and options."""
-
-    def __init__(
-        self,
-        queues: List[Queue],
-        store: DataStore,
-        default_queue: int = 0,
-        parent: Optional[QWidget] = None,
-    ) -> None:
-        super().__init__(parent)
-        self._queues = queues
-        self._store = store
-        self._default_queue = default_queue
-        self._torrent_path: Optional[str] = None
-        self._torrent_info: Optional[Dict[str, Any]] = None
-
-        self.setWindowTitle("Add Torrent")
-        self.setMinimumWidth(500)
-        self._setup_ui()
-
-    def _setup_ui(self) -> None:
-        layout = QVBoxLayout(self)
-
-        # Torrent file selection
-        file_layout = QHBoxLayout()
-        self.file_label = QLabel("No torrent selected")
-        file_layout.addWidget(self.file_label)
-        browse_btn = QPushButton("Browse...")
-        browse_btn.clicked.connect(self._browse_torrent)
-        file_layout.addWidget(browse_btn)
-        layout.addLayout(file_layout)
-
-        # Options
-        self.options_widget = OptionsWidget(self._queues, self._default_queue)
-        layout.addWidget(self.options_widget)
-
-        # Buttons
-        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
-        buttons.accepted.connect(self.accept)
-        buttons.rejected.connect(self.reject)
-        layout.addWidget(buttons)
-
-    def _browse_torrent(self) -> None:
-        file_path, _ = QFileDialog.getOpenFileName(
-            self, "Select Torrent File", "", "Torrent Files (*.torrent);;All Files (*)"
-        )
-        if file_path:
-            self._torrent_path = file_path
-            self.file_label.setText(os.path.basename(file_path))
-
-    def get_torrent_path(self) -> Optional[str]:
-        return self._torrent_path
-
-    def get_queue_index(self) -> int:
-        return self.options_widget.get_queue_index()
-
-    def get_options(self) -> Dict[str, Any]:
-        return self.options_widget.get_options()
 
     def get_pause(self) -> bool:
         return self.options_widget.get_pause()
