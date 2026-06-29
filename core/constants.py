@@ -16,7 +16,7 @@ ARIA2_SECRET_FILE = ARIA2_CONFIG_DIR / "secret.txt"
 
 RPC_POLL_INTERVAL = 1  # seconds
 
-# Default settings
-DEFAULT_DOWNLOAD_PATH = str(Path.home() / "Downloads")
+# Default settings - use Path consistently
+DEFAULT_DOWNLOAD_PATH = Path.home() / "Downloads"
 DEFAULT_MAX_CONCURRENT = 5
 DEFAULT_SPEED_LIMIT = 0  # 0 means unlimited
