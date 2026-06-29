@@ -1,5 +1,5 @@
 # =============================================================================
-# core/data_store.py
+# core/data_store.py (updated comments and type consistency)
 # =============================================================================
 import json
 import logging
@@ -164,10 +164,7 @@ class DataStore:
             self.save()
 
     def apply_speed_limit(self) -> bool:
-        """
-        Apply the current speed_limit setting to aria2 via RPC.
-        Returns True on success, False on failure.
-        """
+        """Apply the current speed_limit setting to aria2 via RPC."""
         if not self.settings.aria2_secret:
             logger.error("No aria2 secret set; cannot apply speed limit")
             return False
@@ -175,3 +172,6 @@ class DataStore:
             secret=self.settings.aria2_secret,
             speed_limit=self.settings.speed_limit
         )
+
+
+# Note: max_tries is not used; if needed, it should be documented.
