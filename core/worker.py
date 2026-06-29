@@ -16,16 +16,8 @@ from core.constants import RPC_POLL_INTERVAL
 
 logger = logging.getLogger(__name__)
 
-# Custom metaclass to resolve QObject and ABC metaclass conflict
-# In PyQt6, the metaclass of QObject is accessible via type(QObject)
-from abc import ABCMeta
 
-class QABCMeta(type(QObject), ABCMeta):
-    """Metaclass that combines Qt's QObject metaclass and ABCMeta."""
-    pass
-
-
-class BaseBackendWorker(QObject, ABC, metaclass=QABCMeta):
+class BaseBackendWorker(QObject, ABC):
     """Base class for backend workers providing common signals and cache."""
 
     stats_updated = pyqtSignal(dict)
@@ -45,6 +37,10 @@ class BaseBackendWorker(QObject, ABC, metaclass=QABCMeta):
         self._stats_lock = threading.Lock()
         self._poll_interval: int = RPC_POLL_INTERVAL
         self._thread: Optional[QThread] = None
+
+        # Error counter and max allowed errors before auto-stop
+        self._error_count: int = 0
+        self._max_errors: int = 5
 
     @abstractmethod
     def start(self) -> None:
@@ -69,6 +65,7 @@ class SyncBackendWorker(BaseBackendWorker):
         if self._running:
             return
         self._running = True
+        self._error_count = 0
         self._thread = QThread()
         self.moveToThread(self._thread)
         self._thread.started.connect(self._poll_loop)
@@ -86,9 +83,18 @@ class SyncBackendWorker(BaseBackendWorker):
             with self._stats_lock:
                 self._cached_stats = stats
             self.stats_updated.emit(stats)
+            # Reset error counter on success
+            self._error_count = 0
         except Exception as e:
-            logger.error("Poll error: %s", e)
-            self.error_occurred.emit(f"Poll error: {e}")
+            self._error_count += 1
+            logger.error("Poll error (attempt %d/%d): %s", self._error_count, self._max_errors, e)
+            if self._error_count >= self._max_errors:
+                error_msg = f"Too many polling errors ({self._error_count}), stopping worker"
+                logger.critical(error_msg)
+                self.error_occurred.emit(error_msg)
+                self.stop()
+            else:
+                self.error_occurred.emit(f"Poll error: {e}")
 
     def stop(self) -> None:
         self._running = False
@@ -105,6 +111,7 @@ class AsyncBackendWorker(BaseBackendWorker):
         if self._running:
             return
         self._running = True
+        self._error_count = 0
         self._thread = QThread()
         self.moveToThread(self._thread)
         self._thread.started.connect(self._poll_loop)
@@ -127,12 +134,22 @@ class AsyncBackendWorker(BaseBackendWorker):
                     with self._stats_lock:
                         self._cached_stats = stats
                     self.stats_updated.emit(stats)
+                    # Reset error counter on success
+                    self._error_count = 0
             except asyncio.CancelledError:
                 logger.info("Async poll loop cancelled internally")
                 break
             except Exception as e:
-                logger.error("Async poll error: %s", e)
-                self.error_occurred.emit(f"Async poll error: {e}")
+                self._error_count += 1
+                logger.error("Async poll error (attempt %d/%d): %s", self._error_count, self._max_errors, e)
+                if self._error_count >= self._max_errors:
+                    error_msg = f"Too many async poll errors ({self._error_count}), stopping worker"
+                    logger.critical(error_msg)
+                    self.error_occurred.emit(error_msg)
+                    self.stop()
+                    break
+                else:
+                    self.error_occurred.emit(f"Async poll error: {e}")
             for _ in range(self._poll_interval * 10):
                 if not self._running:
                     break
