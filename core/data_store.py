@@ -13,12 +13,13 @@ import keyring
 
 from core.constants import DATA_FILE, BACKUP_FILE
 from core.queue_model import Queue, Settings
+from core.aria2_manager import apply_speed_limit
 
 logger = logging.getLogger(__name__)
 
 
 class DataStore:
-    """Thread-safe data storage with backup recovery."""
+    """Thread-safe data storage with backup recovery and speed limit application."""
 
     PATH = DATA_FILE
     BACKUP_PATH = BACKUP_FILE
@@ -33,7 +34,6 @@ class DataStore:
     def _check_keyring(self) -> None:
         """Check keyring availability and load secret if possible, with fallback."""
         try:
-            # Try to get secret from keyring
             secret = keyring.get_password("felfeldm", "aria2_secret")
             if secret:
                 self.settings.aria2_secret = secret
@@ -42,7 +42,6 @@ class DataStore:
         except Exception as e:
             logger.warning("Keyring not available: %s", e)
 
-        # Fallback: try to load from a secure file
         secret_file = Path.home() / ".felfeldm" / "aria2_secret.txt"
         try:
             if secret_file.exists():
@@ -55,7 +54,6 @@ class DataStore:
         except Exception as e:
             logger.error("Failed to read fallback secret file: %s", e)
 
-        # If still no secret, leave empty
         logger.warning("No secret found; aria2 may not be secured")
 
     def _save_secret_to_keyring(self, secret: str) -> None:
@@ -67,11 +65,9 @@ class DataStore:
         except Exception as e:
             logger.warning("Failed to save to keyring: %s", e)
 
-        # Fallback: save to file with restricted permissions
         secret_file = Path.home() / ".felfeldm" / "aria2_secret.txt"
         try:
             secret_file.parent.mkdir(parents=True, exist_ok=True)
-            # Write with restricted permissions
             fd = os.open(secret_file, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
             with os.fdopen(fd, 'w', encoding='utf-8') as f:
                 f.write(secret)
@@ -108,12 +104,10 @@ class DataStore:
                 self._reset_defaults()
 
     def _reset_defaults(self) -> None:
-        """Reset to default empty state."""
         self.queues = []
         self.settings = Settings()
 
     def _from_dict(self, data: Dict[str, Any]) -> None:
-        """Populate from dict."""
         self.queues = [Queue.from_dict(q) for q in data.get("queues", [])]
         settings_data = data.get("settings", {})
         self.settings = Settings(
@@ -122,12 +116,10 @@ class DataStore:
             max_concurrent=settings_data.get("max_concurrent", 5),
             aria2_secret=settings_data.get("aria2_secret", "")
         )
-        # If secret is set in settings, save to keyring/fallback
         if self.settings.aria2_secret:
             self._save_secret_to_keyring(self.settings.aria2_secret)
 
     def to_dict(self) -> Dict[str, Any]:
-        """Convert to dict for serialization."""
         with self._lock:
             return {
                 "queues": [q.to_dict() for q in self.queues],
@@ -135,12 +127,10 @@ class DataStore:
             }
 
     def save(self) -> None:
-        """Save data to file, creating backup first."""
         with self._lock:
             try:
                 if self.PATH.exists():
                     shutil.copy2(self.PATH, self.BACKUP_PATH)
-
                 data = self.to_dict()
                 with open(self.PATH, 'w', encoding='utf-8') as f:
                     json.dump(data, f, indent=2, ensure_ascii=False)
@@ -172,3 +162,16 @@ class DataStore:
                     self.queues[i] = queue
                     break
             self.save()
+
+    def apply_speed_limit(self) -> bool:
+        """
+        Apply the current speed_limit setting to aria2 via RPC.
+        Returns True on success, False on failure.
+        """
+        if not self.settings.aria2_secret:
+            logger.error("No aria2 secret set; cannot apply speed limit")
+            return False
+        return apply_speed_limit(
+            secret=self.settings.aria2_secret,
+            speed_limit=self.settings.speed_limit
+        )
