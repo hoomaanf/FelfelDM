@@ -44,8 +44,7 @@ def is_valid_url(url: str) -> bool:
 
     # Magnet: comprehensive check
     if url.startswith("magnet:?xt=urn:"):
-        # Basic structure: magnet:?xt=urn:btih:<hash>&dn=<name>&tr=<tracker>
-        # We'll check for at least xt parameter
+        # Allow at least xt parameter, optionally other parameters
         pattern = re.compile(
             r'^magnet:\?xt=urn:[a-zA-Z0-9]+:[a-zA-Z0-9]+'
             r'(?:&[a-zA-Z0-9_]+=[^&]*)*$'
