@@ -84,29 +84,34 @@ class Aria2RPC:
         try:
             r = self._session.post(self.url, json=payload, timeout=timeout_sec)
             result = r.json()
+
             if "error" in result:
                 err = result["error"]
-                msg = f"aria2 error: {err.get('message', err)}"
-                logger.warning("[%s]: %s", method, msg)
+                msg = f"aria2 error [{method}]: {err.get('message', err)} (code: {err.get('code')})"
+                logger.warning(msg)
                 if self.on_error:
                     self.on_error(msg)
                 return None
+
             return result.get("result")
-        except requests.exceptions.ConnectionError:
-            msg = "aria2 disconnected"
+
+        except requests.exceptions.ConnectionError as e:
+            msg = f"aria2 connection error [{method}]: {e}"
             logger.warning(msg)
             if self.on_error:
                 self.on_error(msg)
             return None
-        except requests.exceptions.Timeout:
-            msg = f"aria2 timeout [{method}]"
+
+        except requests.exceptions.Timeout as e:
+            msg = f"aria2 timeout [{method}]: {e}"
             logger.warning(msg)
             if self.on_error:
                 self.on_error(msg)
             return None
+
         except Exception as e:
-            msg = f"aria2 error: {e}"
-            logger.warning("[%s]: %s", method, msg)
+            msg = f"aria2 error [{method}]: {e}"
+            logger.warning(msg)
             if self.on_error:
                 self.on_error(msg)
             return None
@@ -215,18 +220,20 @@ class Aria2RPC:
             raw_results = result.get("result")
             return self._process_multicall_results(raw_results, len(calls))
 
-        except requests.exceptions.ConnectionError:
-            msg = "aria2 disconnected during batch call"
+        except requests.exceptions.ConnectionError as e:
+            msg = f"aria2 disconnected during batch call: {e}"
             logger.warning(msg)
             if self.on_error:
                 self.on_error(msg)
             return [None] * len(calls)
-        except requests.exceptions.Timeout:
-            msg = "aria2 timeout during batch call"
+
+        except requests.exceptions.Timeout as e:
+            msg = f"aria2 timeout during batch call: {e}"
             logger.warning(msg)
             if self.on_error:
                 self.on_error(msg)
             return [None] * len(calls)
+
         except Exception as e:
             msg = f"aria2 batch error: {e}"
             logger.warning(msg)
@@ -239,16 +246,36 @@ class Aria2RPC:
         try:
             response = self._session.get(self.url, timeout=5)
             return response.status_code == 200
-        except Exception:
+        except Exception as e:
+            logger.debug("Connection check failed: %s", e)
             return False
 
     def add_url(self, url: str, options: Optional[Dict] = None) -> Optional[str]:
-        """Add a download URL and return the GID."""
+        """
+        Add a download URL and return the GID.
+
+        Args:
+            url: The URL to download
+            options: Optional aria2 options (dir, max-connection-per-server, etc.)
+
+        Returns:
+            GID string if successful, None otherwise
+        """
+        logger.info("Adding download URL: %s", url[:60] + ("..." if len(url) > 60 else ""))
+
         params = [url]
         if options:
             params.append(options)
+
         result = self._call("aria2.addUri", params)
-        return result
+
+        if result:
+            gid = str(result) if result else None
+            logger.info("Successfully added download. GID: %s", gid)
+            return gid
+        else:
+            logger.error("Failed to add download URL: %s", url)
+            return None
 
     def add_torrent(
         self,
@@ -270,7 +297,7 @@ class Aria2RPC:
                 params.append({"select-file": ",".join(str(i) for i in selected_files)})
 
         result = self._call("aria2.addTorrent", params)
-        return result
+        return str(result) if result else None
 
     def get_torrent_info(self, torrent_file: str) -> Optional[Dict[str, Any]]:
         """Get information about a torrent file without starting the download."""
