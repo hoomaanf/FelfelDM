@@ -5,7 +5,7 @@ Handles creation, caching, and lifecycle of all core services.
 """
 
 import logging
-from typing import Any, Callable, Dict, Optional, Type, TypeVar, cast
+from typing import Any, Callable, Dict, Optional, Type, TypeVar
 
 from core.constants import ARIA2_DEFAULT_HOST, ARIA2_DEFAULT_PORT
 from core.data_store import DataStore
