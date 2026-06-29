@@ -11,7 +11,6 @@ from typing import Optional
 
 from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QIcon
-from PyQt6.QtWidgets import QApplication
 
 from utils.style import detect_theme
 
@@ -60,22 +59,18 @@ class IconLoader:
         if cache_key in self._cache:
             return self._cache[cache_key]
 
-        # Determine which theme to use
         is_dark = detect_theme()
         icons_path = self._dark_icons if is_dark else self._light_icons
 
         icon = QIcon()
 
-        # Try to load from Papirus theme first
         if icons_path:
-            # Try both .svg and .png extensions
             for ext in [".svg", ".png"]:
                 icon_file = icons_path / f"{name}{ext}"
                 if icon_file.exists():
                     icon.addFile(str(icon_file), Qt.Size(size, size))
                     break
 
-        # If Papirus icon not found, fallback to system theme
         if icon.isNull():
             fallback_icon = QIcon.fromTheme(name)
             if not fallback_icon.isNull():
