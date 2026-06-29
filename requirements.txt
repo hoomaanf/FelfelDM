@@ -2,7 +2,7 @@
 PyQt6==6.6.1
 PyQt6-Qt6==6.6.1
 PyQt6-sip==13.6.0
-PyQt6-Charts==6.6.1  # for speed chart
+PyQt6-Charts==6.6.0  # for speed chart
 
 # aria2 RPC client
 requests==2.31.0
