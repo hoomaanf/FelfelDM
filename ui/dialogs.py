@@ -15,13 +15,12 @@ from PyQt6.QtWidgets import (
     QComboBox, QSpinBox, QCheckBox, QLabel,
     QFileDialog, QDialogButtonBox, QWidget,
     QListWidget, QListWidgetItem, QMessageBox,
-    QCalendarWidget, QTimeEdit, QTabWidget, QProgressBar,
+    QCalendarWidget, QTimeEdit, QProgressBar,
 )
 
 import validators
 from core.data_store import Queue, DataStore
 from core.constants import DEFAULT_DOWNLOAD_PATH
-from core.history import HistoryManager
 from core.aria2_rpc import Aria2RPC
 from ui.icons import get_icon
 
