@@ -13,7 +13,7 @@ logger = logging.getLogger(__name__)
 
 
 class DownloadTableModel(QAbstractTableModel):
-    """Table model for displaying downloads with live updates from worker."""
+    """Table model for displaying downloads using cached data from worker."""
 
     COLUMNS = ["Name", "Size", "Progress", "Speed", "Status", "GID"]
 
@@ -23,65 +23,56 @@ class DownloadTableModel(QAbstractTableModel):
         self._downloads: Dict[str, Dict[str, Any]] = {}
         self._gid_list: List[str] = []
 
-        # Connect to worker's stats update
-        self._worker.stats_updated.connect(self._on_stats_updated)
+        # Connect to worker's downloads_updated signal
+        self._worker.downloads_updated.connect(self._on_downloads_updated)
 
-    def _on_stats_updated(self, stats: dict) -> None:
-        """Fetch download list from aria2 using synchronous RPC and update model."""
-        # If worker is not running, skip update
-        if hasattr(self._worker, '_running') and not self._worker._running:
-            logger.debug("Worker not running, skipping table update")
+    def _on_downloads_updated(self, download_list: List[Dict[str, Any]]) -> None:
+        """Process the list of download dicts and update the model."""
+        if not download_list:
+            # If list is empty, clear the model
+            self._downloads = {}
+            self._gid_list = []
+            self.layoutChanged.emit()
             return
 
-        try:
-            # Use synchronous Aria2RPC methods (no asyncio)
-            active = self._worker.aria2.tell_active() or []
-            waiting = self._worker.aria2.tell_waiting(0, 100) or []
-            stopped = self._worker.aria2.tell_stopped(0, 100) or []
+        new_downloads: Dict[str, Dict[str, Any]] = {}
+        for item in download_list:
+            gid = item.get("gid")
+            if not gid:
+                continue
+            # Extract name from bittorrent info or use gid
+            name = "Unknown"
+            if "bittorrent" in item and "info" in item["bittorrent"]:
+                name = item["bittorrent"]["info"].get("name", gid)
+            elif "files" in item and item["files"]:
+                name = item["files"][0].get("path", gid)
+            else:
+                name = gid
 
-            all_downloads = active + waiting + stopped
+            completed = int(item.get("completedLength", 0))
+            total = int(item.get("totalLength", 0))
+            progress = (completed / total * 100) if total > 0 else 0
+            speed = int(item.get("downloadSpeed", 0))
+            status = item.get("status", "unknown")
 
-            # Update internal data
-            new_downloads: Dict[str, Dict[str, Any]] = {}
-            for item in all_downloads:
-                gid = item.get("gid")
-                if not gid:
-                    continue
-                # Extract name from bittorrent info or use gid
-                name = "Unknown"
-                if "bittorrent" in item and "info" in item["bittorrent"]:
-                    name = item["bittorrent"]["info"].get("name", gid)
-                elif "files" in item and item["files"]:
-                    name = item["files"][0].get("path", gid)
-                else:
-                    name = gid
+            new_downloads[gid] = {
+                "name": name,
+                "size": total,
+                "progress": progress,
+                "speed": speed,
+                "status": status,
+                "gid": gid,
+            }
 
-                completed = int(item.get("completedLength", 0))
-                total = int(item.get("totalLength", 0))
-                progress = (completed / total * 100) if total > 0 else 0
-                speed = int(item.get("downloadSpeed", 0))
-                status = item.get("status", "unknown")
-
-                new_downloads[gid] = {
-                    "name": name,
-                    "size": total,
-                    "progress": progress,
-                    "speed": speed,
-                    "status": status,
-                    "gid": gid,
-                }
-
-            # Update model
-            self._downloads = new_downloads
-            self._gid_list = list(new_downloads.keys())
-            self.layoutChanged.emit()
-
-        except Exception as e:
-            logger.error("Failed to update download list: %s", e)
+        # Update model
+        self._downloads = new_downloads
+        self._gid_list = list(new_downloads.keys())
+        self.layoutChanged.emit()
 
     def refresh(self) -> None:
-        """Manually refresh the model."""
-        self._on_stats_updated({})
+        """Refresh the model using the cached downloads from worker."""
+        cached = self._worker.get_cached_downloads()
+        self._on_downloads_updated(cached)
 
     def rowCount(self, parent=QModelIndex()) -> int:
         return len(self._gid_list)
@@ -121,7 +112,7 @@ class DownloadTableModel(QAbstractTableModel):
                 return self.COLUMNS[section]
         return None
 
-    # Methods to add/update downloads (for manual use if needed)
+    # Methods to add/update downloads manually (if needed)
     def add_download(self, gid: str, info: Dict[str, Any]) -> None:
         if gid not in self._downloads:
             self._downloads[gid] = info
