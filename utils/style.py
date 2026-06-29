@@ -10,7 +10,7 @@ import logging
 from typing import Optional
 
 from PyQt6.QtCore import Qt
-from PyQt6.QtGui import QColor, QPalette, QFont  # ← QPalette و QColor به‌درستی ایمپورت شده‌اند
+from PyQt6.QtGui import QColor, QPalette, QFont
 from PyQt6.QtWidgets import QApplication, QWidget
 
 logger = logging.getLogger(__name__)
@@ -22,7 +22,7 @@ logger = logging.getLogger(__name__)
 
 class ThemeColors:
     """Color palettes for dark and light themes."""
-    
+
     # Dark theme (based on Persepolis style)
     DARK = {
         "bg_primary": "#1a1a2e",
@@ -41,7 +41,7 @@ class ThemeColors:
         "warning": "#f1c40f",
         "error": "#e74c3c",
     }
-    
+
     # Light theme (clean and simple)
     LIGHT = {
         "bg_primary": "#f5f5f5",
@@ -78,7 +78,7 @@ def build_stylesheet(is_dark: bool) -> str:
     """
     c = get_theme_colors(is_dark)
     radius = "6px"
-    
+
     return f"""
     /* Global */
     QWidget {{
@@ -89,11 +89,11 @@ def build_stylesheet(is_dark: bool) -> str:
         font-family: "Vazir", "Segoe UI", system-ui, sans-serif;
         font-size: 13px;
     }}
-    
+
     QMainWindow {{
         background-color: {c["bg_primary"]};
     }}
-    
+
     /* Buttons */
     QPushButton {{
         background-color: {c["bg_secondary"]};
@@ -127,7 +127,7 @@ def build_stylesheet(is_dark: bool) -> str:
     QPushButton[primary="true"]:pressed {{
         background-color: {c["accent_active"]};
     }}
-    
+
     /* Inputs */
     QLineEdit, QTextEdit, QSpinBox, QComboBox {{
         background-color: {c["bg_secondary"]};
@@ -145,7 +145,7 @@ def build_stylesheet(is_dark: bool) -> str:
         color: {c["text_disabled"]};
         background-color: {c["bg_tertiary"]};
     }}
-    
+
     /* Table */
     QTableView {{
         background-color: {c["bg_primary"]};
@@ -171,7 +171,7 @@ def build_stylesheet(is_dark: bool) -> str:
         font-weight: bold;
         text-align: left;
     }}
-    
+
     /* Progress Bar */
     QProgressBar {{
         border: none;
@@ -194,7 +194,7 @@ def build_stylesheet(is_dark: bool) -> str:
     QProgressBar::chunk:paused {{
         background-color: {c["warning"]};
     }}
-    
+
     /* Toolbar */
     QToolBar {{
         background-color: {c["bg_secondary"]};
@@ -220,7 +220,7 @@ def build_stylesheet(is_dark: bool) -> str:
         background-color: {c["accent"]};
         color: white;
     }}
-    
+
     /* Status Bar */
     QStatusBar {{
         background-color: {c["bg_secondary"]};
@@ -231,7 +231,7 @@ def build_stylesheet(is_dark: bool) -> str:
     QStatusBar QLabel {{
         color: {c["text_secondary"]};
     }}
-    
+
     /* Menus */
     QMenuBar {{
         background-color: {c["bg_secondary"]};
@@ -257,7 +257,7 @@ def build_stylesheet(is_dark: bool) -> str:
         background-color: {c["border"]};
         margin: 4px 8px;
     }}
-    
+
     /* Scrollbars */
     QScrollBar:vertical {{
         background-color: {c["bg_primary"]};
@@ -293,7 +293,7 @@ def build_stylesheet(is_dark: bool) -> str:
     QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal {{
         width: 0px;
     }}
-    
+
     /* Dialogs */
     QDialog {{
         background-color: {c["bg_primary"]};
@@ -301,7 +301,7 @@ def build_stylesheet(is_dark: bool) -> str:
     QDialog QPushButton {{
         min-width: 80px;
     }}
-    
+
     /* Group Box */
     QGroupBox {{
         border: 1px solid {c["border"]};
@@ -314,7 +314,7 @@ def build_stylesheet(is_dark: bool) -> str:
         left: 10px;
         padding: 0 6px;
     }}
-    
+
     /* Tabs */
     QTabWidget::pane {{
         border: 1px solid {c["border"]};
@@ -337,7 +337,7 @@ def build_stylesheet(is_dark: bool) -> str:
     QTabBar::tab:hover {{
         background-color: {c["bg_hover"]};
     }}
-    
+
     /* Tooltips */
     QToolTip {{
         background-color: {c["bg_secondary"]};
@@ -356,10 +356,10 @@ def build_stylesheet(is_dark: bool) -> str:
 def build_palette(is_dark: bool) -> QPalette:
     """Build a QPalette from the theme colors."""
     c = get_theme_colors(is_dark)
-    
+
     def qcolor(hex_code: str) -> QColor:
         return QColor(hex_code)
-    
+
     palette = QPalette()
     palette.setColor(QPalette.ColorRole.Window, qcolor(c["bg_primary"]))
     palette.setColor(QPalette.ColorRole.WindowText, qcolor(c["text_primary"]))
@@ -374,30 +374,30 @@ def build_palette(is_dark: bool) -> QPalette:
     palette.setColor(QPalette.ColorRole.ToolTipBase, qcolor(c["bg_secondary"]))
     palette.setColor(QPalette.ColorRole.ToolTipText, qcolor(c["text_primary"]))
     palette.setColor(QPalette.ColorRole.PlaceholderText, qcolor(c["text_disabled"]))
-    
+
     return palette
 
 
 def apply_theme(target, is_dark: bool) -> None:
     """
     Apply the theme to a QApplication or QWidget.
-
-    Args:
-        target: QApplication or QWidget instance
-        is_dark: True for dark theme, False for light theme
+    Wrapped in try/except to prevent crashes.
     """
-    palette = build_palette(is_dark)
-    stylesheet = build_stylesheet(is_dark)
-    
-    if isinstance(target, QApplication):
-        target.setPalette(palette)
-        target.setStyleSheet(stylesheet)
-        target.processEvents()
-    else:
-        target.setPalette(palette)
-        target.setStyleSheet(stylesheet)
-    
-    logger.info("Theme applied: %s", "Dark" if is_dark else "Light")
+    try:
+        palette = build_palette(is_dark)
+        stylesheet = build_stylesheet(is_dark)
+
+        if isinstance(target, QApplication):
+            target.setPalette(palette)
+            target.setStyleSheet(stylesheet)
+            target.processEvents()
+        else:
+            target.setPalette(palette)
+            target.setStyleSheet(stylesheet)
+
+        logger.info("Theme applied: %s", "Dark" if is_dark else "Light")
+    except Exception as e:
+        logger.error("Failed to apply theme: %s", e)
 
 
 def detect_theme() -> bool:
@@ -405,21 +405,23 @@ def detect_theme() -> bool:
     Detect system theme with fallbacks.
     Returns True for dark, False for light.
     """
-    app = QApplication.instance()
-    if not app:
-        return True
-    
     try:
-        hints = app.styleHints()
-        if hints is not None:
-            scheme = hints.colorScheme()
-            if scheme == Qt.ColorScheme.Dark:
-                return True
-            if scheme == Qt.ColorScheme.Light:
-                return False
-    except AttributeError:
+        app = QApplication.instance()
+        if app:
+            # Try Qt 6.5+ style hints
+            try:
+                hints = app.styleHints()
+                if hints is not None:
+                    scheme = hints.colorScheme()
+                    if scheme == Qt.ColorScheme.Dark:
+                        return True
+                    if scheme == Qt.ColorScheme.Light:
+                        return False
+            except AttributeError:
+                pass
+    except Exception:
         pass
-    
+
     # Fallback: KDE
     try:
         result = subprocess.run(
@@ -436,7 +438,7 @@ def detect_theme() -> bool:
                 return brightness < 128
     except Exception:
         pass
-    
+
     # Fallback: GNOME/GTK
     try:
         result = subprocess.run(
@@ -453,7 +455,7 @@ def detect_theme() -> bool:
                 return False
     except Exception:
         pass
-    
+
     # Fallback: XFCE
     try:
         result = subprocess.run(
@@ -466,7 +468,7 @@ def detect_theme() -> bool:
             return True
     except Exception:
         pass
-    
+
     # Windows
     if sys.platform == 'win32':
         try:
@@ -474,10 +476,10 @@ def detect_theme() -> bool:
             key = winreg.OpenKey(winreg.HKEY_CURRENT_USER,
                                  r'Software\Microsoft\Windows\CurrentVersion\Themes\Personalize')
             value, _ = winreg.QueryValueEx(key, 'AppsUseLightTheme')
-            return value == 0
+            return value == 0  # 0 = dark
         except Exception:
             pass
-    
+
     # macOS
     if sys.platform == 'darwin':
         try:
@@ -491,7 +493,8 @@ def detect_theme() -> bool:
                 return True
         except Exception:
             pass
-    
+
+    # Default to dark if detection fails
     return True
 
 
