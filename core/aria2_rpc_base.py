@@ -1,5 +1,5 @@
 # =============================================================================
-# core/aria2_rpc_base.py (renamed _id to _next_id)
+# core/aria2_rpc_base.py
 # =============================================================================
 import json
 import logging
@@ -61,46 +61,61 @@ class BaseAria2RPC:
         return self._handle_response(response)
 
     def get_global_stat(self) -> Dict[str, Any]:
+        """Get global statistics."""
         return self._call("aria2.getGlobalStat") or {}
 
     def add_uri(self, uris: List[str], options: Optional[Dict] = None) -> Optional[str]:
+        """Add download with URIs."""
         params = [uris]
         if options:
             params.append(options)
         return self._call("aria2.addUri", params)
 
     def add_magnet(self, magnet: str, options: Optional[Dict] = None) -> Optional[str]:
+        """Add magnet link."""
         params = [magnet]
         if options:
             params.append(options)
         return self._call("aria2.addMagnet", params)
 
     def remove(self, gid: str) -> Optional[str]:
+        """Remove download."""
         return self._call("aria2.remove", [gid])
 
     def pause(self, gid: str) -> Optional[str]:
+        """Pause download."""
         return self._call("aria2.pause", [gid])
 
     def unpause(self, gid: str) -> Optional[str]:
+        """Unpause download."""
         return self._call("aria2.unpause", [gid])
 
     def tell_status(self, gid: str) -> Optional[Dict]:
+        """Get status of a download."""
         return self._call("aria2.tellStatus", [gid])
 
     def tell_active(self) -> Optional[List[Dict]]:
+        """Get list of active downloads."""
         return self._call("aria2.tellActive")
 
     def tell_waiting(self, offset: int = 0, num: int = 100) -> Optional[List[Dict]]:
+        """Get list of waiting downloads."""
         return self._call("aria2.tellWaiting", [offset, num])
 
     def tell_stopped(self, offset: int = 0, num: int = 100) -> Optional[List[Dict]]:
+        """Get list of stopped downloads."""
         return self._call("aria2.tellStopped", [offset, num])
 
     def change_global_option(self, options: Dict[str, Any]) -> Optional[bool]:
+        """Change global options (e.g., speed limit)."""
         result = self._call("aria2.changeGlobalOption", [options])
         return result == "OK"
 
     def batch_call(self, calls: List[Dict]) -> Optional[List]:
+        """
+        Perform multiple calls using system.multicall.
+        Each call: {"method": "aria2.getGlobalStat", "params": []}
+        """
         if not calls:
             return []
         multicall_params = []
