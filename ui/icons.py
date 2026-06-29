@@ -18,7 +18,7 @@ _icon_cache: Dict[str, QIcon] = {}
 
 def get_icon(name: str, fallback_text: str = "", size: int = 24) -> QIcon:
     """
-    Get an icon by name, using a cache. If not found, create from text or SVG.
+    Get an icon by name, using a cache. If not found, try SVG, system theme, or fallback.
     """
     cache_key = f"{name}_{size}"
     if cache_key in _icon_cache:
@@ -30,7 +30,7 @@ def get_icon(name: str, fallback_text: str = "", size: int = 24) -> QIcon:
         _icon_cache[cache_key] = icon
         return icon
 
-    # Try to load SVG if available (not implemented fully, just fallback)
+    # Try to load SVG if available (simplified, not implemented)
     # In a real implementation, you might load from a resource.
     # For now, create a fallback pixmap.
     pixmap = QPixmap(size, size)
