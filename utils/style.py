@@ -13,8 +13,7 @@ logger = logging.getLogger(__name__)
 
 def setup_font(app: QApplication) -> None:
     """Set up application font, preferring Vazir or IRANSansWeb if available."""
-    font_db = QFontDatabase()
-    available_fonts = font_db.families()
+    available_fonts = QFontDatabase.families()
 
     preferred_fonts = ["Vazir", "IRANSansWeb", "IRANSans", "Tahoma", "Arial"]
     font_name = "Arial"  # fallback
@@ -31,7 +30,6 @@ def setup_font(app: QApplication) -> None:
 
 def setup_style(app: QApplication) -> None:
     """Apply global stylesheet and color scheme."""
-    # Simple dark style as default (can be extended)
     style = """
     QMainWindow {
         background-color: #2b2b2b;
