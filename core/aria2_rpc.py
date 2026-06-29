@@ -54,7 +54,17 @@ class Aria2RPC:
         params: Optional[List] = None,
         timeout: Optional[int] = None,
     ) -> Optional[Any]:
-        """Execute a single RPC call."""
+        """
+        Execute a single RPC call.
+
+        Args:
+            method: RPC method name
+            params: List of parameters
+            timeout: Override the default timeout (in seconds)
+
+        Returns:
+            Result of the RPC call, or None on error
+        """
         self._id += 1
         token = f"token:{self.secret}" if self.secret else None
         if token:
@@ -102,7 +112,15 @@ class Aria2RPC:
             return None
 
     def _prepare_multicall_params(self, calls: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-        """Prepare parameters for system.multicall."""
+        """
+        Prepare parameters for system.multicall.
+
+        Args:
+            calls: List of call dicts with 'method' and optional 'params'
+
+        Returns:
+            List of params for the multicall
+        """
         params = []
         for call in calls:
             method = call.get("method")
@@ -116,7 +134,16 @@ class Aria2RPC:
         return params
 
     def _process_multicall_results(self, raw_results: Any, expected_count: int) -> List[Any]:
-        """Process results from system.multicall."""
+        """
+        Process results from system.multicall.
+
+        Args:
+            raw_results: Raw results from the RPC call
+            expected_count: Number of expected results
+
+        Returns:
+            Processed list of results
+        """
         if not isinstance(raw_results, list):
             logger.warning("Unexpected multicall response type: %s", type(raw_results))
             return [None] * expected_count
@@ -135,6 +162,7 @@ class Aria2RPC:
             else:
                 processed.append(None)
 
+        # Pad with None if we got fewer results than expected
         while len(processed) < expected_count:
             processed.append(None)
 
@@ -145,7 +173,18 @@ class Aria2RPC:
         calls: List[Dict[str, Any]],
         timeout: Optional[int] = None,
     ) -> List[Any]:
-        """Execute multiple RPC calls in a single request using system.multicall."""
+        """
+        Execute multiple RPC calls in a single request using system.multicall.
+
+        Args:
+            calls: List of dicts with 'method' and optional 'params'
+            timeout: Override the default timeout (in seconds);
+                     if None, uses DEFAULT_BATCH_TIMEOUT (30s)
+
+        Returns:
+            List of results from each call, in the same order as calls.
+            If a sub‑call fails, its entry will be None.
+        """
         if not calls:
             return []
 
@@ -243,39 +282,50 @@ class Aria2RPC:
         return result
 
     def remove(self, gid: str) -> Optional[Any]:
+        """Remove a download by GID."""
         return self._call("aria2.remove", [gid])
 
     def pause(self, gid: str) -> Optional[Any]:
+        """Pause a download by GID."""
         return self._call("aria2.pause", [gid])
 
     def resume(self, gid: str) -> Optional[Any]:
+        """Resume a download by GID."""
         return self._call("aria2.unpause", [gid])
 
     def tell_status(self, gid: str, fields: Optional[List[str]] = None) -> Optional[Dict]:
+        """Get status of a download by GID."""
         params = [gid]
         if fields:
             params.append(fields)
         return self._call("aria2.tellStatus", params)
 
     def get_global_stat(self) -> Optional[Dict]:
+        """Get global statistics."""
         return self._call("aria2.getGlobalStat")
 
     def tell_active(self) -> Optional[List[Dict]]:
+        """Get active downloads."""
         return self._call("aria2.tellActive")
 
     def tell_waiting(self, offset: int = 0, num: int = 1000) -> Optional[List[Dict]]:
+        """Get waiting downloads."""
         return self._call("aria2.tellWaiting", [offset, num])
 
     def tell_stopped(self, offset: int = 0, num: int = 1000) -> Optional[List[Dict]]:
+        """Get stopped downloads."""
         return self._call("aria2.tellStopped", [offset, num])
 
     def purge_download_result(self) -> Optional[Any]:
+        """Purge completed/removed downloads from memory."""
         return self._call("aria2.purgeDownloadResult")
 
     def get_global_option(self) -> Optional[Dict]:
+        """Get global options."""
         return self._call("aria2.getGlobalOption")
 
     def change_global_option(self, options: Dict) -> Optional[Any]:
+        """Change global options."""
         return self._call("aria2.changeGlobalOption", [options])
 
     def change_option(self, gid: str, options: Dict) -> Optional[Any]:
@@ -283,13 +333,16 @@ class Aria2RPC:
         return self._call("aria2.changeOption", [gid, options])
 
     def set_secret(self, secret: str) -> None:
+        """Update the RPC secret."""
         self.secret = secret
         logger.debug("RPC secret updated")
 
     def get_certificate_fingerprint(self) -> Optional[str]:
+        """Get the certificate fingerprint."""
         return None
 
     def _ensure_session(self) -> None:
+        """Ensure the session is valid and recreate it if necessary."""
         old_verify = self._session.verify
         old_headers = self._session.headers.copy()
 
@@ -298,7 +351,9 @@ class Aria2RPC:
         self._session.verify = old_verify
         self._session.headers.update(old_headers)
         self._session.headers.update({"Connection": "keep-alive"})
+
         logger.debug("RPC session recreated")
 
     def close(self) -> None:
+        """Close the session."""
         self._session.close()
