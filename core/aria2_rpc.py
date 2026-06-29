@@ -20,6 +20,7 @@ class Aria2RPC(BaseAria2RPC):
         super().__init__(host, port, secret, verify_ssl)
 
     def _send_request(self, payload: Dict[str, Any]) -> Optional[Any]:
+        """Send request synchronously using requests.post."""
         url = self._build_url()
         try:
             resp = requests.post(url, json=payload, verify=self.verify_ssl, timeout=30)
