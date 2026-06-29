@@ -33,10 +33,16 @@ class Queue:
         self.schedule_start: Optional[str] = schedule_start
         self.schedule_end: Optional[str] = schedule_end
         self.enabled: bool = enabled
-        self.timezone = pytz.timezone("Asia/Tehran")
+        self.timezone = pytz.timezone("Asia/Tehran")  # or system default
 
     def is_scheduled_now(self) -> bool:
-        """Determine if the queue should run now based on priority logic."""
+        """
+        Determine if the queue should run now.
+        Logic priority:
+        1. If schedule_dates exists, only check dates.
+        2. Else if schedule_times exists, only check times.
+        3. Else use days + schedule_start/end.
+        """
         if not self.enabled:
             return False
 
@@ -44,14 +50,17 @@ class Queue:
         current_date = now.date()
         current_time = now.time()
 
+        # Priority 1: schedule_dates
         if self.schedule_dates:
             date_str = current_date.isoformat()
             return date_str in self.schedule_dates
 
+        # Priority 2: schedule_times
         if self.schedule_times:
             time_str = current_time.strftime("%H:%M")
             return time_str in self.schedule_times
 
+        # Priority 3: days + schedule_start/end
         if self.days:
             current_day = now.isoweekday() - 1
             if current_day not in self.days:
