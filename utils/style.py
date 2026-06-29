@@ -1,7 +1,7 @@
 # utils/style.py
 """
 Modern stylesheet and theme utilities for FelfelDM.
-Uses a sleek, flat design with subtle shadows, glassmorphism, and smooth transitions.
+Uses a clean, flat design with minimal decorations.
 """
 
 import sys
@@ -10,7 +10,8 @@ from typing import Optional
 
 from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QColor, QPalette
-from PyQt6.QtWidgets import QApplication, QProxyStyle, QStyle, QWidget
+from PyQt6.QtWidgets import QApplication, QStyle
+
 
 # =============================================================================
 # Modern Color Palettes
@@ -19,7 +20,7 @@ from PyQt6.QtWidgets import QApplication, QProxyStyle, QStyle, QWidget
 class ThemeColors:
     """Modern color palette with dark and light variants."""
 
-    # Dark theme (inspired by Nord & Catppuccin with glassmorphism)
+    # Dark theme
     DARK = {
         "bg_primary": "#1e1e2e",
         "bg_secondary": "#28283a",
@@ -36,12 +37,9 @@ class ThemeColors:
         "success": "#a6e3a1",
         "warning": "#f9e2af",
         "error": "#f38ba8",
-        "shadow": "rgba(0,0,0,0.6)",
-        "glass_bg": "rgba(30, 30, 46, 0.85)",
-        "glass_border": "rgba(255, 255, 255, 0.08)",
     }
 
-    # Light theme (inspired by Catppuccin Latte)
+    # Light theme
     LIGHT = {
         "bg_primary": "#eff1f5",
         "bg_secondary": "#e6e9ef",
@@ -58,9 +56,6 @@ class ThemeColors:
         "success": "#40a02b",
         "warning": "#df8e1d",
         "error": "#d20f39",
-        "shadow": "rgba(0,0,0,0.15)",
-        "glass_bg": "rgba(239, 241, 245, 0.85)",
-        "glass_border": "rgba(0, 0, 0, 0.06)",
     }
 
 
@@ -70,12 +65,12 @@ def get_theme_colors(is_dark: bool):
 
 
 # =============================================================================
-# Modern Style Sheet with Glassmorphism
+# Style Sheet (clean and simple)
 # =============================================================================
 
 def build_stylesheet(is_dark: bool) -> str:
     """
-    Build a complete modern stylesheet with glassmorphism and CSS variables.
+    Build a clean, simple stylesheet without glassmorphism or gradients.
 
     Args:
         is_dark: True for dark theme, False for light theme
@@ -84,8 +79,8 @@ def build_stylesheet(is_dark: bool) -> str:
         A string containing the complete QSS stylesheet.
     """
     c = get_theme_colors(is_dark)
-    border_radius = "12px"
-    font_family = "Inter, 'Segoe UI', -apple-system, BlinkMacSystemFont, sans-serif"
+    border_radius = "8px"
+    font_family = "sans-serif"
 
     return f"""
     /* ============================================================
@@ -105,235 +100,232 @@ def build_stylesheet(is_dark: bool) -> str:
     }}
 
     QMainWindow {{
-        background: qlineargradient(x1:0, y1:0, x2:1, y2:1,
-            stop:0 {c["bg_primary"]},
-            stop:1 {c["bg_secondary"]});
+        background-color: {c["bg_primary"]};
     }}
 
     /* ============================================================
-       Glassmorphism Dialog Container
-       ============================================================ */
-    QFrame#animatedDialogContainer {{
-        background: {c["glass_bg"]};
-        border: 1px solid {c["glass_border"]};
-        border-radius: 16px;
-        backdrop-filter: blur(20px);
-    }}
-
-    QDialog {{
-        background: transparent;
-    }}
-
-    /* ============================================================
-       Buttons with gradient
+       Buttons
        ============================================================ */
     QPushButton {{
-        background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
-            stop:0 {c["bg_secondary"]},
-            stop:1 {c["bg_tertiary"]});
+        background-color: {c["bg_secondary"]};
         color: {c["text_primary"]};
-        border: none;
+        border: 1px solid {c["border"]};
         border-radius: {border_radius};
-        padding: 8px 16px;
+        padding: 6px 12px;
         font-weight: 500;
-        transition: all 0.2s ease;
     }}
     QPushButton:hover {{
-        background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
-            stop:0 {c["bg_hover"]},
-            stop:1 {c["bg_secondary"]});
-        transform: translateY(-1px);
+        background-color: {c["bg_hover"]};
+        border-color: {c["accent"]};
     }}
     QPushButton:pressed {{
-        background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
-            stop:0 {c["bg_active"]},
-            stop:1 {c["bg_hover"]});
-        transform: translateY(0px);
+        background-color: {c["bg_active"]};
     }}
     QPushButton:disabled {{
         color: {c["text_disabled"]};
-        background: {c["bg_tertiary"]};
+        background-color: {c["bg_tertiary"]};
+        border-color: {c["border"]};
     }}
 
     /* Primary accent button */
     QPushButton[primary="true"] {{
-        background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
-            stop:0 {c["accent"]},
-            stop:1 {c["accent_hover"]});
+        background-color: {c["accent"]};
         color: {c["bg_primary"]};
+        border: none;
         font-weight: 600;
     }}
     QPushButton[primary="true"]:hover {{
-        background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
-            stop:0 {c["accent_hover"]},
-            stop:1 {c["accent"]});
+        background-color: {c["accent_hover"]};
     }}
     QPushButton[primary="true"]:pressed {{
-        background: {c["accent_active"]};
+        background-color: {c["accent_active"]};
     }}
 
     /* Danger button */
     QPushButton[danger="true"] {{
-        background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
-            stop:0 {c["error"]},
-            stop:1 #c0392b);
+        background-color: {c["error"]};
         color: {c["bg_primary"]};
+        border: none;
     }}
     QPushButton[danger="true"]:hover {{
-        opacity: 0.9;
+        background-color: #c0392b;
     }}
 
     /* ============================================================
-       Toolbar with gradient and glass effect
+       Toolbar
        ============================================================ */
     QToolBar {{
-        background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
-            stop:0 {c["glass_bg"]},
-            stop:1 {c["bg_secondary"]});
+        background-color: {c["bg_secondary"]};
         border: none;
-        border-bottom: 1px solid {c["glass_border"]};
-        padding: 6px 12px;
-        spacing: 6px;
-        backdrop-filter: blur(10px);
+        border-bottom: 1px solid {c["border"]};
+        padding: 4px 8px;
+        spacing: 4px;
     }}
     QToolBar::separator {{
         width: 1px;
-        background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
-            stop:0 transparent,
-            stop:0.5 {c["border"]},
-            stop:1 transparent);
-        margin: 6px 4px;
+        background-color: {c["border"]};
+        margin: 4px 6px;
     }}
     QToolButton {{
         background: transparent;
         border: none;
         border-radius: {border_radius};
-        padding: 6px 12px;
-        transition: all 0.15s ease;
+        padding: 4px 8px;
     }}
     QToolButton:hover {{
-        background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
-            stop:0 {c["bg_hover"]},
-            stop:1 {c["bg_secondary"]});
+        background-color: {c["bg_hover"]};
     }}
     QToolButton:pressed {{
-        background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
-            stop:0 {c["bg_active"]},
-            stop:1 {c["bg_hover"]});
+        background-color: {c["bg_active"]};
     }}
     QToolButton:checked {{
-        background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
-            stop:0 {c["accent"]},
-            stop:1 {c["accent_hover"]});
+        background-color: {c["accent"]};
         color: {c["bg_primary"]};
     }}
 
     /* ============================================================
-       Table View with glass effect
+       Menu Bar
+       ============================================================ */
+    QMenuBar {{
+        background-color: {c["bg_secondary"]};
+        color: {c["text_primary"]};
+        border-bottom: 1px solid {c["border"]};
+        padding: 2px 8px;
+    }}
+    QMenuBar::item {{
+        background: transparent;
+        padding: 4px 10px;
+        border-radius: {border_radius};
+    }}
+    QMenuBar::item:selected {{
+        background-color: {c["bg_hover"]};
+    }}
+    QMenuBar::item:pressed {{
+        background-color: {c["accent"]};
+        color: {c["bg_primary"]};
+    }}
+
+    QMenu {{
+        background-color: {c["bg_secondary"]};
+        color: {c["text_primary"]};
+        border: 1px solid {c["border"]};
+        border-radius: {border_radius};
+        padding: 4px 0;
+    }}
+    QMenu::item {{
+        padding: 6px 30px 6px 18px;
+        border-radius: 4px;
+        margin: 2px 4px;
+    }}
+    QMenu::item:selected {{
+        background-color: {c["bg_hover"]};
+    }}
+    QMenu::separator {{
+        height: 1px;
+        background-color: {c["border"]};
+        margin: 4px 8px;
+    }}
+
+    /* ============================================================
+       Table View (Downloads)
        ============================================================ */
     QTableView {{
-        background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
-            stop:0 {c["bg_primary"]},
-            stop:1 {c["bg_secondary"]});
-        alternate-background-color: {c["bg_tertiary"]};
-        border: none;
+        background-color: {c["bg_primary"]};
+        alternate-background-color: {c["bg_secondary"]};
+        border: 1px solid {c["border"]};
         border-radius: {border_radius};
         gridline-color: {c["border"]};
-        padding: 4px;
+        padding: 2px;
     }}
     QTableView::item {{
-        padding: 8px 12px;
+        padding: 6px 8px;
         border: none;
-        border-radius: 6px;
-        transition: all 0.15s ease;
+        border-radius: 4px;
     }}
     QTableView::item:selected {{
-        background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
-            stop:0 {c["accent"]},
-            stop:1 {c["accent_hover"]});
+        background-color: {c["accent"]};
         color: {c["bg_primary"]};
     }}
     QTableView::item:hover:!selected {{
-        background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
-            stop:0 {c["bg_hover"]},
-            stop:1 {c["bg_secondary"]});
+        background-color: {c["bg_hover"]};
     }}
     QHeaderView::section {{
-        background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
-            stop:0 {c["bg_secondary"]},
-            stop:1 {c["bg_tertiary"]});
+        background-color: {c["bg_secondary"]};
         color: {c["text_secondary"]};
-        padding: 10px 14px;
+        padding: 6px 10px;
         border: none;
         border-bottom: 1px solid {c["border"]};
         font-weight: 600;
         text-align: left;
     }}
     QHeaderView::section:checked {{
-        background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
-            stop:0 {c["accent"]},
-            stop:1 {c["accent_hover"]});
+        background-color: {c["accent"]};
         color: {c["bg_primary"]};
     }}
 
     /* ============================================================
-       Scroll Bars with glass effect
+       Scroll Bars
        ============================================================ */
     QScrollBar:vertical {{
-        background: transparent;
-        width: 8px;
+        background-color: {c["bg_primary"]};
+        width: 10px;
         margin: 0px;
-        border-radius: 4px;
+        border-radius: 5px;
     }}
     QScrollBar::handle:vertical {{
-        background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
-            stop:0 {c["bg_tertiary"]},
-            stop:1 {c["bg_hover"]});
-        border-radius: 4px;
+        background-color: {c["bg_tertiary"]};
+        border-radius: 5px;
         min-height: 20px;
-        transition: all 0.15s ease;
     }}
     QScrollBar::handle:vertical:hover {{
-        background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
-            stop:0 {c["bg_hover"]},
-            stop:1 {c["bg_active"]});
+        background-color: {c["bg_hover"]};
     }}
     QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {{
         height: 0px;
     }}
+    QScrollBar:horizontal {{
+        background-color: {c["bg_primary"]};
+        height: 10px;
+        margin: 0px;
+        border-radius: 5px;
+    }}
+    QScrollBar::handle:horizontal {{
+        background-color: {c["bg_tertiary"]};
+        border-radius: 5px;
+        min-width: 20px;
+    }}
+    QScrollBar::handle:horizontal:hover {{
+        background-color: {c["bg_hover"]};
+    }}
+    QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal {{
+        width: 0px;
+    }}
 
     /* ============================================================
-       ComboBox with glass effect
+       ComboBox
        ============================================================ */
     QComboBox {{
-        background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
-            stop:0 {c["bg_secondary"]},
-            stop:1 {c["bg_tertiary"]});
+        background-color: {c["bg_secondary"]};
         color: {c["text_primary"]};
         border: 1px solid {c["border"]};
         border-radius: {border_radius};
-        padding: 6px 12px;
+        padding: 4px 10px;
         min-height: 24px;
-        transition: all 0.15s ease;
     }}
     QComboBox:hover {{
         border-color: {c["accent"]};
-        box-shadow: 0 0 0 2px {c["accent"]}40;
     }}
     QComboBox::drop-down {{
         border: none;
-        width: 24px;
+        width: 20px;
     }}
     QComboBox::down-arrow {{
         image: url(:/icons/down-arrow.svg);
-        width: 12px;
-        height: 12px;
-        margin-right: 4px;
+        width: 10px;
+        height: 10px;
     }}
     QComboBox QAbstractItemView {{
-        background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
-            stop:0 {c["bg_secondary"]},
-            stop:1 {c["bg_tertiary"]});
+        background-color: {c["bg_secondary"]};
         color: {c["text_primary"]};
         border: 1px solid {c["border"]};
         border-radius: {border_radius};
@@ -342,71 +334,162 @@ def build_stylesheet(is_dark: bool) -> str:
     }}
 
     /* ============================================================
-       LineEdit & TextEdit with glass effect
+       LineEdit & TextEdit
        ============================================================ */
     QLineEdit, QTextEdit {{
-        background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
-            stop:0 {c["bg_secondary"]},
-            stop:1 {c["bg_tertiary"]});
+        background-color: {c["bg_secondary"]};
         color: {c["text_primary"]};
         border: 1px solid {c["border"]};
         border-radius: {border_radius};
-        padding: 8px 12px;
-        transition: all 0.15s ease;
+        padding: 6px 10px;
     }}
     QLineEdit:focus, QTextEdit:focus {{
         border-color: {c["accent"]};
-        box-shadow: 0 0 0 2px {c["accent"]}40;
     }}
     QLineEdit:disabled, QTextEdit:disabled {{
         color: {c["text_disabled"]};
-        background: {c["bg_tertiary"]};
+        background-color: {c["bg_tertiary"]};
     }}
 
     /* ============================================================
-       Progress Bar with glow effect
+       SpinBox
+       ============================================================ */
+    QSpinBox {{
+        background-color: {c["bg_secondary"]};
+        color: {c["text_primary"]};
+        border: 1px solid {c["border"]};
+        border-radius: {border_radius};
+        padding: 4px 8px;
+    }}
+    QSpinBox:focus {{
+        border-color: {c["accent"]};
+    }}
+    QSpinBox::up-button, QSpinBox::down-button {{
+        background-color: {c["bg_tertiary"]};
+        border: none;
+        border-radius: 3px;
+        width: 16px;
+        margin: 1px;
+    }}
+    QSpinBox::up-button:hover, QSpinBox::down-button:hover {{
+        background-color: {c["bg_hover"]};
+    }}
+
+    /* ============================================================
+       CheckBox & RadioButton
+       ============================================================ */
+    QCheckBox {{
+        spacing: 8px;
+        color: {c["text_primary"]};
+    }}
+    QCheckBox::indicator {{
+        width: 16px;
+        height: 16px;
+        border-radius: 4px;
+        border: 2px solid {c["border"]};
+        background: {c["bg_secondary"]};
+    }}
+    QCheckBox::indicator:checked {{
+        background: {c["accent"]};
+        border-color: {c["accent"]};
+    }}
+    QCheckBox::indicator:unchecked:hover {{
+        border-color: {c["accent"]};
+    }}
+
+    QRadioButton {{
+        spacing: 8px;
+        color: {c["text_primary"]};
+    }}
+    QRadioButton::indicator {{
+        width: 16px;
+        height: 16px;
+        border-radius: 8px;
+        border: 2px solid {c["border"]};
+        background: {c["bg_secondary"]};
+    }}
+    QRadioButton::indicator:checked {{
+        background: {c["accent"]};
+        border-color: {c["accent"]};
+    }}
+
+    /* ============================================================
+       GroupBox
+       ============================================================ */
+    QGroupBox {{
+        border: 1px solid {c["border"]};
+        border-radius: {border_radius};
+        margin-top: 14px;
+        padding-top: 6px;
+        background-color: {c["bg_primary"]};
+    }}
+    QGroupBox::title {{
+        subcontrol-origin: margin;
+        left: 10px;
+        padding: 0 8px;
+        color: {c["text_secondary"]};
+        font-weight: 600;
+    }}
+
+    /* ============================================================
+       TabWidget
+       ============================================================ */
+    QTabWidget::pane {{
+        border: 1px solid {c["border"]};
+        border-radius: {border_radius};
+        background-color: {c["bg_primary"]};
+        padding: 4px;
+    }}
+    QTabBar::tab {{
+        background-color: {c["bg_secondary"]};
+        color: {c["text_secondary"]};
+        padding: 6px 14px;
+        margin-right: 2px;
+        border-top-left-radius: {border_radius};
+        border-top-right-radius: {border_radius};
+    }}
+    QTabBar::tab:selected {{
+        background-color: {c["accent"]};
+        color: {c["bg_primary"]};
+    }}
+    QTabBar::tab:hover:!selected {{
+        background-color: {c["bg_hover"]};
+        color: {c["text_primary"]};
+    }}
+
+    /* ============================================================
+       Progress Bar
        ============================================================ */
     QProgressBar {{
         border: none;
-        border-radius: 6px;
-        background: {c["bg_tertiary"]};
-        height: 8px;
+        border-radius: 4px;
+        background-color: {c["bg_tertiary"]};
+        height: 6px;
         text-align: center;
         color: {c["text_primary"]};
         font-size: 11px;
     }}
     QProgressBar::chunk {{
-        border-radius: 6px;
-        background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
-            stop:0 {c["accent"]},
-            stop:1 {c["accent_hover"]});
-        transition: width 0.3s ease;
+        border-radius: 4px;
+        background-color: {c["accent"]};
     }}
     QProgressBar::chunk:complete {{
-        background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
-            stop:0 {c["success"]},
-            stop:1 #2ecc71);
+        background-color: {c["success"]};
     }}
     QProgressBar::chunk:error {{
-        background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
-            stop:0 {c["error"]},
-            stop:1 #c0392b);
+        background-color: {c["error"]};
     }}
     QProgressBar::chunk:paused {{
-        background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
-            stop:0 {c["warning"]},
-            stop:1 #f39c12);
+        background-color: {c["warning"]};
     }}
 
     /* ============================================================
        Status Bar
        ============================================================ */
     QStatusBar {{
-        background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
-            stop:0 {c["bg_secondary"]},
-            stop:1 {c["bg_tertiary"]});
+        background-color: {c["bg_secondary"]};
         color: {c["text_secondary"]};
-        padding: 4px 12px;
+        padding: 2px 10px;
         border-top: 1px solid {c["border"]};
     }}
     QStatusBar QLabel {{
@@ -414,85 +497,49 @@ def build_stylesheet(is_dark: bool) -> str:
     }}
 
     /* ============================================================
-       ToolTips with glass effect
+       ToolTips
        ============================================================ */
     QToolTip {{
-        background: {c["glass_bg"]};
+        background-color: {c["bg_secondary"]};
         color: {c["text_primary"]};
-        border: 1px solid {c["glass_border"]};
+        border: 1px solid {c["border"]};
         border-radius: {border_radius};
-        padding: 6px 12px;
+        padding: 4px 8px;
         font-size: 12px;
-        backdrop-filter: blur(10px);
+    }}
+
+    /* ============================================================
+       Splitters
+       ============================================================ */
+    QSplitter::handle {{
+        background-color: {c["border"]};
+        margin: 2px;
+    }}
+    QSplitter::handle:hover {{
+        background-color: {c["accent"]};
+    }}
+
+    /* ============================================================
+       ListWidget
+       ============================================================ */
+    QListWidget {{
+        background-color: {c["bg_primary"]};
+        border: 1px solid {c["border"]};
+        border-radius: {border_radius};
+        padding: 4px;
+    }}
+    QListWidget::item {{
+        padding: 4px 8px;
+        border-radius: 4px;
+    }}
+    QListWidget::item:selected {{
+        background-color: {c["accent"]};
+        color: {c["bg_primary"]};
+    }}
+    QListWidget::item:hover:!selected {{
+        background-color: {c["bg_hover"]};
     }}
     """
-
-
-# =============================================================================
-# Custom Proxy Style
-# =============================================================================
-
-class ModernProxyStyle(QProxyStyle):
-    """Custom QProxyStyle with modern touches."""
-
-    def drawPrimitive(self, element: QStyle.PrimitiveElement, option, painter, widget=None):
-        if element == QStyle.PrimitiveElement.PE_IndicatorSpinUp:
-            rect = option.rect
-            painter.save()
-            painter.setPen(Qt.PenStyle.NoPen)
-
-            is_dark = self._is_dark_theme()
-            c = get_theme_colors(is_dark)
-
-            bg = QColor(c["bg_tertiary"])
-            if option.state & QStyle.StateFlag.State_MouseOver:
-                bg = QColor(c["bg_hover"])
-            painter.setBrush(bg)
-
-            painter.drawRoundedRect(rect, 4, 4)
-
-            painter.setBrush(QColor(c["text_primary"]))
-            cx = rect.center().x()
-            cy = rect.center().y()
-            points = [cx - 4, cy + 2, cx + 4, cy + 2, cx, cy - 4]
-            painter.drawPolygon(points)
-            painter.restore()
-            return
-
-        if element == QStyle.PrimitiveElement.PE_IndicatorSpinDown:
-            rect = option.rect
-            painter.save()
-            painter.setPen(Qt.PenStyle.NoPen)
-
-            is_dark = self._is_dark_theme()
-            c = get_theme_colors(is_dark)
-
-            bg = QColor(c["bg_tertiary"])
-            if option.state & QStyle.StateFlag.State_MouseOver:
-                bg = QColor(c["bg_hover"])
-            painter.setBrush(bg)
-
-            painter.drawRoundedRect(rect, 4, 4)
-
-            painter.setBrush(QColor(c["text_primary"]))
-            cx = rect.center().x()
-            cy = rect.center().y()
-            points = [cx - 4, cy - 2, cx + 4, cy - 2, cx, cy + 4]
-            painter.drawPolygon(points)
-            painter.restore()
-            return
-
-        super().drawPrimitive(element, option, painter, widget)
-
-    def _is_dark_theme(self) -> bool:
-        """Detect if the current theme is dark."""
-        app = QApplication.instance()
-        if app:
-            palette = app.palette()
-            bg = palette.color(QPalette.ColorRole.Window)
-            brightness = (bg.red() * 299 + bg.green() * 587 + bg.blue() * 114) / 1000
-            return brightness < 128
-        return True
 
 
 # =============================================================================
@@ -501,13 +548,15 @@ class ModernProxyStyle(QProxyStyle):
 
 def apply_modern_theme(target, is_dark: bool) -> None:
     """
-    Apply the modern theme to the application or a widget.
-    If target is not QApplication, apply to QApplication.instance().
+    Apply the modern theme to the application.
+
+    Args:
+        target: QApplication instance
+        is_dark: True for dark theme, False for light theme
     """
-    # Always apply to the main application instance
     app = QApplication.instance()
     if app is None:
-        return  # No application running
+        return
 
     # Build palette and stylesheet
     palette = build_palette(is_dark)
@@ -516,13 +565,6 @@ def apply_modern_theme(target, is_dark: bool) -> None:
     # Apply to application
     app.setPalette(palette)
     app.setStyleSheet(stylesheet)
-    app.setStyle(ModernProxyStyle())
-
-    # If target is a widget, also apply to it (but this is usually not needed)
-    if isinstance(target, QWidget) and target is not app:
-        # Optionally, apply to the widget as well
-        target.setPalette(palette)
-        target.setStyleSheet(stylesheet)
 
 
 def build_palette(is_dark: bool) -> QPalette:
