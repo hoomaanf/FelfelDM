@@ -2,13 +2,15 @@
 """
 Main application window - now acts as UI coordinator.
 Uses ServiceContainer for dependency injection.
+Supports Drag & Drop for torrent files.
 """
 
 import logging
+import os
 from typing import List, Optional
 
 from PyQt6.QtCore import Qt, QTimer, pyqtSignal, QObject, QSortFilterProxyModel
-from PyQt6.QtGui import QAction, QKeyEvent
+from PyQt6.QtGui import QAction, QKeyEvent, QDragEnterEvent, QDropEvent
 from PyQt6.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QPushButton, QTableView, QHeaderView, QComboBox,
@@ -284,6 +286,9 @@ class MainWindow(QMainWindow):
         self.setWindowTitle("FelfelDM")
         self.setMinimumSize(1050, 680)
 
+        # Enable drag and drop for torrent files
+        self.setAcceptDrops(True)
+
         # Resolve core services from container
         self.store: DataStore = container.resolve('data_store')
         self.history_manager: HistoryManager = container.resolve('history_manager')
@@ -335,6 +340,123 @@ class MainWindow(QMainWindow):
         self._apply_theme_from_settings()
 
         self._update_tray_icon()
+
+    # =========================================================================
+    # Drag and Drop Handlers
+    # =========================================================================
+
+    def dragEnterEvent(self, event: QDragEnterEvent) -> None:
+        """
+        Handle drag enter event - accept if the dragged data contains a .torrent file.
+        """
+        if event.mimeData().hasUrls():
+            urls = event.mimeData().urls()
+            for url in urls:
+                if url.isLocalFile() and url.toLocalFile().lower().endswith('.torrent'):
+                    event.acceptProposedAction()
+                    return
+        event.ignore()
+
+    def dragMoveEvent(self, event) -> None:
+        """Handle drag move event."""
+        event.acceptProposedAction()
+
+    def dropEvent(self, event: QDropEvent) -> None:
+        """
+        Handle drop event - if a .torrent file is dropped, open the AddTorrentDialog
+        with the file pre-filled.
+        """
+        if not event.mimeData().hasUrls():
+            return
+
+        urls = event.mimeData().urls()
+        torrent_path = None
+        for url in urls:
+            if url.isLocalFile():
+                path = url.toLocalFile()
+                if path.lower().endswith('.torrent'):
+                    torrent_path = path
+                    break
+
+        if torrent_path and os.path.exists(torrent_path):
+            event.acceptProposedAction()
+            self._open_add_torrent_dialog_with_file(torrent_path)
+        else:
+            event.ignore()
+
+    def _open_add_torrent_dialog_with_file(self, torrent_path: str) -> None:
+        """
+        Open the AddTorrentDialog with a pre-selected torrent file.
+
+        Args:
+            torrent_path: Path to the .torrent file
+        """
+        dialog = AddTorrentDialog(
+            self.queue_controller.get_queues(),
+            self.store,
+            self.queue_controller.current_index,
+            self
+        )
+        dialog.set_torrent_path(torrent_path)
+
+        animated_dialog = AnimatedDialog(self)
+        animated_dialog.set_content_widget(dialog)
+        animated_dialog.setWindowTitle("Add Torrent")
+
+        if animated_dialog.exec():
+            # Process the torrent as usual
+            torrent_path = dialog.get_torrent_path()
+            queue_idx = dialog.get_queue_index()
+            options = dialog.get_options()
+            self._process_torrent_dialog(dialog)
+
+    def _process_torrent_dialog(self, dialog: AddTorrentDialog) -> None:
+        """Process the result of the AddTorrentDialog."""
+        torrent_path = dialog.get_torrent_path()
+        queue_idx = dialog.get_queue_index()
+        options = dialog.get_options()
+
+        if not torrent_path:
+            QMessageBox.warning(self, "Error", "No torrent file selected.")
+            return
+
+        # Try to get torrent info for file selection
+        try:
+            torrent_info = self.aria2.get_torrent_info(torrent_path)
+            if torrent_info and torrent_info.get('files'):
+                file_dialog = TorrentFileSelectionDialog(torrent_info, torrent_path, self.aria2)
+                if file_dialog.exec():
+                    selected_files = file_dialog.get_selected_files()
+                    if not selected_files:
+                        QMessageBox.warning(self, "No Files Selected",
+                                            "Please select at least one file to download.")
+                        return
+                    # Add torrent with selected files
+                    gid = self.download_controller.add_torrent(
+                        torrent_path, queue_idx, options, selected_files
+                    )
+                    if gid:
+                        # Pass the GID to the file dialog for progress tracking
+                        file_dialog.set_gid(gid)
+                        # Keep the file dialog open for progress tracking
+                        # The user can close it manually
+                        QMessageBox.information(self, "Success", "Torrent added successfully.")
+                    else:
+                        QMessageBox.warning(self, "Error", "Failed to add torrent.")
+                return
+        except Exception as e:
+            logger.warning("Could not get torrent info: %s", e)
+
+        # Fallback: add without file selection
+        gid = self.download_controller.add_torrent(torrent_path, queue_idx, options)
+        if gid:
+            QMessageBox.information(self, "Success", "Torrent added successfully.")
+        else:
+            QMessageBox.warning(self, "Error", "Failed to add torrent.")
+
+    # =========================================================================
+    # Core Methods
+    # =========================================================================
 
     def _ensure_default_queue(self) -> None:
         if not any(q.name == "Default" for q in self.store.queues):
@@ -555,43 +677,52 @@ class MainWindow(QMainWindow):
         animated_dialog = AnimatedDialog(self)
         animated_dialog.set_content_widget(dialog)
         animated_dialog.setWindowTitle("Add Torrent")
+
         if animated_dialog.exec():
-            torrent_path = dialog.get_torrent_path()
-            queue_idx = dialog.get_queue_index()
-            options = dialog.get_options()
+            self._process_torrent_dialog(dialog)
 
-            if not torrent_path:
-                QMessageBox.warning(self, "Error", "No torrent file selected.")
+    def _process_torrent_dialog(self, dialog: AddTorrentDialog) -> None:
+        """Process the result of the AddTorrentDialog."""
+        torrent_path = dialog.get_torrent_path()
+        queue_idx = dialog.get_queue_index()
+        options = dialog.get_options()
+
+        if not torrent_path:
+            QMessageBox.warning(self, "Error", "No torrent file selected.")
+            return
+
+        # Try to get torrent info for file selection
+        try:
+            torrent_info = self.aria2.get_torrent_info(torrent_path)
+            if torrent_info and torrent_info.get('files'):
+                file_dialog = TorrentFileSelectionDialog(torrent_info, torrent_path, self.aria2)
+                if file_dialog.exec():
+                    selected_files = file_dialog.get_selected_files()
+                    if not selected_files:
+                        QMessageBox.warning(self, "No Files Selected",
+                                            "Please select at least one file to download.")
+                        return
+                    # Add torrent with selected files
+                    gid = self.download_controller.add_torrent(
+                        torrent_path, queue_idx, options, selected_files
+                    )
+                    if gid:
+                        # Update the file dialog with the GID for progress tracking
+                        file_dialog.set_gid(gid)
+                        # Keep the file dialog open for progress tracking
+                        QMessageBox.information(self, "Success", "Torrent added successfully. Progress will be shown in the file selection dialog.")
+                    else:
+                        QMessageBox.warning(self, "Error", "Failed to add torrent.")
                 return
+        except Exception as e:
+            logger.warning("Could not get torrent info: %s", e)
 
-            # Try to get torrent info for file selection
-            try:
-                torrent_info = self.aria2.get_torrent_info(torrent_path)
-                if torrent_info and torrent_info.get('files'):
-                    file_dialog = TorrentFileSelectionDialog(torrent_info, torrent_path, self)
-                    if file_dialog.exec():
-                        selected_files = file_dialog.get_selected_files()
-                        if not selected_files:
-                            QMessageBox.warning(self, "No Files Selected",
-                                                "Please select at least one file to download.")
-                            return
-                        gid = self.download_controller.add_torrent(
-                            torrent_path, queue_idx, options, selected_files
-                        )
-                        if gid:
-                            QMessageBox.information(self, "Success", "Torrent added successfully.")
-                        else:
-                            QMessageBox.warning(self, "Error", "Failed to add torrent.")
-                    return
-            except Exception as e:
-                logger.warning("Could not get torrent info: %s", e)
-
-            # Fallback: add without file selection
-            gid = self.download_controller.add_torrent(torrent_path, queue_idx, options)
-            if gid:
-                QMessageBox.information(self, "Success", "Torrent added successfully.")
-            else:
-                QMessageBox.warning(self, "Error", "Failed to add torrent.")
+        # Fallback: add without file selection
+        gid = self.download_controller.add_torrent(torrent_path, queue_idx, options)
+        if gid:
+            QMessageBox.information(self, "Success", "Torrent added successfully.")
+        else:
+            QMessageBox.warning(self, "Error", "Failed to add torrent.")
 
     def _start_selected(self) -> None:
         selection = self.table.selectionModel().selectedRows()
