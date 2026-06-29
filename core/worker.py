@@ -16,8 +16,17 @@ from core.constants import RPC_POLL_INTERVAL
 
 logger = logging.getLogger(__name__)
 
+# Custom metaclass to resolve QObject and ABC metaclass conflict
+from PyQt6.QtCore import pyqtWrapperType
+from abc import ABCMeta
 
-class BaseBackendWorker(QObject, ABC):
+
+class QABCMeta(pyqtWrapperType, ABCMeta):
+    """Metaclass that combines Qt's pyqtWrapperType and ABCMeta."""
+    pass
+
+
+class BaseBackendWorker(QObject, ABC, metaclass=QABCMeta):
     """Base class for backend workers providing common signals and cache."""
 
     stats_updated = pyqtSignal(dict)
