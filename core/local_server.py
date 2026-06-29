@@ -8,7 +8,7 @@ import logging
 import secrets
 import threading
 from http.server import HTTPServer, BaseHTTPRequestHandler
-from typing import Optional
+from typing import Optional, Any
 
 from PyQt6.QtCore import QObject, pyqtSignal
 
@@ -23,7 +23,14 @@ class LocalServer(QObject):
 
     urls_received = pyqtSignal(list)
 
-    def __init__(self, download_controller, port: int = 8080) -> None:
+    def __init__(self, download_controller: Any, port: int = 8080) -> None:
+        """
+        Initialize the local server.
+
+        Args:
+            download_controller: The download controller instance (must have add_urls method)
+            port: Port to listen on (default: 8080)
+        """
         super().__init__()
         self.download_controller = download_controller
         self.port = port
