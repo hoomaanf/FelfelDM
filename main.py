@@ -12,7 +12,6 @@ from PyQt6.QtGui import QFontDatabase, QFont, QIcon
 from PyQt6.QtWidgets import QApplication
 
 from ui.main_window import MainWindow
-from utils.style import detect_theme
 
 # =============================================================================
 # Logging Setup
@@ -79,12 +78,12 @@ def main() -> None:
     """Application entry point."""
     setup_logging()
 
-    # High DPI support
+    # High DPI support (PyQt6)
     QApplication.setHighDpiScaleFactorRoundingPolicy(
         Qt.HighDpiScaleFactorRoundingPolicy.Round
     )
-    QApplication.setAttribute(Qt.ApplicationAttribute.AA_EnableHighDpiScaling, True)
-    QApplication.setAttribute(Qt.ApplicationAttribute.AA_UseHighDpiPixmaps, True)
+    # Note: AA_EnableHighDpiScaling and AA_UseHighDpiPixmaps are not needed in PyQt6
+    # as they are handled by the scaling policy. Removing them avoids AttributeError.
 
     app = QApplication(sys.argv)
 
