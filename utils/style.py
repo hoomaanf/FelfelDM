@@ -14,8 +14,8 @@ logger = logging.getLogger(__name__)
 def setup_font(app: QApplication) -> None:
     """Set up application font, preferring Vazir or IRANSansWeb if available."""
     try:
-        font_db = QFontDatabase()
-        available_fonts = font_db.families()
+        # Use static method families() - do not instantiate QFontDatabase
+        available_fonts = QFontDatabase.families()
 
         preferred_fonts = ["Vazir", "IRANSansWeb", "IRANSans", "Tahoma", "Arial"]
         font_name = "Arial"  # fallback
