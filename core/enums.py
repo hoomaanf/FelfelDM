@@ -1,34 +1,21 @@
+# =============================================================================
 # core/enums.py
-"""
-Enumerations for download states and other constants.
-"""
-
+# =============================================================================
 from enum import Enum, auto
-from typing import Optional
 
 
 class DownloadStatus(Enum):
-    """Download status enumeration."""
-
-    ACTIVE = "Active"
-    WAITING = "Waiting"
-    PAUSED = "Paused"
-    COMPLETE = "Complete"
-    ERROR = "Error"
-    REMOVED = "Removed"
-    UNKNOWN = "Unknown"
+    """Status of a download."""
+    ACTIVE = auto()
+    WAITING = auto()
+    PAUSED = auto()
+    COMPLETE = auto()
+    ERROR = auto()
+    REMOVED = auto()
 
     @classmethod
-    def from_string(cls, value: str) -> "DownloadStatus":
-        """
-        Convert a string status to an enum member.
-
-        Args:
-            value: String status (e.g., 'active', 'paused')
-
-        Returns:
-            DownloadStatus enum member
-        """
+    def from_aria2(cls, status: str) -> "DownloadStatus":
+        """Convert aria2 status string to enum."""
         mapping = {
             "active": cls.ACTIVE,
             "waiting": cls.WAITING,
@@ -37,22 +24,4 @@ class DownloadStatus(Enum):
             "error": cls.ERROR,
             "removed": cls.REMOVED,
         }
-        return mapping.get(value.lower(), cls.UNKNOWN)
-
-    def __str__(self) -> str:
-        return self.value
-
-
-class QueueSchedule(Enum):
-    """Queue schedule status."""
-    RUNNING = auto()
-    PAUSED = auto()
-    SCHEDULED = auto()
-
-
-class ConnectionState(Enum):
-    """Connection state enumeration."""
-    CONNECTED = auto()
-    DISCONNECTED = auto()
-    CONNECTING = auto()
-    ERROR = auto()
+        return mapping.get(status, cls.ERROR)
