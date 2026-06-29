@@ -6,7 +6,7 @@ import logging
 import argparse
 from pathlib import Path
 
-from PyQt6.QtWidgets import QApplication
+from PyQt6.QtWidgets import QApplication, QMessageBox
 from PyQt6.QtGui import QFontDatabase, QFont
 
 from core.aria2_manager import start_aria2, _get_secret_from_file
@@ -35,6 +35,7 @@ def setup_logging(level: int = logging.INFO) -> None:
 def main() -> None:
     parser = argparse.ArgumentParser(description="FelfelDM Download Manager")
     parser.add_argument("--debug", action="store_true", help="Enable debug logging")
+    parser.add_argument("--no-verify-ssl", action="store_true", help="Disable SSL verification (not recommended)")
     args = parser.parse_args()
 
     log_level = logging.DEBUG if args.debug else logging.INFO
@@ -57,13 +58,26 @@ def main() -> None:
         store.settings.aria2_secret = secret
         store.save()
 
-    start_aria2(secret, rpc_port=6800,
-                download_dir=store.settings.download_dir,
-                speed_limit=store.settings.speed_limit)
+    # Start aria2
+    success = start_aria2(
+        secret,
+        rpc_port=6800,
+        download_dir=store.settings.download_dir,
+        speed_limit=store.settings.speed_limit
+    )
+    if not success:
+        logger.critical("Failed to start aria2. Please ensure aria2 is installed and in PATH.")
+        QMessageBox.critical(None, "Error", "Failed to start aria2. Please install aria2 and try again.")
+        sys.exit(1)
 
     # Initialize RPC and worker (sync mode)
     from core.aria2_rpc import Aria2RPC
-    rpc = Aria2RPC(host="127.0.0.1", port=6800, secret=secret, verify_ssl=False)
+    rpc = Aria2RPC(
+        host="127.0.0.1",
+        port=6800,
+        secret=secret,
+        verify_ssl=not args.no_verify_ssl
+    )
     worker = SyncBackendWorker(rpc, store)
 
     # Start local server for browser extension
