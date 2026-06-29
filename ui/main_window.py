@@ -21,7 +21,7 @@ logger = logging.getLogger(__name__)
 
 
 class SearchProxyModel(QSortFilterProxyModel):
-    """Proxy model for searching downloads by name (column 0)."""
+    """Proxy model for searching downloads by name or GID."""
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -37,10 +37,12 @@ class SearchProxyModel(QSortFilterProxyModel):
         model = self.sourceModel()
         if not model:
             return False
-        index = model.index(source_row, 0, source_parent)
-        name = model.data(index, Qt.ItemDataRole.DisplayRole)
-        if name and self._search_text in str(name).lower():
-            return True
+        # Search in name (column 0) and GID (column 5)
+        for col in [0, 5]:
+            index = model.index(source_row, col, source_parent)
+            data = model.data(index, Qt.ItemDataRole.DisplayRole)
+            if data and self._search_text in str(data).lower():
+                return True
         return False
 
 
@@ -86,8 +88,16 @@ class MainWindow(QMainWindow):
         self.worker.download_removed.connect(self._on_download_removed)
         self.worker.stats_updated.connect(self.update_status)
 
-        # Start worker after UI is fully loaded
-        QTimer.singleShot(0, self.worker.start)
+        # Start worker after UI is fully loaded with error handling
+        QTimer.singleShot(100, self._start_worker_safe)
+
+    def _start_worker_safe(self) -> None:
+        """Start the worker with exception handling."""
+        try:
+            self.worker.start()
+        except Exception as e:
+            logger.error("Failed to start worker: %s", e)
+            QMessageBox.critical(self, "Error", f"Failed to start download engine: {e}")
 
     def _on_download_added(self, gid: str) -> None:
         if gid:
