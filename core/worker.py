@@ -4,7 +4,7 @@
 import asyncio
 import logging
 import threading
-from abc import ABC, abstractmethod
+from abc import ABC, abstractmethod, ABCMeta
 from typing import Optional, Dict, Any
 
 from PyQt6.QtCore import QObject, pyqtSignal, QThread
@@ -16,8 +16,12 @@ from core.constants import RPC_POLL_INTERVAL
 
 logger = logging.getLogger(__name__)
 
+# Define a metaclass that combines QObject's metaclass and ABCMeta
+class QABCMeta(type(QObject), ABCMeta):
+    pass
 
-class BaseBackendWorker(QObject, ABC):
+
+class BaseBackendWorker(QObject, ABC, metaclass=QABCMeta):
     """Base class for backend workers providing common signals and cache."""
 
     stats_updated = pyqtSignal(dict)
