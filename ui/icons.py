@@ -7,8 +7,9 @@ Supports both system theme icons and embedded SVG fallbacks.
 import logging
 from typing import Optional
 
-from PyQt6.QtCore import QByteArray, QBuffer, QIODevice
-from PyQt6.QtGui import QIcon, QPixmap, QPainter, QColor, QApplication
+from PyQt6.QtCore import QByteArray
+from PyQt6.QtGui import QIcon, QPixmap, QPainter, QColor
+from PyQt6.QtWidgets import QApplication  # ← اصلاح شده
 from PyQt6.QtSvg import QSvgRenderer
 
 logger = logging.getLogger(__name__)
@@ -31,6 +32,7 @@ ICON_DATA = {
     "application-exit": """<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg>""",
     "help-about": """<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>""",
     "media-playback-stop": """<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="currentColor"><rect x="4" y="4" width="16" height="16"/></svg>""",
+    "download": """<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>""",
 }
 
 
@@ -108,7 +110,7 @@ def get_icon(name: str, is_dark: Optional[bool] = None) -> QIcon:
         return icon
     
     # Try fallback names (e.g., "list-add" -> "list-add-symbolic")
-    fallback_names = [f"{name}-symbolic", f"{name}-symbolic-{ 'dark' if is_dark else 'light' }"]
+    fallback_names = [f"{name}-symbolic", f"{name}-symbolic-{'dark' if is_dark else 'light'}"]
     for fallback in fallback_names:
         icon = QIcon.fromTheme(fallback)
         if not icon.isNull():
