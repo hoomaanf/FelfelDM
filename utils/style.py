@@ -13,23 +13,30 @@ logger = logging.getLogger(__name__)
 
 def setup_font(app: QApplication) -> None:
     """Set up application font, preferring Vazir or IRANSansWeb if available."""
-    available_fonts = QFontDatabase.families()
+    try:
+        font_db = QFontDatabase()
+        available_fonts = font_db.families()
 
-    preferred_fonts = ["Vazir", "IRANSansWeb", "IRANSans", "Tahoma", "Arial"]
-    font_name = "Arial"  # fallback
+        preferred_fonts = ["Vazir", "IRANSansWeb", "IRANSans", "Tahoma", "Arial"]
+        font_name = "Arial"  # fallback
 
-    for name in preferred_fonts:
-        if name in available_fonts:
-            font_name = name
-            break
+        for name in preferred_fonts:
+            if name in available_fonts:
+                font_name = name
+                break
 
-    font = QFont(font_name, 10)
-    app.setFont(font)
-    logger.info(f"Font set to: {font_name}")
+        font = QFont(font_name, 10)
+        app.setFont(font)
+        logger.info(f"Font set to: {font_name}")
+    except Exception as e:
+        logger.error(f"Failed to set font: {e}")
+        # Use system default font
+        app.setFont(QFont("Arial", 10))
 
 
 def setup_style(app: QApplication) -> None:
     """Apply global stylesheet and color scheme."""
+    # Simple dark style as default (can be extended)
     style = """
     QMainWindow {
         background-color: #2b2b2b;
@@ -74,5 +81,8 @@ def setup_style(app: QApplication) -> None:
         border-radius: 4px;
     }
     """
-    app.setStyleSheet(style)
-    logger.info("Global style applied")
+    try:
+        app.setStyleSheet(style)
+        logger.info("Global style applied")
+    except Exception as e:
+        logger.error(f"Failed to apply style: {e}")
