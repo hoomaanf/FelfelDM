@@ -6,7 +6,6 @@ and progress display.
 
 import logging
 import os
-import re
 from typing import List, Optional, Dict, Any
 
 from PyQt6.QtCore import Qt, pyqtSignal
@@ -18,6 +17,7 @@ from PyQt6.QtWidgets import (
     QListWidget, QListWidgetItem, QMessageBox,
 )
 
+import validators
 from core.data_store import Queue, DataStore
 from ui.icons import get_icon
 
@@ -26,7 +26,7 @@ logger = logging.getLogger(__name__)
 
 def is_valid_url(url: str) -> bool:
     """
-    Validate a URL or magnet link using comprehensive regex.
+    Validate a URL or magnet link using the validators library.
 
     Supports:
     - HTTP/HTTPS URLs
@@ -44,37 +44,19 @@ def is_valid_url(url: str) -> bool:
     if url.startswith("magnet:?xt=urn:"):
         return True
 
-    # Comprehensive URL pattern
-    # Supports: http://, https://, ftp://, ftps://
-    # Supports: domain.com, sub.domain.com, localhost
-    # Supports: IPv4 addresses, IPv6 addresses
-    # Supports: ports, paths, query parameters
-    pattern = re.compile(
-        r'^(?:[a-zA-Z][a-zA-Z0-9+\-.]*://)?'  # Optional scheme
-        r'(?:'
-        r'(?:[a-zA-Z0-9\-._~%!$&\'()*+,;=]+@)?'  # Optional user info
-        r'(?:'
-        r'\[[0-9a-fA-F:]+\]|'  # IPv6 address
-        r'[a-zA-Z0-9\-._~%]+'  # Domain name
-        r'|'
-        r'(?:[0-9]{1,3}\.){3}[0-9]{1,3}'  # IPv4 address
-        r'|'
-        r'localhost'  # localhost
-        r')'
-        r'(?::[0-9]{1,5})?'  # Optional port
-        r'(?:/[a-zA-Z0-9\-._~%!$&\'()*+,;=:@/]*)?'  # Path
-        r'(?:\?[a-zA-Z0-9\-._~%!$&\'()*+,;=:@/?]*)?'  # Query
-        r'(?:#[a-zA-Z0-9\-._~%!$&\'()*+,;=:@/?]*)?'  # Fragment
-        r')$'
-    )
+    # Use validators library for comprehensive validation
+    if validators.url(url):
+        return True
 
     # Also support raw IP/domain without scheme
-    if re.match(r'^[a-zA-Z0-9\-._~%]+\.[a-zA-Z]{2,}$', url):
-        return True
-    if re.match(r'^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}$', url):
+    if validators.domain(url) or validators.ip_address.ipv4(url) or validators.ip_address.ipv6(url):
         return True
 
-    return bool(pattern.match(url))
+    # Support localhost
+    if url == "localhost" or url.startswith("localhost:"):
+        return True
+
+    return False
 
 
 class UrlInputWidget(QWidget):
@@ -383,26 +365,26 @@ class SettingsDialog(QDialog):
 
         self.connections_spin = QSpinBox()
         self.connections_spin.setRange(1, 32)
-        self.connections_spin.setValue(self.store.settings.get("connections", 8))
+        self.connections_spin.setValue(self.store.settings.connections)
         form.addRow("Max Connections:", self.connections_spin)
 
         self.max_concurrent_spin = QSpinBox()
         self.max_concurrent_spin.setRange(1, 20)
-        self.max_concurrent_spin.setValue(self.store.settings.get("max_concurrent", 5))
+        self.max_concurrent_spin.setValue(self.store.settings.max_concurrent)
         form.addRow("Max Concurrent:", self.max_concurrent_spin)
 
         self.speed_limit_spin = QSpinBox()
         self.speed_limit_spin.setRange(0, 1000000)
         self.speed_limit_spin.setSpecialValueText("Unlimited")
-        self.speed_limit_spin.setValue(self.store.settings.get("speed_limit", 0))
+        self.speed_limit_spin.setValue(self.store.settings.speed_limit)
         form.addRow("Speed Limit (KB/s):", self.speed_limit_spin)
 
         self.shutdown_check = QCheckBox()
-        self.shutdown_check.setChecked(self.store.settings.get("shutdown_after_finish", False))
+        self.shutdown_check.setChecked(self.store.settings.shutdown_after_finish)
         form.addRow("Shutdown after finish:", self.shutdown_check)
 
         self.auto_clear_check = QCheckBox()
-        self.auto_clear_check.setChecked(self.store.settings.get("auto_clear_completed", False))
+        self.auto_clear_check.setChecked(self.store.settings.auto_clear_completed)
         form.addRow("Auto-clear completed:", self.auto_clear_check)
 
         # Default download path
@@ -425,7 +407,7 @@ class SettingsDialog(QDialog):
         self.theme_combo.addItem("Dark", "dark")
         self.theme_combo.addItem("Light", "light")
 
-        current_theme = self.store.settings.get("theme", "system")
+        current_theme = self.store.settings.theme
         idx = self.theme_combo.findData(current_theme)
         if idx >= 0:
             self.theme_combo.setCurrentIndex(idx)
@@ -447,12 +429,12 @@ class SettingsDialog(QDialog):
             self.default_path_edit.setText(path)
 
     def _save(self) -> None:
-        self.store.settings["connections"] = self.connections_spin.value()
-        self.store.settings["max_concurrent"] = self.max_concurrent_spin.value()
-        self.store.settings["speed_limit"] = self.speed_limit_spin.value()
-        self.store.settings["shutdown_after_finish"] = self.shutdown_check.isChecked()
-        self.store.settings["auto_clear_completed"] = self.auto_clear_check.isChecked()
-        self.store.settings["theme"] = self.theme_combo.currentData()
+        self.store.settings.connections = self.connections_spin.value()
+        self.store.settings.max_concurrent = self.max_concurrent_spin.value()
+        self.store.settings.speed_limit = self.speed_limit_spin.value()
+        self.store.settings.shutdown_after_finish = self.shutdown_check.isChecked()
+        self.store.settings.auto_clear_completed = self.auto_clear_check.isChecked()
+        self.store.settings.theme = self.theme_combo.currentData()
         self.store.set_default_download_path(self.default_path_edit.text())
         self.store.save()
         self.accept()
