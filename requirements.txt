@@ -21,6 +21,9 @@ appdirs==1.4.4
 # Version parsing
 packaging==23.2
 
+# URL validation
+validators==0.22.0
+
 # Development dependencies
 pytest==7.4.3
 pytest-qt==4.2.0
