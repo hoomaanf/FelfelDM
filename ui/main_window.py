@@ -6,7 +6,6 @@ Supports Drag & Drop for torrent files.
 """
 
 import logging
-import os
 from typing import List, Optional
 
 from PyQt6.QtCore import Qt, QTimer, pyqtSignal, QObject, QSortFilterProxyModel
