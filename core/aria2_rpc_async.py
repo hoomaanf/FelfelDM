@@ -1,7 +1,7 @@
 # core/aria2_rpc_async.py
 """
 Async RPC client for aria2 using aiohttp.
-Supports concurrent requests and batch calls.
+Supports concurrent requests and batch calls with semaphore limiting.
 """
 
 import base64
@@ -15,11 +15,14 @@ from core.constants import DEFAULT_TIMEOUT, DEFAULT_BATCH_TIMEOUT
 
 logger = logging.getLogger(__name__)
 
+# Maximum number of concurrent requests
+MAX_CONCURRENT_REQUESTS = 20
+
 
 class AsyncAria2RPC:
     """
     Asynchronous aria2 RPC client using aiohttp.
-    Supports batch calls and connection pooling.
+    Supports batch calls, connection pooling, and concurrency limiting.
     """
 
     def __init__(
@@ -39,6 +42,8 @@ class AsyncAria2RPC:
         self._session: Optional[aiohttp.ClientSession] = None
         self._connector_limit = connector_limit
         self._lock = asyncio.Lock()
+        # Semaphore to limit concurrent requests
+        self._semaphore = asyncio.Semaphore(MAX_CONCURRENT_REQUESTS)
 
     async def _ensure_session(self) -> aiohttp.ClientSession:
         """Ensure a session exists and return it."""
@@ -64,7 +69,7 @@ class AsyncAria2RPC:
         timeout: Optional[int] = None,
     ) -> Optional[Any]:
         """
-        Execute a single RPC call asynchronously.
+        Execute a single RPC call asynchronously with concurrency limiting.
 
         Args:
             method: RPC method name
@@ -74,22 +79,23 @@ class AsyncAria2RPC:
         Returns:
             Result of the RPC call, or None on error
         """
-        async with self._lock:
-            self._id += 1
-            token = f"token:{self.secret}" if self.secret else None
-            if token:
-                p = [token] + (params or [])
-            else:
-                p = params or []
+        async with self._semaphore:
+            async with self._lock:
+                self._id += 1
+                token = f"token:{self.secret}" if self.secret else None
+                if token:
+                    p = [token] + (params or [])
+                else:
+                    p = params or []
 
-            payload = {
-                "jsonrpc": "2.0",
-                "id": str(self._id),
-                "method": method,
-                "params": p,
-            }
+                payload = {
+                    "jsonrpc": "2.0",
+                    "id": str(self._id),
+                    "method": method,
+                    "params": p,
+                }
 
-            timeout_sec = timeout if timeout is not None else self.timeout
+                timeout_sec = timeout if timeout is not None else self.timeout
 
             try:
                 session = await self._ensure_session()
@@ -133,22 +139,26 @@ class AsyncAria2RPC:
         calls: List[Dict[str, Any]],
         timeout: Optional[int] = None,
     ) -> List[Any]:
-        """Execute multiple RPC calls in a single request using system.multicall."""
+        """
+        Execute multiple RPC calls in a single request using system.multicall
+        with concurrency limiting.
+        """
         if not calls:
             return []
 
-        params = await self._prepare_multicall_params(calls)
+        async with self._semaphore:
+            params = await self._prepare_multicall_params(calls)
 
-        async with self._lock:
-            self._id += 1
-            payload = {
-                "jsonrpc": "2.0",
-                "id": str(self._id),
-                "method": "system.multicall",
-                "params": [params],
-            }
+            async with self._lock:
+                self._id += 1
+                payload = {
+                    "jsonrpc": "2.0",
+                    "id": str(self._id),
+                    "method": "system.multicall",
+                    "params": [params],
+                }
 
-            timeout_sec = timeout if timeout is not None else DEFAULT_BATCH_TIMEOUT
+                timeout_sec = timeout if timeout is not None else DEFAULT_BATCH_TIMEOUT
 
             try:
                 session = await self._ensure_session()
