@@ -193,13 +193,6 @@ class TrayController(QObject):
         self.tray.setIcon(icon)
 
     def update_progress(self, progress: Optional[int], speed: Optional[str] = None) -> None:
-        """
-        Update the tray tooltip with progress information.
-
-        Args:
-            progress: Download progress percentage (0-100)
-            speed: Download speed string (e.g., "1.5 MB/s")
-        """
         self._current_progress = progress
 
         if progress is not None and progress > 0:
@@ -242,7 +235,6 @@ class ConnectionIndicator(QLabel):
         self.set_connected(False)
 
     def set_connected(self, connected: bool) -> None:
-        """Update the indicator based on connection status."""
         if connected:
             self.setText("● Connected")
             self.setStyleSheet("color: #a6e3a1; font-weight: bold;")
@@ -259,7 +251,6 @@ class AsyncModeIndicator(QLabel):
         self.set_mode(False)
 
     def set_mode(self, async_mode: bool) -> None:
-        """Update the indicator based on the current mode."""
         if async_mode:
             self.setText("⚡ Async")
             self.setStyleSheet("color: #89b4fa; font-weight: bold;")
@@ -272,12 +263,6 @@ class MainWindow(QMainWindow):
     """Main application window - UI coordinator with modern design."""
 
     def __init__(self, container: ServiceContainer) -> None:
-        """
-        Initialize main window with services from the container.
-
-        Args:
-            container: ServiceContainer instance with all core services
-        """
         super().__init__()
 
         self._container = container
@@ -345,9 +330,6 @@ class MainWindow(QMainWindow):
     # =========================================================================
 
     def dragEnterEvent(self, event: QDragEnterEvent) -> None:
-        """
-        Handle drag enter event - accept if the dragged data contains a .torrent file.
-        """
         if event.mimeData().hasUrls():
             urls = event.mimeData().urls()
             for url in urls:
@@ -357,14 +339,9 @@ class MainWindow(QMainWindow):
         event.ignore()
 
     def dragMoveEvent(self, event) -> None:
-        """Handle drag move event."""
         event.acceptProposedAction()
 
     def dropEvent(self, event: QDropEvent) -> None:
-        """
-        Handle drop event - if a .torrent file is dropped, open the AddTorrentDialog
-        with the file pre-filled.
-        """
         if not event.mimeData().hasUrls():
             return
 
@@ -384,12 +361,6 @@ class MainWindow(QMainWindow):
             event.ignore()
 
     def _open_add_torrent_dialog_with_file(self, torrent_path: str) -> None:
-        """
-        Open the AddTorrentDialog with a pre-selected torrent file.
-
-        Args:
-            torrent_path: Path to the .torrent file
-        """
         dialog = AddTorrentDialog(
             self.queue_controller.get_queues(),
             self.store,
@@ -403,14 +374,9 @@ class MainWindow(QMainWindow):
         animated_dialog.setWindowTitle("Add Torrent")
 
         if animated_dialog.exec():
-            # Process the torrent as usual
-            torrent_path = dialog.get_torrent_path()
-            queue_idx = dialog.get_queue_index()
-            options = dialog.get_options()
             self._process_torrent_dialog(dialog)
 
     def _process_torrent_dialog(self, dialog: AddTorrentDialog) -> None:
-        """Process the result of the AddTorrentDialog."""
         torrent_path = dialog.get_torrent_path()
         queue_idx = dialog.get_queue_index()
         options = dialog.get_options()
@@ -419,7 +385,6 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, "Error", "No torrent file selected.")
             return
 
-        # Try to get torrent info for file selection
         try:
             torrent_info = self.aria2.get_torrent_info(torrent_path)
             if torrent_info and torrent_info.get('files'):
@@ -430,15 +395,11 @@ class MainWindow(QMainWindow):
                         QMessageBox.warning(self, "No Files Selected",
                                             "Please select at least one file to download.")
                         return
-                    # Add torrent with selected files
                     gid = self.download_controller.add_torrent(
                         torrent_path, queue_idx, options, selected_files
                     )
                     if gid:
-                        # Pass the GID to the file dialog for progress tracking
                         file_dialog.set_gid(gid)
-                        # Keep the file dialog open for progress tracking
-                        # The user can close it manually
                         QMessageBox.information(self, "Success", "Torrent added successfully.")
                     else:
                         QMessageBox.warning(self, "Error", "Failed to add torrent.")
@@ -446,7 +407,6 @@ class MainWindow(QMainWindow):
         except Exception as e:
             logger.warning("Could not get torrent info: %s", e)
 
-        # Fallback: add without file selection
         gid = self.download_controller.add_torrent(torrent_path, queue_idx, options)
         if gid:
             QMessageBox.information(self, "Success", "Torrent added successfully.")
@@ -463,7 +423,6 @@ class MainWindow(QMainWindow):
             self.store.save()
 
     def _setup_worker(self) -> None:
-        """Connect worker signals."""
         if hasattr(self.worker, 'stats_updated'):
             self.worker.stats_updated.connect(self._on_stats_updated)
         if hasattr(self.worker, 'connection_changed'):
@@ -475,7 +434,6 @@ class MainWindow(QMainWindow):
             self.worker.start()
 
     def _setup_local_server(self) -> None:
-        """Set up the local HTTP server for browser extension."""
         self.local_server = LocalServer(self.download_controller)
         self.local_server.urls_received.connect(self._on_urls_received)
         self.local_server.start()
@@ -487,10 +445,8 @@ class MainWindow(QMainWindow):
         main_layout.setContentsMargins(12, 12, 12, 12)
         main_layout.setSpacing(12)
 
-        # Toolbar
         self._build_toolbar(main_layout)
 
-        # Queue selector and controls
         queue_layout = QHBoxLayout()
         self.queue_combo = QComboBox()
         self.queue_combo.currentIndexChanged.connect(self._on_queue_changed)
@@ -515,7 +471,6 @@ class MainWindow(QMainWindow):
 
         main_layout.addLayout(queue_layout)
 
-        # Search bar
         search_layout = QHBoxLayout()
         search_layout.addWidget(QLabel("Search:"))
         self.search_edit = QLineEdit()
@@ -524,7 +479,6 @@ class MainWindow(QMainWindow):
         search_layout.addWidget(self.search_edit)
         main_layout.addLayout(search_layout)
 
-        # Table view with proxy model
         self.table = QTableView()
         self.table.setAlternatingRowColors(True)
         self.table.setSortingEnabled(True)
@@ -535,7 +489,6 @@ class MainWindow(QMainWindow):
         self.proxy_model.setSourceModel(self.table_model)
         self.table.setModel(self.proxy_model)
 
-        # Set up columns
         for i, name in enumerate(self.table_model.COLS):
             if name == "Category":
                 self.table.setColumnWidth(i, 80)
@@ -558,7 +511,6 @@ class MainWindow(QMainWindow):
 
         main_layout.addWidget(self.table)
 
-        # Status bar with indicators
         status_bar = QStatusBar()
         self.setStatusBar(status_bar)
 
@@ -569,13 +521,11 @@ class MainWindow(QMainWindow):
         status_bar.addPermanentWidget(self._create_connection_indicator())
 
     def _create_connection_indicator(self) -> ConnectionIndicator:
-        """Create and return the connection status indicator."""
         self.connection_indicator = ConnectionIndicator()
         self.connection_indicator.set_connected(True)
         return self.connection_indicator
 
     def _create_async_mode_indicator(self) -> AsyncModeIndicator:
-        """Create and return the async/sync mode indicator."""
         self.async_mode_indicator = AsyncModeIndicator()
         async_mode = self.store.settings.get("async_mode", False)
         self.async_mode_indicator.set_mode(async_mode)
@@ -648,7 +598,6 @@ class MainWindow(QMainWindow):
             self.queue_controller.delete_queue(idx)
 
     def _show_add_dialog(self) -> None:
-        """Show the Add Download dialog with animation."""
         dialog = AddDownloadDialog(
             self.queue_controller.get_queues(),
             self.store,
@@ -666,7 +615,6 @@ class MainWindow(QMainWindow):
                 self.download_controller.add_urls(urls, queue_idx, options)
 
     def _show_add_torrent_dialog(self) -> None:
-        """Show the Add Torrent dialog with animation."""
         dialog = AddTorrentDialog(
             self.queue_controller.get_queues(),
             self.store,
@@ -679,49 +627,6 @@ class MainWindow(QMainWindow):
 
         if animated_dialog.exec():
             self._process_torrent_dialog(dialog)
-
-    def _process_torrent_dialog(self, dialog: AddTorrentDialog) -> None:
-        """Process the result of the AddTorrentDialog."""
-        torrent_path = dialog.get_torrent_path()
-        queue_idx = dialog.get_queue_index()
-        options = dialog.get_options()
-
-        if not torrent_path:
-            QMessageBox.warning(self, "Error", "No torrent file selected.")
-            return
-
-        # Try to get torrent info for file selection
-        try:
-            torrent_info = self.aria2.get_torrent_info(torrent_path)
-            if torrent_info and torrent_info.get('files'):
-                file_dialog = TorrentFileSelectionDialog(torrent_info, torrent_path, self.aria2)
-                if file_dialog.exec():
-                    selected_files = file_dialog.get_selected_files()
-                    if not selected_files:
-                        QMessageBox.warning(self, "No Files Selected",
-                                            "Please select at least one file to download.")
-                        return
-                    # Add torrent with selected files
-                    gid = self.download_controller.add_torrent(
-                        torrent_path, queue_idx, options, selected_files
-                    )
-                    if gid:
-                        # Update the file dialog with the GID for progress tracking
-                        file_dialog.set_gid(gid)
-                        # Keep the file dialog open for progress tracking
-                        QMessageBox.information(self, "Success", "Torrent added successfully. Progress will be shown in the file selection dialog.")
-                    else:
-                        QMessageBox.warning(self, "Error", "Failed to add torrent.")
-                return
-        except Exception as e:
-            logger.warning("Could not get torrent info: %s", e)
-
-        # Fallback: add without file selection
-        gid = self.download_controller.add_torrent(torrent_path, queue_idx, options)
-        if gid:
-            QMessageBox.information(self, "Success", "Torrent added successfully.")
-        else:
-            QMessageBox.warning(self, "Error", "Failed to add torrent.")
 
     def _start_selected(self) -> None:
         selection = self.table.selectionModel().selectedRows()
@@ -749,14 +654,12 @@ class MainWindow(QMainWindow):
         self.table_model.refresh()
 
     def _show_settings(self) -> None:
-        """Show the Settings dialog with animation."""
         dialog = SettingsDialog(self.store, self)
         animated_dialog = AnimatedDialog(self)
         animated_dialog.set_content_widget(dialog)
         animated_dialog.setWindowTitle("Settings")
         if animated_dialog.exec():
             self._apply_theme_from_settings()
-            # Update async mode indicator after settings change
             async_mode = self.store.settings.get("async_mode", False)
             self.async_mode_indicator.set_mode(async_mode)
 
