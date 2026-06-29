@@ -28,15 +28,16 @@ class DownloadTableModel(QAbstractTableModel):
 
     def _on_stats_updated(self, stats: dict) -> None:
         """Fetch download list from aria2 and update model."""
-        # Fetch active, waiting, stopped downloads asynchronously
-        # Since we are in the UI thread, we run a new event loop to get the data.
+        # If worker is not running, skip update
+        if hasattr(self._worker, '_running') and not self._worker._running:
+            logger.debug("Worker not running, skipping table update")
+            return
+
         try:
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
-            active = loop.run_until_complete(self._worker.async_aria2.tell_active()) or []
-            waiting = loop.run_until_complete(self._worker.async_aria2.tell_waiting(0, 100)) or []
-            stopped = loop.run_until_complete(self._worker.async_aria2.tell_stopped(0, 100)) or []
-            loop.close()
+            # Use asyncio.run() which manages the event loop automatically
+            active = asyncio.run(self._worker.async_aria2.tell_active()) or []
+            waiting = asyncio.run(self._worker.async_aria2.tell_waiting(0, 100)) or []
+            stopped = asyncio.run(self._worker.async_aria2.tell_stopped(0, 100)) or []
 
             all_downloads = active + waiting + stopped
 
@@ -75,6 +76,8 @@ class DownloadTableModel(QAbstractTableModel):
             self._gid_list = list(new_downloads.keys())
             self.layoutChanged.emit()
 
+        except asyncio.CancelledError:
+            logger.info("Table update cancelled")
         except Exception as e:
             logger.error("Failed to update download list: %s", e)
 
