@@ -10,21 +10,31 @@ import datetime
 from pathlib import Path
 from typing import List, Optional, Dict, Any
 
+from PyQt6.QtCore import QTimer, QObject
+
 from core.data_store import DataStore
 
 logger: logging.Logger = logging.getLogger(__name__)
 
 
-class SessionManager:
+class SessionManager(QObject):
     """
     Save and restore download sessions with rich metadata.
+    Auto-saves periodically every 30 seconds.
     """
 
     SESSION_FILE: Path = Path.home() / ".cache" / "felfelDM" / "session.json"
 
     def __init__(self, store: DataStore) -> None:
+        super().__init__()
         self.store: DataStore = store
         self.SESSION_FILE.parent.mkdir(parents=True, exist_ok=True)
+        self._active_downloads: List[Dict[str, Any]] = []
+
+        # Setup periodic save timer
+        self._save_timer = QTimer()
+        self._save_timer.timeout.connect(self._periodic_save)
+        self._save_timer.start(30000)  # 30 seconds
 
     def save_session(self, active_downloads: List[Dict[str, Any]]) -> None:
         """
@@ -34,14 +44,18 @@ class SessionManager:
             active_downloads: List of dicts containing at least 'gid', and optionally
                               'path', 'total_size', 'status', 'name', 'completed_length'.
         """
+        self._active_downloads = active_downloads
+        self._do_save()
+
+    def _do_save(self) -> None:
+        """Internal method to save the current session."""
         try:
             downloads_data = []
-            for dl in active_downloads:
+            for dl in self._active_downloads:
                 entry = {
                     "gid": dl.get("gid"),
                     "timestamp": datetime.datetime.now().isoformat(),
                 }
-                # Add optional fields if present
                 for field in ["path", "total_size", "status", "name", "completed_length", "save_path"]:
                     if field in dl and dl[field] is not None:
                         entry[field] = dl[field]
@@ -56,10 +70,15 @@ class SessionManager:
             with self.SESSION_FILE.open("w", encoding="utf-8") as f:
                 json.dump(data, f, indent=2)
 
-            logger.info("Saved session with %d active downloads", len(active_downloads))
+            logger.debug("Saved session with %d active downloads", len(self._active_downloads))
 
         except Exception as e:
             logger.error("Failed to save session: %s", e)
+
+    def _periodic_save(self) -> None:
+        """Periodic save triggered by timer."""
+        if self._active_downloads:
+            self._do_save()
 
     def load_session(self) -> List[Dict[str, Any]]:
         """
@@ -77,6 +96,7 @@ class SessionManager:
 
             downloads = data.get("active_downloads", [])
             logger.info("Loaded session with %d downloads", len(downloads))
+            self._active_downloads = downloads
             return downloads
 
         except Exception as e:
@@ -93,6 +113,13 @@ class SessionManager:
         try:
             if self.SESSION_FILE.exists():
                 self.SESSION_FILE.unlink()
+                self._active_downloads = []
                 logger.info("Session cleared.")
         except Exception as e:
             logger.error("Failed to clear session: %s", e)
+
+    def stop(self) -> None:
+        """Stop the periodic save timer and save final state."""
+        self._save_timer.stop()
+        if self._active_downloads:
+            self._do_save()
