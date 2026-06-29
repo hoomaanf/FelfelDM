@@ -1,108 +1,94 @@
+# =============================================================================
 # utils/helpers.py
-"""
-Helper functions for formatting, disk space, etc.
-"""
-
-import math
+# =============================================================================
 import os
-import shutil
-from pathlib import Path
-from typing import Union
+from typing import Optional
 
-from PyQt6.QtGui import QIcon
+# Constants for size formatting
+UNITS = ["B", "KB", "MB", "GB", "TB", "PB", "EB"]
 
 
 def format_size(size: int) -> str:
-    """
-    Format a size in bytes to a human-readable string.
-    Uses math.log for efficiency.
-    """
-    if size < 0:
+    """Format a size in bytes to human-readable string."""
+    if size <= 0:
         return "0 B"
-    if size == 0:
-        return "0 B"
-
-    units = ["B", "KB", "MB", "GB", "TB", "PB", "EB"]
-
-    if size < 1024:
-        return f"{size:.1f} B"
-
-    exponent = min(int(math.log(size, 1024)), len(units) - 1)
-    value = size / (1024 ** exponent)
-
-    if value < 100:
-        return f"{value:.1f} {units[exponent]}"
+    size_float = float(size)
+    unit_index = 0
+    while size_float >= 1024 and unit_index < len(UNITS) - 1:
+        size_float /= 1024
+        unit_index += 1
+    if unit_index == 0:
+        return f"{int(size)} {UNITS[0]}"
+    if size_float < 10:
+        return f"{size_float:.2f} {UNITS[unit_index]}"
+    elif size_float < 100:
+        return f"{size_float:.1f} {UNITS[unit_index]}"
     else:
-        return f"{value:.0f} {units[exponent]}"
+        return f"{int(size_float)} {UNITS[unit_index]}"
 
 
-def format_speed(speed: int) -> str:
-    """
-    Format a speed in bytes per second to a human-readable string.
-    """
-    if speed == 0:
+def format_speed(bytes_per_sec: int) -> str:
+    """Format speed in bytes/sec to human-readable."""
+    if bytes_per_sec <= 0:
         return "0 B/s"
-
-    units = ["B/s", "KB/s", "MB/s", "GB/s", "TB/s"]
-
-    if speed < 1024:
-        return f"{speed:.1f} {units[0]}"
-
-    exponent = min(int(math.log(speed, 1024)), len(units) - 1)
-    value = speed / (1024 ** exponent)
-
-    if value < 100:
-        return f"{value:.1f} {units[exponent]}"
+    size_float = float(bytes_per_sec)
+    unit_index = 0
+    while size_float >= 1024 and unit_index < len(UNITS) - 1:
+        size_float /= 1024
+        unit_index += 1
+    if unit_index == 0:
+        return f"{int(size_float)} {UNITS[0]}/s"
+    if size_float < 10:
+        return f"{size_float:.2f} {UNITS[unit_index]}/s"
+    elif size_float < 100:
+        return f"{size_float:.1f} {UNITS[unit_index]}/s"
     else:
-        return f"{value:.0f} {units[exponent]}"
+        return f"{int(size_float)} {UNITS[unit_index]}/s"
 
 
-def ensure_dir(path: Union[str, Path]) -> bool:
-    """Ensure a directory exists."""
-    try:
-        Path(path).mkdir(parents=True, exist_ok=True)
-        return True
-    except Exception:
+def is_valid_url(url: str) -> bool:
+    """Basic URL validation (supports http, https, magnet)."""
+    if not url:
         return False
+    url = url.strip()
+    if url.startswith(("http://", "https://")):
+        # Simple check: must contain a dot and at least one slash after protocol
+        parts = url.split("://", 1)
+        if len(parts) == 2 and parts[1]:
+            return True
+    elif url.startswith("magnet:?xt=urn:"):
+        # Very basic magnet validation
+        return True
+    return False
 
 
 def check_disk_space(path: str, required_bytes: int = 0) -> bool:
-    """
-    Check if there is enough free space on the device containing path.
-    """
-    try:
-        stat = shutil.disk_usage(path)
-        if required_bytes == 0:
-            return True
-        return stat.free >= required_bytes
-    except Exception:
+    """Check if there is enough free space on the given path."""
+    if required_bytes <= 0:
         return True
+    try:
+        stat = os.statvfs(path)
+        free = stat.f_frsize * stat.f_bavail
+        return free >= required_bytes
+    except OSError:
+        return False
+
+
+# Category mapping (can be moved to a constant)
+CATEGORY_MAP = {
+    "video": ["mp4", "mkv", "avi", "mov", "wmv", "flv", "webm"],
+    "audio": ["mp3", "wav", "flac", "aac", "ogg", "wma"],
+    "image": ["jpg", "jpeg", "png", "gif", "bmp", "svg", "webp"],
+    "document": ["pdf", "doc", "docx", "xls", "xlsx", "ppt", "pptx", "txt", "rtf"],
+    "archive": ["zip", "rar", "7z", "tar", "gz", "bz2", "xz"],
+    "executable": ["exe", "msi", "deb", "rpm", "dmg", "pkg"],
+}
 
 
 def get_category(filename: str) -> str:
-    """
-    Get the category of a file based on its extension.
-    """
-    ext = os.path.splitext(filename)[1].lower()
-
-    categories = {
-        ".mp4": "Video", ".mkv": "Video", ".avi": "Video",
-        ".mov": "Video", ".wmv": "Video", ".flv": "Video",
-        ".webm": "Video",
-        ".mp3": "Audio", ".wav": "Audio", ".flac": "Audio",
-        ".aac": "Audio", ".ogg": "Audio", ".m4a": "Audio",
-        ".zip": "Archive", ".rar": "Archive", ".7z": "Archive",
-        ".tar": "Archive", ".gz": "Archive", ".bz2": "Archive",
-        ".xz": "Archive",
-        ".iso": "Disk Image", ".img": "Disk Image",
-        ".pdf": "Document", ".doc": "Document", ".docx": "Document",
-        ".xls": "Document", ".xlsx": "Document",
-        ".ppt": "Document", ".pptx": "Document",
-        ".txt": "Document", ".md": "Document", ".epub": "Document",
-        ".exe": "Executable", ".msi": "Executable",
-        ".deb": "Executable", ".rpm": "Executable",
-        ".apk": "Executable", ".dmg": "Executable",
-        ".torrent": "Torrent", ".magnet": "Torrent",
-    }
-
-    return categories.get(ext, "Other")
+    """Guess category based on file extension."""
+    ext = filename.split(".")[-1].lower() if "." in filename else ""
+    for category, extensions in CATEGORY_MAP.items():
+        if ext in extensions:
+            return category
+    return "other"
