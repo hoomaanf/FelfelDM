@@ -22,23 +22,21 @@ class BackendWorker(QObject):
     download_removed = pyqtSignal(str)
     error_occurred = pyqtSignal(str)
 
-    def __init__(self, aria2: Aria2RPC, store: DataStore, async_mode: bool = False):
+    def __init__(self, aria2: Aria2RPC, store: DataStore, async_mode: bool = False) -> None:
         super().__init__()
-        self.aria2 = aria2
-        self.async_aria2 = AsyncAria2RPC(aria2.host, aria2.port, aria2.secret, aria2.verify_ssl)
-        self.store = store
-        self.async_mode = async_mode
-        self._running = False
+        self.aria2: Aria2RPC = aria2
+        self.async_aria2: AsyncAria2RPC = AsyncAria2RPC(
+            aria2.host, aria2.port, aria2.secret, aria2.verify_ssl
+        )
+        self.store: DataStore = store
+        self.async_mode: bool = async_mode
+        self._running: bool = False
         self._cached_stats: Dict[str, Any] = {}
-        self._stats_lock = threading.Lock()  # Protect _cached_stats
-        self._poll_interval = RPC_POLL_INTERVAL
+        self._stats_lock = threading.Lock()
+        self._poll_interval: int = RPC_POLL_INTERVAL
 
-        # Thread for sync polling
         self._thread: Optional[QThread] = None
-        # Thread for async polling
         self._async_thread: Optional[QThread] = None
-        # Async task reference for cancellation (if needed)
-        self._async_task: Optional[asyncio.Task] = None
 
     def start(self) -> None:
         """Start polling in a separate thread."""
@@ -62,7 +60,7 @@ class BackendWorker(QObject):
         """Polling loop running in background thread."""
         while self._running:
             self._poll_sync()
-            self._thread.msleep(self._poll_interval * 1000)  # convert to ms
+            self._thread.msleep(self._poll_interval * 1000)
 
     def _poll_sync(self) -> None:
         """Perform a single poll (synchronous) with thread-safe cache update."""
@@ -107,8 +105,7 @@ class BackendWorker(QObject):
             except Exception as e:
                 logger.error("Async poll error: %s", e)
                 self.error_occurred.emit(f"Async poll error: {e}")
-            # Sleep with periodic check for cancellation
-            for _ in range(self._poll_interval * 10):  # check every 0.1s
+            for _ in range(self._poll_interval * 10):
                 if not self._running:
                     break
                 await asyncio.sleep(0.1)
@@ -117,17 +114,11 @@ class BackendWorker(QObject):
         """Stop the worker and clean up threads."""
         self._running = False
 
-        # Stop sync thread
         if self._thread and self._thread.isRunning():
             self._thread.quit()
             self._thread.wait()
 
-        # Stop async thread
         if self._async_thread and self._async_thread.isRunning():
-            # Attempt to cancel any ongoing async tasks
-            # We cannot directly cancel the running event loop, but we can schedule a cancellation
-            # by calling stop on the async_aria2 or by using a future. However, the loop will
-            # check _running periodically and exit.
             self._async_thread.quit()
             self._async_thread.wait()
 
