@@ -8,8 +8,8 @@ import logging
 from typing import Optional
 
 from PyQt6.QtCore import QByteArray
-from PyQt6.QtGui import QIcon, QPixmap, QPainter, QColor
-from PyQt6.QtWidgets import QApplication  # ← اصلاح شده
+from PyQt6.QtGui import QIcon, QPixmap, QPainter, QColor, QPalette  # ← QPalette اضافه شد
+from PyQt6.QtWidgets import QApplication
 from PyQt6.QtSvg import QSvgRenderer
 
 logger = logging.getLogger(__name__)
@@ -54,20 +54,15 @@ def _render_svg(svg_data: str, is_dark: bool) -> QIcon:
     Returns:
         QIcon instance
     """
-    # Determine icon color based on theme
     color = "#e0e0e0" if is_dark else "#222222"
-    
-    # Replace currentColor with the actual color
     svg_colored = svg_data.replace("currentColor", color)
     
-    # Create renderer
     renderer = QSvgRenderer(QByteArray(svg_colored.encode()))
     if not renderer.isValid():
         return QIcon()
     
-    # Render to pixmap
     pixmap = QPixmap(24, 24)
-    pixmap.fill(QColor(0, 0, 0, 0))  # Transparent background
+    pixmap.fill(QColor(0, 0, 0, 0))
     painter = QPainter(pixmap)
     renderer.render(painter)
     painter.end()
@@ -76,40 +71,26 @@ def _render_svg(svg_data: str, is_dark: bool) -> QIcon:
 
 
 def get_icon(name: str, is_dark: Optional[bool] = None) -> QIcon:
-    """
-    Get an icon by name with theme-aware coloring.
-    
-    Args:
-        name: Icon name (e.g., "list-add", "document-new")
-        is_dark: True for dark theme, False for light theme.
-                 If None, auto-detects from application.
-    
-    Returns:
-        QIcon instance
-    """
-    # Auto-detect theme if not specified
+    """Get an icon by name with theme-aware coloring."""
     if is_dark is None:
         app = QApplication.instance()
         if app:
             palette = app.palette()
-            bg = palette.color(QPalette.ColorRole.Window)
+            bg = palette.color(QPalette.ColorRole.Window)  # ← حالا QPalette تعریف شده
             brightness = (bg.red() * 299 + bg.green() * 587 + bg.blue() * 114) / 1000
             is_dark = brightness < 128
         else:
             is_dark = True
     
-    # Check cache
     cache_key = f"{name}_{is_dark}"
     if cache_key in _icon_cache:
         return _icon_cache[cache_key]
     
-    # Try system theme first
     icon = QIcon.fromTheme(name)
     if not icon.isNull():
         _icon_cache[cache_key] = icon
         return icon
     
-    # Try fallback names (e.g., "list-add" -> "list-add-symbolic")
     fallback_names = [f"{name}-symbolic", f"{name}-symbolic-{'dark' if is_dark else 'light'}"]
     for fallback in fallback_names:
         icon = QIcon.fromTheme(fallback)
@@ -117,36 +98,22 @@ def get_icon(name: str, is_dark: Optional[bool] = None) -> QIcon:
             _icon_cache[cache_key] = icon
             return icon
     
-    # Fallback to embedded SVG
     if name in ICON_DATA:
         icon = _render_svg(ICON_DATA[name], is_dark)
         if not icon.isNull():
             _icon_cache[cache_key] = icon
             return icon
     
-    # Last resort: empty icon
     logger.warning("Icon not found: %s", name)
     _icon_cache[cache_key] = QIcon()
     return _icon_cache[cache_key]
 
 
 def clear_icon_cache() -> None:
-    """Clear the icon cache (useful when theme changes)."""
     _icon_cache.clear()
     logger.debug("Icon cache cleared")
 
 
 def get_icon_pixmap(name: str, size: int = 24, is_dark: Optional[bool] = None) -> QPixmap:
-    """
-    Get an icon as a QPixmap of a specific size.
-    
-    Args:
-        name: Icon name
-        size: Desired size in pixels
-        is_dark: True for dark theme, False for light theme
-    
-    Returns:
-        QPixmap instance
-    """
     icon = get_icon(name, is_dark)
     return icon.pixmap(size, size)
