@@ -11,7 +11,7 @@ from PyQt6.QtGui import QFontDatabase, QFont
 
 from core.aria2_manager import start_aria2, _get_secret_from_file
 from core.data_store import DataStore
-from core.worker import SyncBackendWorker  # Use sync worker as default
+from core.worker import SyncBackendWorker
 from core.local_server import LocalServer
 from ui.main_window import MainWindow
 from utils.style import setup_style, setup_font
@@ -43,8 +43,9 @@ def main() -> None:
     # Create application first
     app = QApplication(sys.argv)
 
-    # Setup font
+    # Setup font and style
     setup_font(app)
+    setup_style(app)
 
     # Load data
     store = DataStore()
