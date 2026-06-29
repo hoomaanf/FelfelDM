@@ -69,12 +69,12 @@ def main() -> None:
     """Application entry point."""
     setup_logging()
 
-    # High DPI support
+    # High DPI support - using modern approach
+    # Note: AA_EnableHighDpiScaling and AA_UseHighDpiPixmaps are not needed in PyQt6
+    # when using setHighDpiScaleFactorRoundingPolicy.
     QApplication.setHighDpiScaleFactorRoundingPolicy(
         Qt.HighDpiScaleFactorRoundingPolicy.Round
     )
-    QApplication.setAttribute(Qt.ApplicationAttribute.AA_EnableHighDpiScaling, True)
-    QApplication.setAttribute(Qt.ApplicationAttribute.AA_UseHighDpiPixmaps, True)
 
     app = QApplication(sys.argv)
 
