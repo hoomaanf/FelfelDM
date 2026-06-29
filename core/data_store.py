@@ -37,6 +37,8 @@ class Settings:
     auto_clear_completed: bool = False
     theme: str = "system"
     default_download_path: str = str(DEFAULT_DOWNLOAD_PATH)
+    async_mode: bool = False
+    poll_interval: int = 1000
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -51,6 +53,8 @@ class Settings:
             "auto_clear_completed": self.auto_clear_completed,
             "theme": self.theme,
             "default_download_path": self.default_download_path,
+            "async_mode": self.async_mode,
+            "poll_interval": self.poll_interval,
         }
 
     @classmethod
@@ -67,7 +71,13 @@ class Settings:
             auto_clear_completed=data.get("auto_clear_completed", False),
             theme=data.get("theme", "system"),
             default_download_path=data.get("default_download_path", str(DEFAULT_DOWNLOAD_PATH)),
+            async_mode=data.get("async_mode", False),
+            poll_interval=data.get("poll_interval", 1000),
         )
+
+    def get(self, key: str, default: Any = None) -> Any:
+        """Get a setting by key with a default value."""
+        return getattr(self, key, default)
 
 
 class DataStore:
@@ -175,7 +185,7 @@ class DataStore:
         return None
 
     def get_queue_index(self, name: str) -> Optional[int]:
-        for i, q in enumerate(self.quques):
+        for i, q in enumerate(self.queues):
             if q.name == name:
                 return i
         return None
