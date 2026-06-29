@@ -1,28 +1,15 @@
 # =============================================================================
 # ui/table_model.py
 # =============================================================================
-import asyncio
 import logging
 from typing import Optional, Dict, Any, List
 
 from PyQt6.QtCore import QAbstractTableModel, Qt, QModelIndex
 
 from core.worker import BackendWorker
+from utils.helpers import format_size, format_speed
 
 logger = logging.getLogger(__name__)
-
-# Global event loop shared across all table updates
-_loop: Optional[asyncio.AbstractEventLoop] = None
-
-
-def _get_event_loop() -> asyncio.AbstractEventLoop:
-    """Get or create a persistent event loop."""
-    global _loop
-    if _loop is None or _loop.is_closed():
-        _loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(_loop)
-        logger.info("Created new asyncio event loop")
-    return _loop
 
 
 class DownloadTableModel(QAbstractTableModel):
@@ -40,18 +27,17 @@ class DownloadTableModel(QAbstractTableModel):
         self._worker.stats_updated.connect(self._on_stats_updated)
 
     def _on_stats_updated(self, stats: dict) -> None:
-        """Fetch download list from aria2 and update model using a persistent event loop."""
+        """Fetch download list from aria2 using synchronous RPC and update model."""
         # If worker is not running, skip update
         if hasattr(self._worker, '_running') and not self._worker._running:
             logger.debug("Worker not running, skipping table update")
             return
 
-        loop = _get_event_loop()
         try:
-            # Run async coroutines using the persistent loop
-            active = loop.run_until_complete(self._worker.async_aria2.tell_active()) or []
-            waiting = loop.run_until_complete(self._worker.async_aria2.tell_waiting(0, 100)) or []
-            stopped = loop.run_until_complete(self._worker.async_aria2.tell_stopped(0, 100)) or []
+            # Use synchronous Aria2RPC methods (no asyncio)
+            active = self._worker.aria2.tell_active() or []
+            waiting = self._worker.aria2.tell_waiting(0, 100) or []
+            stopped = self._worker.aria2.tell_stopped(0, 100) or []
 
             all_downloads = active + waiting + stopped
 
@@ -90,17 +76,6 @@ class DownloadTableModel(QAbstractTableModel):
             self._gid_list = list(new_downloads.keys())
             self.layoutChanged.emit()
 
-        except asyncio.CancelledError:
-            logger.info("Table update cancelled")
-        except RuntimeError as e:
-            if "Event loop is closed" in str(e):
-                logger.warning("Event loop closed, recreating...")
-                global _loop
-                _loop = None
-                # Retry once with a new loop
-                self._on_stats_updated(stats)
-            else:
-                logger.error("Runtime error in table update: %s", e)
         except Exception as e:
             logger.error("Failed to update download list: %s", e)
 
@@ -129,12 +104,10 @@ class DownloadTableModel(QAbstractTableModel):
             if col == 0:
                 return download.get("name", "Unknown")
             elif col == 1:
-                from utils.helpers import format_size
                 return format_size(download.get("size", 0))
             elif col == 2:
                 return f"{download.get('progress', 0):.1f}%"
             elif col == 3:
-                from utils.helpers import format_speed
                 return format_speed(download.get("speed", 0))
             elif col == 4:
                 return download.get("status", "Unknown")
