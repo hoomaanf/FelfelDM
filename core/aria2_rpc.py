@@ -1,4 +1,6 @@
 import requests
+import subprocess
+import time
 
 class Aria2RPC:
     def __init__(self, host="http://localhost", port=6800, secret=""):
@@ -83,5 +85,44 @@ class Aria2RPC:
         if result:
             return result.get("status")
         return None
+
     def force_pause(self, gid):
         return self._call("aria2.forcePause", [gid])
+
+    # === متد جدید ===
+    def start_aria2(self):
+        """Start aria2 daemon if not running"""
+        if self.is_connected():
+            return True
+            
+        print("Starting aria2 daemon...")
+        
+        aria2_cmd = [
+            "aria2c",
+            "--enable-rpc",
+            "--rpc-listen-all=false",
+            "--rpc-listen-port=6800",
+            f"--rpc-secret={self.secret or 'felfel'}",
+            "--daemon=true",
+            "--quiet=true",
+            "--allow-overwrite=true"
+        ]
+        
+        try:
+            subprocess.Popen(aria2_cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            time.sleep(2)
+            
+            for _ in range(10):
+                if self.is_connected():
+                    print("✅ aria2 started successfully")
+                    return True
+                time.sleep(1)
+                
+            print("⚠️ aria2 failed to start")
+            return False
+        except FileNotFoundError:
+            print("❌ aria2 command not found. Please install aria2.")
+            return False
+        except Exception as e:
+            print(f"Error starting aria2: {e}")
+            return False

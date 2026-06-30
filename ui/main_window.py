@@ -43,6 +43,8 @@ class MainWindow(QMainWindow):
             self.store.settings["aria2_secret"],
         )
         self.aria2.on_error = self._on_aria2_error
+        if not self.aria2.is_connected():
+            self.aria2.start_aria2()
         self._current_queue_idx = 0
         self._all_downloads = {}
         self._last_calculated_global_speed = 0
@@ -50,7 +52,6 @@ class MainWindow(QMainWindow):
 
         self._build_ui()
         self._build_tray()
-        self._start_aria2_if_needed()
         self._apply_global_speed_limit()
         self._start_backend()
         
@@ -348,8 +349,11 @@ class MainWindow(QMainWindow):
         "<p>Built with PyQt6 and aria2</p>")
 
     def closeEvent(self, e):
-        e.ignore()
-        self.hide()
+        if hasattr(self, 'worker'):
+            self.worker.stop()
+        if hasattr(self, 'local_server'):
+            self.local_server.stop()
+        e.accept()
 
     def quit_app(self):
         if hasattr(self, 'worker'):
@@ -800,6 +804,7 @@ class MainWindow(QMainWindow):
                                     QSystemTrayIcon.MessageIcon.Information, 2000)
             
             self._refresh_table()
+            
     def _add_download(self):
         visible_queues = [q for q in self.store.queues if q.name != "__direct__"]
         
@@ -1146,142 +1151,35 @@ class MainWindow(QMainWindow):
 
     def _refresh_table(self):
         q = self._current_queue()
-        
         if not q:
             self.model.update_rows([])
             return
 
-        all_rows = []
+        rows = []
+        search_text = self.search_box.text().strip().lower()
+
         for gid in q.downloads:
-            
-            if gid in self._all_downloads:
-                row = self._all_downloads[gid].copy()
-                current_status = row.get('status')
-            
-                if q.name == "__direct__":
-                    pass
-                elif not q.paused:
-                    if current_status == 'paused' and current_status not in ['complete', 'removed']:
-                        row['status'] = 'waiting'
-                        row['downloadSpeed'] = 0
-                    elif current_status == 'error':
-                        row['status'] = 'waiting'
-                        row['downloadSpeed'] = 0
-                else:
-                    if current_status not in ['complete', 'removed']:
-                        row['status'] = 'paused'
-                        row['downloadSpeed'] = 0
-                
-                all_rows.append(row)
-            
-            else:
-                try:
-                    
-                    dl_info = self.aria2.tell_status(gid)
-                    if dl_info:
-                        
-                        name = "Unknown File"
-                        files = dl_info.get("files", [])
-                        if files and files[0].get("path"):
-                            name = os.path.basename(files[0]["path"])
-                        elif files and files[0].get("uris"):
-                            name = files[0]["uris"][0]["uri"].split("/")[-1] or "Unknown File"
-                        
-                        if not name or name == "Unknown File":
-                            bittorrent = dl_info.get("bittorrent", {})
-                            info = bittorrent.get("info", {})
-                            name = info.get("name", "Unknown File")
-                        
-                        
-                        real_status = dl_info.get("status", "unknown")
-                        
-                        
-                        speed = dl_info.get("downloadSpeed", 0)
-                        try:
-                            speed = int(speed)
-                        except (ValueError, TypeError):
-                            speed = 0
-                        
-                        
-                        row = {
-                            "gid": gid,
-                            "name": name,
-                            "category": get_category(name),
-                            "status": real_status,  
-                            "totalLength": dl_info.get("totalLength", 0),
-                            "completedLength": dl_info.get("completedLength", 0),
-                            "downloadSpeed": speed,
-                            "files": dl_info.get("files", []),
-                            "connections": dl_info.get("connections", 0),
-                            "errorMessage": dl_info.get("errorMessage", "")
-                        }
-                        
-                        
-                        if q.paused and real_status not in ['complete', 'error', 'removed']:
-                            row['status'] = 'paused'
-                            row['downloadSpeed'] = 0
-                        
-                        elif not q.paused and real_status == 'paused' and real_status not in ['complete', 'error', 'removed']:
-                            row['status'] = 'waiting'
-                            row['downloadSpeed'] = 0
-                        
-                        
-                        self._all_downloads[gid] = row
-                        all_rows.append(row)
-                    else:
-                        
-                        row = {
-                            "gid": gid,
-                            "name": f"Unknown ({gid[:8]})",
-                            "category": "other",
-                            "status": "unknown",
-                            "totalLength": 0,
-                            "completedLength": 0,
-                            "downloadSpeed": 0,
-                            "files": [],
-                            "connections": 0,
-                            "errorMessage": "Download not found in aria2"
-                        }
-                        all_rows.append(row)
-                
-                except Exception as e:
-                    
-                    print(f"⚠ Could not fetch info for GID {gid}: {e}")
-                    row = {
-                        "gid": gid,
-                        "name": f"Error ({gid[:8]})",
-                        "category": "other",
-                        "status": "error",
-                        "totalLength": 0,
-                        "completedLength": 0,
-                        "downloadSpeed": 0,
-                        "files": [],
-                        "connections": 0,
-                        "errorMessage": str(e)
-                    }
-                    all_rows.append(row)
+            if gid not in self._all_downloads:
+                continue
 
-        
-        search_text = self.search_box.text().strip()
-        if search_text:
-            filtered_rows = []
-            for row in all_rows:
-                name = row.get("name", "").lower()
-                if search_text.lower() in name:
-                    filtered_rows.append(row)
-            rows_to_show = filtered_rows
-        else:
-            rows_to_show = all_rows
+            row = self._all_downloads[gid].copy()
 
-        
-        current_sort_col = self.model.sort_column
-        current_sort_order = self.model.sort_order
-        
-        self.model.update_rows(rows_to_show)
-        
-        
-        if current_sort_col >= 0 and len(rows_to_show) > 0:
-            self.model.sort(current_sort_col, current_sort_order)
+            if q.name != "__direct__":
+                if q.paused and row.get("status") not in ["complete", "error", "removed"]:
+                    row["status"] = "paused"
+                    row["downloadSpeed"] = 0
+                elif not q.paused and row.get("status") == "paused":
+                    row["status"] = "waiting"
+
+            if search_text and search_text not in row.get("name", "").lower():
+                continue
+
+            rows.append(row)
+
+        self.model.update_rows(rows)
+
+        if hasattr(self.model, 'sort_column') and self.model.sort_column >= 0:
+            self.model.sort(self.model.sort_column, self.model.sort_order)      
             
     def _toggle_shutdown(self, checked):
         self.store.settings["shutdown_after_finish"] = checked
@@ -1339,7 +1237,8 @@ class MainWindow(QMainWindow):
 
     def _start_backend(self):
         self.worker = BackendWorker(self.aria2, self.store)
-        self.worker.stats_updated.connect(self._on_stats_received)
+        self.worker.stats_updated.connect(self._on_stats_received) 
+        self.worker.aria2_error.connect(self._on_aria2_error)
         self.worker.start()
 
     def _on_stats_received(self, result):
