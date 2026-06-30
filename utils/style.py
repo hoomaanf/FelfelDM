@@ -95,9 +95,7 @@ def setup_style(app, theme="auto"):
     else:
         is_dark = (theme == "dark")
 
-        # === Icon Theme (اول Papirus سیستم، بعد breeze) ===
     if is_dark:
-        # اول Papirus-Dark سیستم
         if subprocess.run(['fc-match', 'Papirus-Dark'], capture_output=True).returncode == 0:
             QIcon.setThemeName('Papirus-Dark')
             print("✓ Using Papirus-Dark (system)")
@@ -105,7 +103,6 @@ def setup_style(app, theme="auto"):
             QIcon.setThemeName('breeze-dark')
             print("⚠ Papirus-Dark not found on system → Using breeze-dark")
     else:
-        # اول Papirus-Light سیستم
         if subprocess.run(['fc-match', 'Papirus-Light'], capture_output=True).returncode == 0:
             QIcon.setThemeName('Papirus-Light')
             print("✓ Using Papirus-Light (system)")
