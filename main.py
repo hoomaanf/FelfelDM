@@ -2,7 +2,6 @@
 """
 FelfelDM - Download Manager
 """
-
 import sys
 import signal
 import os
@@ -13,11 +12,9 @@ from ui.main_window import MainWindow
 from utils.style import setup_style, CustomProxyStyle
 
 def main():
-    
     QApplication.setHighDpiScaleFactorRoundingPolicy(
         Qt.HighDpiScaleFactorRoundingPolicy.PassThrough
     )
-    
     os.environ.setdefault("QT_QPA_PLATFORM", "wayland")
     os.environ.setdefault("QT_QPA_PLATFORMTHEME", "kde")
     
@@ -28,11 +25,11 @@ def main():
     else:
         base_path = os.path.dirname(os.path.abspath(__file__))
 
+    # Icon
     icon_paths = [
         os.path.join(base_path, "logo/icon256.png"),
         os.path.join(base_path, "logo/icon128.png")
     ]
-    
     icon_set = False
     for path in icon_paths:
         if os.path.exists(path):
@@ -40,29 +37,99 @@ def main():
             icon_set = True
             print(f"✅ Icon loaded from: {path}")
             break
-    
     if not icon_set:
         print("⚠️ No icon found! Using default.")
-    
+
     app.setStyle(CustomProxyStyle())
-    
     app.setApplicationName("FelfelDM")
-    
     app.setQuitOnLastWindowClosed(False)
-    
-    setup_style(app)
-    
+
+    # Create window
     win = MainWindow()
+
+    # Apply saved theme
+    theme = win.store.settings.get("theme", "auto")
+    setup_style(app, theme)
+
     win.show()
-    
     sys.exit(app.exec())
+
 
 if __name__ == "__main__":
     main()
-    
+
+
 def signal_handler(sig, frame):
     print("\nForce exit...")
     sys.exit(0)
+
+
+signal.signal(signal.SIGINT, signal_handler)
+signal.signal(signal.SIGTERM, signal_handler)#!/usr/bin/env python3
+"""
+FelfelDM - Download Manager
+"""
+import sys
+import signal
+import os
+from PyQt6.QtWidgets import QApplication
+from PyQt6.QtGui import QIcon
+from PyQt6.QtCore import Qt
+from ui.main_window import MainWindow
+from utils.style import setup_style, CustomProxyStyle
+
+def main():
+    QApplication.setHighDpiScaleFactorRoundingPolicy(
+        Qt.HighDpiScaleFactorRoundingPolicy.PassThrough
+    )
+    os.environ.setdefault("QT_QPA_PLATFORM", "wayland")
+    os.environ.setdefault("QT_QPA_PLATFORMTHEME", "kde")
+    
+    app = QApplication(sys.argv)
+    
+    if getattr(sys, 'frozen', False) and hasattr(sys, '_MEIPASS'):
+        base_path = sys._MEIPASS
+    else:
+        base_path = os.path.dirname(os.path.abspath(__file__))
+
+    # Icon
+    icon_paths = [
+        os.path.join(base_path, "logo/icon256.png"),
+        os.path.join(base_path, "logo/icon128.png")
+    ]
+    icon_set = False
+    for path in icon_paths:
+        if os.path.exists(path):
+            app.setWindowIcon(QIcon(path))
+            icon_set = True
+            print(f"✅ Icon loaded from: {path}")
+            break
+    if not icon_set:
+        print("⚠️ No icon found! Using default.")
+
+    app.setStyle(CustomProxyStyle())
+    app.setApplicationName("FelfelDM")
+    app.setQuitOnLastWindowClosed(False)
+
+    # Create window
+    win = MainWindow()
+
+    # Apply saved theme
+    theme = win.store.settings.get("theme", "auto")
+    setup_style(app, theme)
+
+    win.show()
+    sys.exit(app.exec())
+
+
+if __name__ == "__main__":
+    main()
+
+
+def signal_handler(sig, frame):
+    print("\nForce exit...")
+    sys.exit(0)
+
 
 signal.signal(signal.SIGINT, signal_handler)
 signal.signal(signal.SIGTERM, signal_handler)

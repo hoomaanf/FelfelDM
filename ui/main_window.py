@@ -15,6 +15,7 @@ from ui.delegates import ProgressDelegate
 from utils.helpers import format_size, format_speed, get_category, get_icon
 from core.local_server import LocalServer
 from utils.helpers import get_resource_path
+from utils.style import setup_style
 
 class MainWindow(QMainWindow):
     def __init__(self):
@@ -66,29 +67,14 @@ class MainWindow(QMainWindow):
 
         
         splitter = QSplitter(Qt.Orientation.Horizontal)
+        splitter.setObjectName("splitter")
         splitter.setChildrenCollapsible(False)
         splitter.setHandleWidth(4)
-        splitter.setStyleSheet("""
-            QSplitter::handle {
-                background-color: #3d4045;
-                width: 4px;
-            }
-            QSplitter::handle:hover {
-                background-color: #4a4d53;
-            }
-        """)
 
-        
         sidebar = QWidget()
         sidebar.setObjectName("sidebar")
         sidebar.setMinimumWidth(180)
         sidebar.setMaximumWidth(350)
-        sidebar.setStyleSheet("""
-            QWidget#sidebar {
-                background-color: #2d2d30;
-                border-right: 1px solid #1e1e20;
-            }
-        """)
         sb_lay = QVBoxLayout(sidebar)
         sb_lay.setContentsMargins(10, 12, 10, 12)
         sb_lay.setSpacing(8)
@@ -158,32 +144,8 @@ class MainWindow(QMainWindow):
 
         
         toolbar = QWidget()
-        toolbar.setStyleSheet("""
-            QWidget {
-                background-color: #2d2d30;
-                border-bottom: 1px solid #1e1e20;
-                padding: 4px;
-            }
-            QPushButton {
-                background-color: transparent;
-                border: none;
-                border-radius: 4px;
-                padding: 6px 12px;
-                color: #efeff1;
-            }
-            QPushButton:hover { background-color: #3a3f44; }
-            QPushButton:pressed { background-color: #1e1e20; }
-            QPushButton:disabled { opacity: 0.4; }
-            QLineEdit {
-                background-color: #1e1e20;
-                border: 1px solid #3d4045;
-                border-radius: 4px;
-                padding: 4px 8px;
-                color: #efeff1;
-            }
-            QLineEdit:focus { border: 1px solid #3daee9; }
-        """)
         tb_lay = QHBoxLayout(toolbar)
+        toolbar.setObjectName("toolbar")
         tb_lay.setContentsMargins(8, 4, 8, 4)
         tb_lay.setSpacing(4)
 
@@ -233,21 +195,35 @@ class MainWindow(QMainWindow):
         self.table.setTextElideMode(Qt.TextElideMode.ElideRight)
         self.table.setWordWrap(False)   
         self.table.setAlternatingRowColors(True)
+        
         self.model = DownloadTableModel()
         self.progress_delegate = ProgressDelegate(self)
         self.table.setItemDelegateForColumn(2, self.progress_delegate)
         self.table.setModel(self.model)
+        
         self.table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self.table.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
-        self.table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.Interactive)
+        
+        header = self.table.horizontalHeader()
+        
+        header.setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)     
+        header.setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)  
+        header.setSectionResizeMode(2, QHeaderView.ResizeMode.Fixed)        
+        header.setSectionResizeMode(3, QHeaderView.ResizeMode.ResizeToContents)  
+        header.setSectionResizeMode(4, QHeaderView.ResizeMode.ResizeToContents)  
+        
+        self.table.setColumnWidth(2, 180)   
+        self.table.setColumnWidth(3, 110)   
+        self.table.setColumnWidth(4, 100)   
+        
+        self.table.horizontalHeader().setStretchLastSection(False)
+        
         self.table.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self.table.customContextMenuRequested.connect(self._context_menu)
         self.table.setSortingEnabled(True)
         self.table.sortByColumn(0, Qt.SortOrder.AscendingOrder)
         ma_lay.addWidget(self.table)
 
-        
-        self.statusBar().setStyleSheet("QStatusBar { background-color: #2d2d30; color: #efeff1; }")
         self.progress_bar = QProgressBar()
         self.progress_bar.setMaximum(100)
         self.progress_bar.setValue(0)
@@ -261,7 +237,6 @@ class MainWindow(QMainWindow):
         self.shutdown_cb = QCheckBox("Shutdown on Finish")
         self.shutdown_cb.setChecked(self.store.settings.get("shutdown_after_finish", False))
         self.shutdown_cb.toggled.connect(self._toggle_shutdown)
-        self.shutdown_cb.setStyleSheet("QCheckBox { color: #efeff1; }")
         self.statusBar().addPermanentWidget(self.shutdown_cb)
 
         splitter.addWidget(sidebar)
@@ -348,13 +323,20 @@ class MainWindow(QMainWindow):
         "<p>A modern download manager</p>"
         "<p>Built with PyQt6 and aria2</p>")
 
-    def closeEvent(self, e):
-        if hasattr(self, 'worker'):
-            self.worker.stop()
-        if hasattr(self, 'local_server'):
-            self.local_server.stop()
-        e.accept()
-
+    def closeEvent(self, event):
+        if hasattr(self, 'tray') and self.tray.isVisible():
+            self.hide()
+            self.tray.showMessage(
+                "FelfelDM",
+                "Application minimized to system tray.",
+                QSystemTrayIcon.MessageIcon.Information,
+                3000
+            )
+            event.ignore()
+        else:
+            self.quit_app()
+            event.accept()
+        
     def quit_app(self):
         print("Force shutting down...")
         
@@ -1010,23 +992,69 @@ class MainWindow(QMainWindow):
 
         count = len(selected)
 
-        msg = QMessageBox(self)
-        msg.setWindowTitle("Remove Downloads")
-        msg.setText(f"Remove {count} download(s)?")
-        msg.setInformativeText("Choose what to do with the downloaded files:")
+        dlg = QDialog(self)
+        dlg.setWindowTitle("Remove Downloads")
+        dlg.setMinimumWidth(500)
+        dlg.setModal(True)
         
-        btn_remove_only = msg.addButton("Remove from List Only", QMessageBox.ButtonRole.ActionRole)
-        btn_remove_files = msg.addButton("Remove & Delete Files", QMessageBox.ButtonRole.DestructiveRole)
-        btn_cancel = msg.addButton("Cancel", QMessageBox.ButtonRole.RejectRole)
+        layout = QVBoxLayout(dlg)
+        layout.setSpacing(12)
+        layout.setContentsMargins(20, 20, 20, 20)
         
-        msg.setDefaultButton(btn_remove_only)
-        msg.exec()
+        title = QLabel(f"Remove {count} download(s)?")
+        layout.addWidget(title)
         
-        clicked = msg.clickedButton()
-        if clicked == btn_cancel:
+        info = QLabel("Choose what to do with the downloaded files:")
+        layout.addWidget(info)
+        
+        layout.addSpacing(10)
+        
+        btn_layout = QHBoxLayout()
+        btn_layout.setSpacing(10)
+        
+        btn_remove_only = QPushButton("Remove from List Only")
+        btn_remove_files = QPushButton("Remove & Delete Files")
+        btn_cancel = QPushButton("Cancel")
+        
+        btn_remove_only.setMinimumWidth(150)
+        btn_remove_files.setMinimumWidth(150)
+        btn_cancel.setMinimumWidth(100)
+        
+        btn_layout.addWidget(btn_remove_only)
+        btn_layout.addWidget(btn_remove_files)
+        btn_layout.addWidget(btn_cancel)
+        
+        layout.addLayout(btn_layout)
+        
+        result = None
+        
+        def on_remove_only():
+            nonlocal result
+            result = "remove_only"
+            dlg.accept()
+        
+        def on_remove_files():
+            nonlocal result
+            result = "remove_files"
+            dlg.accept()
+        
+        def on_cancel():
+            nonlocal result
+            result = "cancel"
+            dlg.reject()
+        
+        btn_remove_only.clicked.connect(on_remove_only)
+        btn_remove_files.clicked.connect(on_remove_files)
+        btn_cancel.clicked.connect(on_cancel)
+        
+        btn_remove_only.setDefault(True)
+        
+        dlg.exec()
+        
+        if result == "cancel" or result is None:
             return
         
-        delete_files = (clicked == btn_remove_files)
+        delete_files = (result == "remove_files")
         
         removed = 0
         gids_to_remove = []
@@ -1074,7 +1102,6 @@ class MainWindow(QMainWindow):
                     except Exception as e:
                         print(f"⚠ Could not delete {path}: {e}")
                 
-                # حذف فایل‌های .aria2
                 for aria2_path in aria2_files:
                     try:
                         if os.path.exists(aria2_path):
@@ -1237,11 +1264,19 @@ class MainWindow(QMainWindow):
             self.store.settings.update(s)
             self.store.save()
 
+            # اعمال تم بلافاصله
+            theme = self.store.settings.get("theme", "auto")
+            setup_style(QApplication.instance(), theme)
+
+            # اعمال تنظیمات aria2
             if not self._apply_settings_to_aria2():
                 self._restart_aria2()
             else:
                 self.tray.showMessage("FelfelDM", "Settings applied successfully",
                                      QSystemTrayIcon.MessageIcon.Information, 2000)
+
+            # بروزرسانی UI
+            self._refresh_table()
 
     def _start_backend(self):
         self.worker = BackendWorker(self.aria2, self.store)

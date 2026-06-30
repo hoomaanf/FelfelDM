@@ -427,3 +427,83 @@ class DownloadProgressDialog(QDialog):
         self.pause_btn.setEnabled(status == "active")
         self.resume_btn.setEnabled(status == "paused")
         self.cancel_btn.setEnabled(status not in ["complete", "removed"])
+
+class SettingsDialog(QDialog):
+    def __init__(self, settings, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Settings")
+        self.setMinimumWidth(480)
+        self.settings = settings
+
+        lay = QVBoxLayout(self)
+        lay.setSpacing(12)
+
+        # === aria2 RPC ===
+        rpc_group = QGroupBox("aria2 RPC")
+        rpc_layout = QFormLayout(rpc_group)
+        self.host = QLineEdit(settings.get("aria2_host", "http://localhost"))
+        self.port = QSpinBox()
+        self.port.setRange(1, 65535)
+        self.port.setValue(settings.get("aria2_port", 6800))
+        self.secret = QLineEdit(settings.get("aria2_secret", ""))
+        self.secret.setEchoMode(QLineEdit.EchoMode.Password)
+        rpc_layout.addRow("Host:", self.host)
+        rpc_layout.addRow("Port:", self.port)
+        rpc_layout.addRow("Secret:", self.secret)
+        lay.addWidget(rpc_group)
+
+        # === Download Settings ===
+        dl_group = QGroupBox("Download")
+        dl_layout = QFormLayout(dl_group)
+        self.max_concurrent = QSpinBox()
+        self.max_concurrent.setRange(1, 50)
+        self.max_concurrent.setValue(settings.get("max_concurrent", 5))
+        self.max_tries = QSpinBox()
+        self.max_tries.setRange(0, 100)
+        self.max_tries.setSpecialValueText("Unlimited")
+        self.max_tries.setValue(settings.get("max_tries", 0))
+        self.conns = QSpinBox()
+        self.conns.setRange(1, 16)
+        self.conns.setValue(settings.get("connections", 8))
+        dl_layout.addRow("Max Concurrent Downloads:", self.max_concurrent)
+        dl_layout.addRow("Max Retry Attempts:", self.max_tries)
+        dl_layout.addRow("Default Connections:", self.conns)
+        lay.addWidget(dl_group)
+
+        # === Theme ===
+        theme_group = QGroupBox("Appearance")
+        theme_layout = QFormLayout(theme_group)
+        self.theme_combo = QComboBox()
+        self.theme_combo.addItems(["Auto", "Dark", "Light"])
+        current_theme = settings.get("theme", "auto").capitalize()
+        index = self.theme_combo.findText(current_theme)
+        if index >= 0:
+            self.theme_combo.setCurrentIndex(index)
+        theme_layout.addRow("Theme:", self.theme_combo)
+        lay.addWidget(theme_group)
+
+        # === Cleanup ===
+        cleanup_group = QGroupBox("Cleanup")
+        cleanup_layout = QVBoxLayout(cleanup_group)
+        self.auto_clear_completed = QCheckBox("Auto-clear completed downloads")
+        self.auto_clear_completed.setChecked(settings.get("auto_clear_completed", False))
+        cleanup_layout.addWidget(self.auto_clear_completed)
+        lay.addWidget(cleanup_group)
+
+        # Buttons
+        btn_box = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
+        btn_box.accepted.connect(self.accept)
+        btn_box.rejected.connect(self.reject)
+        lay.addWidget(btn_box)
+
+    def get_settings(self):
+        return {
+            "aria2_host": self.host.text().strip(),
+            "aria2_port": self.port.value(),
+            "aria2_secret": self.secret.text(),
+            "connections": self.conns.value(),
+            "max_tries": self.max_tries.value(),
+            "max_concurrent": self.max_concurrent.value(),
+            "auto_clear_completed": self.auto_clear_completed.isChecked(),
+            "theme": self.theme_combo.currentText().lower(),
+        }

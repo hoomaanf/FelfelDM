@@ -1,16 +1,13 @@
 # utils/style.py
 
-import sys
 import os
 import subprocess
-from PyQt6.QtWidgets import QApplication, QStyle, QProxyStyle, QStyleFactory
+from PyQt6.QtWidgets import QApplication, QProxyStyle, QStyle
 from PyQt6.QtCore import Qt, QPoint
-from PyQt6.QtGui import QPalette, QColor, QBrush, QPen, QFont, QIcon
-
-# ─── Custom Style for SpinBox Arrows ──────────────────────────────────────────
+from PyQt6.QtGui import QPalette, QColor, QBrush, QPen, QIcon
 
 class CustomProxyStyle(QProxyStyle):
-    
+    """Custom style for SpinBox arrows"""
     def drawPrimitive(self, element, option, painter, widget=None):
         if element == QStyle.PrimitiveElement.PE_IndicatorSpinUp:
             rect = option.rect
@@ -21,7 +18,6 @@ class CustomProxyStyle(QProxyStyle):
                 painter.setBrush(QBrush(QColor(61, 61, 64)))
             painter.setPen(Qt.PenStyle.NoPen)
             painter.drawRoundedRect(rect, 3, 3)
-            
             center_x = rect.x() + rect.width() // 2
             center_y = rect.y() + rect.height() // 2
             points = [
@@ -33,7 +29,7 @@ class CustomProxyStyle(QProxyStyle):
             painter.drawPolygon(points)
             painter.restore()
             return
-        
+
         if element == QStyle.PrimitiveElement.PE_IndicatorSpinDown:
             rect = option.rect
             painter.save()
@@ -43,7 +39,6 @@ class CustomProxyStyle(QProxyStyle):
                 painter.setBrush(QBrush(QColor(61, 61, 64)))
             painter.setPen(Qt.PenStyle.NoPen)
             painter.drawRoundedRect(rect, 3, 3)
-            
             center_x = rect.x() + rect.width() // 2
             center_y = rect.y() + rect.height() // 2
             points = [
@@ -55,83 +50,73 @@ class CustomProxyStyle(QProxyStyle):
             painter.drawPolygon(points)
             painter.restore()
             return
-        
+
         super().drawPrimitive(element, option, painter, widget)
 
 
-# ─── Style Setup ──────────────────────────────────────────────────────────────
-
-def setup_style(app):
-    
-    is_dark = True
-    try:
+def setup_style(app, theme="auto"):
+    """Setup application style with theme support
+    theme: 'auto', 'dark', 'light'
+    """
+    # Determine if dark mode
+    if theme == "auto":
         try:
-            result = subprocess.run(['kreadconfig5', '--group', 'Colors:Window', '--key', 'BackgroundNormal'], 
-                           capture_output=True, text=True)
-            if result.stdout:
-                color = result.stdout.strip()
-                if color.startswith('#'):
-                    r, g, b = int(color[1:3], 16), int(color[3:5], 16), int(color[5:7], 16)
-                    brightness = (r * 299 + g * 587 + b * 114) / 1000
-                    is_dark = brightness < 128
+            is_dark = True
+            try:
+                result = subprocess.run(['kreadconfig5', '--group', 'Colors:Window', '--key', 'BackgroundNormal'], 
+                               capture_output=True, text=True)
+                if result.stdout:
+                    color = result.stdout.strip()
+                    if color.startswith('#'):
+                        r, g, b = int(color[1:3], 16), int(color[3:5], 16), int(color[5:7], 16)
+                        brightness = (r * 299 + g * 587 + b * 114) / 1000
+                        is_dark = brightness < 128
+            except:
+                pass
+            
+            if 'QT_QPA_PLATFORMTHEME' in os.environ:
+                if os.environ['QT_QPA_PLATFORMTHEME'] == 'kde':
+                    try:
+                        import configparser
+                        config = configparser.ConfigParser()
+                        config_path = os.path.expanduser('~/.config/kdeglobals')
+                        if os.path.exists(config_path):
+                            config.read(config_path)
+                            if config.has_section('Colors:Window'):
+                                bg = config.get('Colors:Window', 'BackgroundNormal', fallback='')
+                                if bg.startswith('#'):
+                                    r, g, b = int(bg[1:3], 16), int(bg[3:5], 16), int(bg[5:7], 16)
+                                    brightness = (r * 299 + g * 587 + b * 114) / 1000
+                                    is_dark = brightness < 128
+                    except:
+                        pass
         except:
-            pass
-        
-        if 'QT_QPA_PLATFORMTHEME' in os.environ:
-            if os.environ['QT_QPA_PLATFORMTHEME'] == 'kde':
-                try:
-                    import configparser
-                    config = configparser.ConfigParser()
-                    config_path = os.path.expanduser('~/.config/kdeglobals')
-                    if os.path.exists(config_path):
-                        config.read(config_path)
-                        if config.has_section('Colors:Window'):
-                            bg = config.get('Colors:Window', 'BackgroundNormal', fallback='')
-                            if bg.startswith('#'):
-                                r, g, b = int(bg[1:3], 16), int(bg[3:5], 16), int(bg[5:7], 16)
-                                brightness = (r * 299 + g * 587 + b * 114) / 1000
-                                is_dark = brightness < 128
-                except:
-                    pass
-    except:
-        pass
-    
-    script_dir = os.path.dirname(os.path.abspath(__file__))
-    icon_path = os.path.join(os.path.dirname(script_dir), 'icons')
-    
-    if os.path.exists(icon_path):
-        search_paths = QIcon.themeSearchPaths()
-        if icon_path not in search_paths:
-            search_paths.insert(0, icon_path)
-            QIcon.setThemeSearchPaths(search_paths)
-        
-        if is_dark:
-            if os.path.exists(os.path.join(icon_path, 'Papirus-Dark')):
-                QIcon.setThemeName('Papirus-Dark')
-                print("✓ Using Papirus-Dark icons")
-            elif os.path.exists(os.path.join(icon_path, 'Papirus')):
-                QIcon.setThemeName('Papirus')
-                print("✓ Using Papirus icons")
-            else:
-                QIcon.setThemeName('breeze-dark')
-                print("⚠ Using system icons")
-        else:
-            if os.path.exists(os.path.join(icon_path, 'Papirus-Light')):
-                QIcon.setThemeName('Papirus-Light')
-                print("✓ Using Papirus-Light icons")
-            elif os.path.exists(os.path.join(icon_path, 'Papirus')):
-                QIcon.setThemeName('Papirus')
-                print("✓ Using Papirus icons")
-            else:
-                QIcon.setThemeName('breeze')
-                print("⚠ Using system icons")
+            is_dark = True
     else:
-        print(f"⚠ Icon folder not found: {icon_path}")
-        QIcon.setThemeName('breeze-dark' if is_dark else 'breeze')
-    
-    app.setStyle('Fusion')
-    
+        is_dark = (theme == "dark")
+
+        # === Icon Theme (اول Papirus سیستم، بعد breeze) ===
     if is_dark:
+        # اول Papirus-Dark سیستم
+        if subprocess.run(['fc-match', 'Papirus-Dark'], capture_output=True).returncode == 0:
+            QIcon.setThemeName('Papirus-Dark')
+            print("✓ Using Papirus-Dark (system)")
+        else:
+            QIcon.setThemeName('breeze-dark')
+            print("⚠ Papirus-Dark not found on system → Using breeze-dark")
+    else:
+        # اول Papirus-Light سیستم
+        if subprocess.run(['fc-match', 'Papirus-Light'], capture_output=True).returncode == 0:
+            QIcon.setThemeName('Papirus-Light')
+            print("✓ Using Papirus-Light (system)")
+        else:
+            QIcon.setThemeName('breeze')
+            print("⚠ Papirus-Light not found on system → Using breeze")
+
+    app.setStyle('Fusion')
+
+    if is_dark:
+        # ===== DARK THEME =====
         palette = QPalette()
         palette.setColor(QPalette.ColorRole.Window, QColor(45, 45, 48))
         palette.setColor(QPalette.ColorRole.WindowText, QColor(239, 239, 239))
@@ -143,9 +128,58 @@ def setup_style(app):
         palette.setColor(QPalette.ColorRole.Highlight, QColor(61, 174, 233))
         palette.setColor(QPalette.ColorRole.HighlightedText, QColor(255, 255, 255))
         app.setPalette(palette)
-        
+
         app.setStyleSheet("""
             QMainWindow { background-color: #2d2d30; }
+            
+            /* ===== Sidebar ===== */
+            QWidget#sidebar {
+                background-color: #2d2d30;
+                border-right: 1px solid #1e1e20;
+            }
+            
+            /* ===== Toolbar ===== */
+            QWidget#toolbar {
+                background-color: #2d2d30;
+                border-bottom: 1px solid #1e1e20;
+                padding: 4px;
+            }
+            
+            /* ===== Toolbar Buttons ===== */
+            QWidget#toolbar QPushButton {
+                background-color: transparent;
+                border: none;
+                border-radius: 4px;
+                padding: 6px 12px;
+                color: #efeff1;
+                height: 32px;
+            }
+            QWidget#toolbar QPushButton:hover {
+                background-color: #3a3f44;
+            }
+            QWidget#toolbar QPushButton:pressed {
+                background-color: #1e1e20;
+            }
+            QWidget#toolbar QPushButton:disabled {
+                opacity: 0.4;
+            }
+            
+            /* ===== Settings Button ===== */
+            QWidget#toolbar QPushButton#btn_settings {
+                padding: 6px 12px;
+                height: 32px;
+            }
+            
+            /* ===== Splitter ===== */
+            QSplitter::handle {
+                background-color: #3d4045;
+                width: 4px;
+            }
+            QSplitter::handle:hover {
+                background-color: #4a4d53;
+            }
+            
+            /* ===== Table View ===== */
             QTableView {
                 background-color: #1e1e20;
                 border: none;
@@ -154,6 +188,7 @@ def setup_style(app):
                 color: #efeff1;
             }
             QTableView::item:selected { background-color: #3daee9; color: white; }
+            QTableView::item:!selected:hover { background-color: #3a3f44; }
             QHeaderView::section {
                 background-color: #2d2d30;
                 padding: 8px;
@@ -164,6 +199,8 @@ def setup_style(app):
                 font-weight: bold;
             }
             QHeaderView::section:hover { background-color: #3a3f44; }
+            
+            /* ===== List Widget ===== */
             QListWidget {
                 background-color: transparent;
                 border: none;
@@ -177,6 +214,8 @@ def setup_style(app):
             }
             QListWidget::item:selected { background-color: #3daee9; color: white; }
             QListWidget::item:hover:!selected { background-color: #3a3f44; }
+            
+            /* ===== Push Buttons ===== */
             QPushButton {
                 background-color: #3d4045;
                 border: none;
@@ -201,12 +240,8 @@ def setup_style(app):
             }
             QPushButton#pause_btn:hover { background-color: #f1c40f; }
             QPushButton#pause_btn:disabled { background-color: #9e6200; opacity: 0.5; }
-            QPushButton#single_btn {
-                background-color: #3daee9;
-                color: white;
-                font-weight: bold;
-            }
-            QPushButton#single_btn:hover { background-color: #5ab8f0; }
+            
+            /* ===== Input Fields ===== */
             QLineEdit, QTextEdit, QComboBox, QTimeEdit {
                 background-color: #232629;
                 color: #efeff1;
@@ -214,15 +249,18 @@ def setup_style(app):
                 border-radius: 4px;
                 padding: 6px 10px;
             }
+            QLineEdit:focus, QTextEdit:focus { border: 1px solid #3daee9; }
+            
+            /* ===== SpinBox (فقط رنگ پس‌زمینه) ===== */
             QSpinBox {
-                background-color: #232629;       
+                background-color: #232629;
                 color: #efeff1;
-                border: 1px solid #3d4045;
-                border-radius: 4px;
-                padding: 6px 10px;
-            }                       
-        
-            QLineEdit:focus, QTextEdit:focus, QSpinBox:focus { border: 1px solid #3daee9; }
+            }
+            QSpinBox:focus { 
+                background-color: #232629;
+            }
+            
+            /* ===== Progress Bar ===== */
             QProgressBar {
                 border: 1px solid #3d4045;
                 border-radius: 4px;
@@ -230,11 +268,75 @@ def setup_style(app):
                 color: #efeff1;
             }
             QProgressBar::chunk { background-color: #3daee9; border-radius: 4px; }
-            QMenuBar { background-color: #2d2d30; color: #efeff1; }
-            QMenuBar::item:selected { background-color: #3a3f44; }
-            QMenu { background-color: #2d2d30; color: #efeff1; }
+            
+            /* ===== Menu Bar ===== */
+            QMenuBar {
+                background-color: transparent;
+                color: #efeff1;
+                padding: 2px 4px;
+                font-weight: 500;
+                font-size: 13px;
+                spacing: 2px;
+            }
+            QMenuBar::item {
+                padding: 6px 14px;
+                border-radius: 4px;
+                background: transparent;
+                margin: 0 2px;
+            }
+            QMenuBar::item:selected { background-color: #3a3f44; color: #efeff1; }
+            QMenuBar::item:pressed { background-color: #3daee9; color: white; }
+            
+            /* ===== Menu ===== */
+            QMenu {
+                background-color: #2d2d30;
+                color: #efeff1;
+                border: 1px solid #3d4045;
+                border-radius: 10px;
+                padding: 6px;
+            }
+            QMenu::item {
+                padding: 8px 36px 8px 16px;
+                border-radius: 6px;
+                margin: 2px 4px;
+                background: transparent;
+            }
             QMenu::item:selected { background-color: #3daee9; color: white; }
-            QStatusBar { background-color: #2d2d30; color: #efeff1; }
+            QMenu::item:hover { background-color: #3daee9; color: white; }
+            QMenu::separator {
+                height: 1px;
+                background: #3d4045;
+                margin: 4px 8px;
+            }
+            
+            /* ===== Context Menu ===== */
+            QMenu#contextMenu {
+                background-color: #2d2d30;
+                border: 1px solid #3d4045;
+                border-radius: 10px;
+                padding: 6px;
+            }
+            QMenu#contextMenu::item {
+                padding: 6px 30px 6px 14px;
+                border-radius: 6px;
+                margin: 2px 4px;
+            }
+            QMenu#contextMenu::item:selected { background-color: #3daee9; color: white; }
+            QMenu#contextMenu::item:hover { background-color: #3daee9; color: white; }
+            
+            /* ===== Status Bar ===== */
+            QStatusBar { 
+                background-color: #2d2d30; 
+                color: #efeff1; 
+            }
+            
+            /* ===== Check Box ===== */
+            QCheckBox { 
+                color: #efeff1; 
+                spacing: 8px; 
+            }
+            
+            /* ===== Group Box ===== */
             QGroupBox {
                 border: 1px solid #3d4045;
                 border-radius: 6px;
@@ -244,9 +346,17 @@ def setup_style(app):
                 font-weight: bold;
             }
             QGroupBox::title { subcontrol-origin: margin; left: 10px; padding: 0 5px; }
-            QCheckBox { color: #efeff1; spacing: 8px; }
-            QCheckBox::indicator { width: 18px; height: 18px; }
-            QToolTip { background-color: #232629; color: #efeff1; border: 1px solid #3d4045; }
+            
+            /* ===== Tooltip ===== */
+            QToolTip {
+                background-color: #232629;
+                color: #efeff1;
+                border: 1px solid #3d4045;
+                border-radius: 4px;
+                padding: 4px 8px;
+            }
+            
+            /* ===== Scroll Bar ===== */
             QScrollBar:vertical {
                 background: #2d2d30;
                 width: 12px;
@@ -258,8 +368,23 @@ def setup_style(app):
                 min-height: 20px;
             }
             QScrollBar::handle:vertical:hover { background: #4a4d53; }
+            QScrollBar:horizontal {
+                background: #2d2d30;
+                height: 12px;
+                margin: 0;
+            }
+            QScrollBar::handle:horizontal {
+                background: #3d4045;
+                border-radius: 4px;
+                min-width: 20px;
+            }
+            QScrollBar::handle:horizontal:hover { background: #4a4d53; }
+            
+            /* ===== Dialog ===== */
             QDialog { background-color: #2d2d30; }
             QLabel { color: #efeff1; }
+            
+            /* ===== Tab Widget ===== */
             QTabWidget::pane { border: none; background: transparent; }
             QTabBar::tab {
                 background: transparent;
@@ -273,8 +398,27 @@ def setup_style(app):
                 color: #efeff1;
                 border-bottom: 2px solid #3daee9;
             }
+            QTabBar::tab:hover:!selected { color: #efeff1; }
+            
+            /* ===== Dialog Buttons ===== */
+            QDialog QPushButton {
+                padding: 8px 20px;
+                min-width: 80px;
+            }
+            QDialog QPushButton[text="OK"] {
+                background-color: #3daee9;
+                color: white;
+                font-weight: bold;
+            }
+            QDialog QPushButton[text="OK"]:hover { background-color: #5ab8f0; }
+            QDialog QPushButton[text="Cancel"] {
+                background-color: #e74c3c;
+                color: white;
+            }
+            QDialog QPushButton[text="Cancel"]:hover { background-color: #ff6b6b; }
         """)
     else:
+        # ===== LIGHT THEME =====
         palette = QPalette()
         palette.setColor(QPalette.ColorRole.Window, QColor(235, 235, 238))
         palette.setColor(QPalette.ColorRole.WindowText, QColor(30, 30, 33))
@@ -286,9 +430,58 @@ def setup_style(app):
         palette.setColor(QPalette.ColorRole.Highlight, QColor(61, 174, 233))
         palette.setColor(QPalette.ColorRole.HighlightedText, QColor(255, 255, 255))
         app.setPalette(palette)
-        
+
         app.setStyleSheet("""
             QMainWindow { background-color: #ebebee; }
+            
+            /* ===== Sidebar ===== */
+            QWidget#sidebar {
+                background-color: #ebebee;
+                border-right: 1px solid #d0d0d5;
+            }
+            
+            /* ===== Toolbar ===== */
+            QWidget#toolbar {
+                background-color: #ebebee;
+                border-bottom: 1px solid #d0d0d5;
+                padding: 4px;
+            }
+            
+            /* ===== Toolbar Buttons ===== */
+            QWidget#toolbar QPushButton {
+                background-color: transparent;
+                border: none;
+                border-radius: 4px;
+                padding: 6px 12px;
+                color: #1e1e21;
+                height: 32px;
+            }
+            QWidget#toolbar QPushButton:hover {
+                background-color: #d5d5da;
+            }
+            QWidget#toolbar QPushButton:pressed {
+                background-color: #c0c0c5;
+            }
+            QWidget#toolbar QPushButton:disabled {
+                opacity: 0.4;
+            }
+            
+            /* ===== Settings Button ===== */
+            QWidget#toolbar QPushButton#btn_settings {
+                padding: 6px 12px;
+                height: 32px;
+            }
+            
+            /* ===== Splitter ===== */
+            QSplitter::handle {
+                background-color: #d0d0d5;
+                width: 4px;
+            }
+            QSplitter::handle:hover {
+                background-color: #c0c0c5;
+            }
+            
+            /* ===== Table View ===== */
             QTableView {
                 background-color: #f5f5f8;
                 border: none;
@@ -297,6 +490,7 @@ def setup_style(app):
                 color: #1e1e21;
             }
             QTableView::item:selected { background-color: #3daee9; color: white; }
+            QTableView::item:!selected:hover { background-color: #e0e0e5; }
             QHeaderView::section {
                 background-color: #ebebee;
                 padding: 8px;
@@ -307,6 +501,8 @@ def setup_style(app):
                 font-weight: bold;
             }
             QHeaderView::section:hover { background-color: #d5d5da; }
+            
+            /* ===== List Widget ===== */
             QListWidget {
                 background-color: transparent;
                 border: none;
@@ -320,6 +516,8 @@ def setup_style(app):
             }
             QListWidget::item:selected { background-color: #3daee9; color: white; }
             QListWidget::item:hover:!selected { background-color: #d5d5da; }
+            
+            /* ===== Push Buttons ===== */
             QPushButton {
                 background-color: #d5d5da;
                 border: none;
@@ -344,12 +542,8 @@ def setup_style(app):
             }
             QPushButton#pause_btn:hover { background-color: #f1c40f; }
             QPushButton#pause_btn:disabled { background-color: #9e6200; opacity: 0.5; }
-            QPushButton#single_btn {
-                background-color: #3daee9;
-                color: white;
-                font-weight: bold;
-            }
-            QPushButton#single_btn:hover { background-color: #5ab8f0; }
+            
+            /* ===== Input Fields ===== */
             QLineEdit, QTextEdit, QComboBox, QTimeEdit {
                 background-color: #f5f5f8;
                 color: #1e1e21;
@@ -357,13 +551,18 @@ def setup_style(app):
                 border-radius: 4px;
                 padding: 6px 10px;
             }
+            QLineEdit:focus, QTextEdit:focus { border: 1px solid #3daee9; }
+            
+            /* ===== SpinBox (فقط رنگ پس‌زمینه) ===== */
             QSpinBox {
                 background-color: #f5f5f8;
                 color: #1e1e21;
-                border: 1px solid #d0d0d5;
-                border-radius: 4px;
-                padding: 6px 10px;
             }
+            QSpinBox:focus { 
+                background-color: #f5f5f8;
+            }
+            
+            /* ===== Progress Bar ===== */
             QProgressBar {
                 border: 1px solid #d0d0d5;
                 border-radius: 4px;
@@ -371,11 +570,75 @@ def setup_style(app):
                 color: #1e1e21;
             }
             QProgressBar::chunk { background-color: #3daee9; border-radius: 4px; }
-            QMenuBar { background-color: #ebebee; color: #1e1e21; }
-            QMenuBar::item:selected { background-color: #d5d5da; }
-            QMenu { background-color: #ebebee; color: #1e1e21; }
+            
+            /* ===== Menu Bar ===== */
+            QMenuBar {
+                background-color: transparent;
+                color: #1e1e21;
+                padding: 2px 4px;
+                font-weight: 500;
+                font-size: 13px;
+                spacing: 2px;
+            }
+            QMenuBar::item {
+                padding: 6px 14px;
+                border-radius: 4px;
+                background: transparent;
+                margin: 0 2px;
+            }
+            QMenuBar::item:selected { background-color: #d5d5da; color: #1e1e21; }
+            QMenuBar::item:pressed { background-color: #3daee9; color: white; }
+            
+            /* ===== Menu ===== */
+            QMenu {
+                background-color: #ebebee;
+                color: #1e1e21;
+                border: 1px solid #d0d0d5;
+                border-radius: 10px;
+                padding: 6px;
+            }
+            QMenu::item {
+                padding: 8px 36px 8px 16px;
+                border-radius: 6px;
+                margin: 2px 4px;
+                background: transparent;
+            }
             QMenu::item:selected { background-color: #3daee9; color: white; }
-            QStatusBar { background-color: #ebebee; color: #6a6a70; }
+            QMenu::item:hover { background-color: #3daee9; color: white; }
+            QMenu::separator {
+                height: 1px;
+                background: #d0d0d5;
+                margin: 4px 8px;
+            }
+            
+            /* ===== Context Menu ===== */
+            QMenu#contextMenu {
+                background-color: #ebebee;
+                border: 1px solid #d0d0d5;
+                border-radius: 10px;
+                padding: 6px;
+            }
+            QMenu#contextMenu::item {
+                padding: 6px 30px 6px 14px;
+                border-radius: 6px;
+                margin: 2px 4px;
+            }
+            QMenu#contextMenu::item:selected { background-color: #3daee9; color: white; }
+            QMenu#contextMenu::item:hover { background-color: #3daee9; color: white; }
+            
+            /* ===== Status Bar ===== */
+            QStatusBar { 
+                background-color: #ebebee; 
+                color: #6a6a70; 
+            }
+            
+            /* ===== Check Box ===== */
+            QCheckBox { 
+                color: #1e1e21; 
+                spacing: 8px; 
+            }
+            
+            /* ===== Group Box ===== */
             QGroupBox {
                 border: 1px solid #d0d0d5;
                 border-radius: 6px;
@@ -385,9 +648,17 @@ def setup_style(app):
                 font-weight: bold;
             }
             QGroupBox::title { subcontrol-origin: margin; left: 10px; padding: 0 5px; }
-            QCheckBox { color: #1e1e21; spacing: 8px; }
-            QCheckBox::indicator { width: 18px; height: 18px; }
-            QToolTip { background-color: #ebebee; color: #1e1e21; border: 1px solid #d0d0d5; }
+            
+            /* ===== Tooltip ===== */
+            QToolTip {
+                background-color: #ebebee;
+                color: #1e1e21;
+                border: 1px solid #d0d0d5;
+                border-radius: 4px;
+                padding: 4px 8px;
+            }
+            
+            /* ===== Scroll Bar ===== */
             QScrollBar:vertical {
                 background: #ebebee;
                 width: 12px;
@@ -399,8 +670,23 @@ def setup_style(app):
                 min-height: 20px;
             }
             QScrollBar::handle:vertical:hover { background: #b8b8bd; }
+            QScrollBar:horizontal {
+                background: #ebebee;
+                height: 12px;
+                margin: 0;
+            }
+            QScrollBar::handle:horizontal {
+                background: #c8c8cd;
+                border-radius: 4px;
+                min-width: 20px;
+            }
+            QScrollBar::handle:horizontal:hover { background: #b8b8bd; }
+            
+            /* ===== Dialog ===== */
             QDialog { background-color: #ebebee; }
             QLabel { color: #1e1e21; }
+            
+            /* ===== Tab Widget ===== */
             QTabWidget::pane { border: none; background: transparent; }
             QTabBar::tab {
                 background: transparent;
@@ -414,4 +700,24 @@ def setup_style(app):
                 color: #1e1e21;
                 border-bottom: 2px solid #3daee9;
             }
+            QTabBar::tab:hover:!selected { color: #1e1e21; }
+            
+            /* ===== Dialog Buttons ===== */
+            QDialog QPushButton {
+                padding: 8px 20px;
+                min-width: 80px;
+            }
+            QDialog QPushButton[text="OK"] {
+                background-color: #3daee9;
+                color: white;
+                font-weight: bold;
+            }
+            QDialog QPushButton[text="OK"]:hover { background-color: #5ab8f0; }
+            QDialog QPushButton[text="Cancel"] {
+                background-color: #e74c3c;
+                color: white;
+            }
+            QDialog QPushButton[text="Cancel"]:hover { background-color: #ff6b6b; }
         """)
+
+    print(f"✓ Theme applied: {'Dark' if is_dark else 'Light'} ({theme})")

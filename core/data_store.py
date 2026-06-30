@@ -88,6 +88,7 @@ class DataStore:
             "shutdown_after_finish": False,
             "speed_limit": 0,
             "auto_clear_completed": False,
+            "theme": "auto",
         }
 
     def load(self):
