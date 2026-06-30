@@ -12,6 +12,14 @@
   </p>
 </div>
 
+
+## 📸 Screenshot
+
+<div align="center">
+  <img src="screenshots/main-window.png" alt="FelfelDM Main Window" width="800">
+  <p><em>Main Interface - Dark Theme</em></p>
+</div>
+
 ---
 
 ## ✨ Features
