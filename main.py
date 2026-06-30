@@ -4,6 +4,7 @@ FelfelDM - Download Manager
 """
 
 import sys
+import signal
 import os
 from PyQt6.QtWidgets import QApplication
 from PyQt6.QtGui import QIcon
@@ -58,3 +59,10 @@ def main():
 
 if __name__ == "__main__":
     main()
+    
+def signal_handler(sig, frame):
+    print("\nForce exit...")
+    sys.exit(0)
+
+signal.signal(signal.SIGINT, signal_handler)
+signal.signal(signal.SIGTERM, signal_handler)

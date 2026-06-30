@@ -356,15 +356,23 @@ class MainWindow(QMainWindow):
         e.accept()
 
     def quit_app(self):
+        print("Force shutting down...")
+        
+        # Kill all background
         if hasattr(self, 'worker'):
-            self.worker.running = False
-            self.worker.wait()
-        self.store.save()
-
+            self.worker.terminate()
+        
+        try:
+            import subprocess
+            subprocess.run(["pkill", "-9", "aria2c"], capture_output=True)
+        except:
+            pass
+        
         if hasattr(self, 'tray'):
             self.tray.hide()
-
-        QApplication.quit()
+        
+        import sys
+        sys.exit(0)
 
     
 
