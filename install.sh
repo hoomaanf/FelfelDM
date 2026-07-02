@@ -17,9 +17,8 @@ echo "=================================================="
 echo -e "${NC}"
 
 if [ "$EUID" -ne 0 ]; then
-    echo -e "${RED}Please run with sudo:${NC}"
-    echo "sudo ./build_and_install.sh"
-    exit 1
+    echo "Restarting with sudo..."
+    exec sudo bash "$0" "$@"
 fi
 
 if [ -f /etc/arch-release ]; then
