@@ -87,6 +87,11 @@ FelfelDM
 
 ## 🌐 Browser Extension
 
+#FireFox
+```
+https://addons.mozilla.org/en-US/firefox/addon/felfeldm/
+```
+
 The `FelfelDM-extension` folder contains:
 - `install.sh` — Auto install script
 - `manifest-firefox.json` & `manifest-chrome.json`
