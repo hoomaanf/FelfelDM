@@ -17,8 +17,9 @@ echo "=================================================="
 echo -e "${NC}"
 
 if [ "$EUID" -ne 0 ]; then
-    echo "Restarting with sudo..."
-    exec sudo bash "$0" "$@"
+    SUDO="sudo"
+else
+    SUDO=""
 fi
 
 if [ -f /etc/arch-release ]; then
@@ -37,23 +38,23 @@ case "$DISTRO" in
 
 arch)
 
-pacman -Sy --needed \
+$SUDO pacman -Sy --needed \
 python \
 python-pip \
 python-requests \
 python-keyring \
+python-pyqt6 \
 aria2 \
 git \
-papirus-icon-theme \
-python-pyqt6
+papirus-icon-theme
 
 ;;
 
 debian)
 
-apt update
+$SUDO apt update
 
-apt install -y \
+$SUDO apt install -y \
 python3 \
 python3-pip \
 python3-requests \
@@ -67,7 +68,7 @@ papirus-icon-theme
 
 fedora)
 
-dnf install -y \
+$SUDO dnf install -y \
 python3 \
 python3-pip \
 python3-requests \
@@ -91,12 +92,12 @@ esac
 echo
 echo -e "${GREEN}Installing application...${NC}"
 
-rm -rf "$INSTALL_DIR"
-mkdir -p "$INSTALL_DIR"
+$SUDO rm -rf "$INSTALL_DIR"
+$SUDO mkdir -p "$INSTALL_DIR"
 
-cp main.py "$INSTALL_DIR"
+$SUDO cp main.py "$INSTALL_DIR"
 
-cp -r \
+$SUDO cp -r \
 core \
 ui \
 utils \
@@ -105,31 +106,36 @@ logo \
 FelfelDM-extension \
 "$INSTALL_DIR"
 
-[ -f README.md ] && cp README.md "$INSTALL_DIR"
-[ -f requirements.txt ] && cp requirements.txt "$INSTALL_DIR"
+[ -f README.md ] && $SUDO cp README.md "$INSTALL_DIR"
+[ -f requirements.txt ] && $SUDO cp requirements.txt "$INSTALL_DIR"
 
 if ! python3 -c "import appdirs" >/dev/null 2>&1; then
     echo
-    echo "Installing missing Python package: appdirs"
-    pip3 install appdirs
+    echo "Installing missing package: appdirs"
+
+    if [ "$DISTRO" = "arch" ]; then
+        pip3 install --break-system-packages appdirs
+    else
+        pip3 install --user appdirs
+    fi
 fi
 
-cat >/usr/local/bin/FelfelDM <<EOF
+cat <<EOF | $SUDO tee /usr/local/bin/FelfelDM >/dev/null
 #!/bin/sh
 exec python3 /usr/share/felfeldm/main.py "\$@"
 EOF
 
-chmod +x /usr/local/bin/FelfelDM"
+$SUDO chmod +x /usr/local/bin/FelfelDM
 
-mkdir -p /usr/share/icons/hicolor/256x256/apps
-mkdir -p /usr/share/icons/hicolor/128x128/apps
-mkdir -p /usr/share/icons/hicolor/64x64/apps
+$SUDO mkdir -p /usr/share/icons/hicolor/256x256/apps
+$SUDO mkdir -p /usr/share/icons/hicolor/128x128/apps
+$SUDO mkdir -p /usr/share/icons/hicolor/64x64/apps
 
-cp logo/icon256.png /usr/share/icons/hicolor/256x256/apps/felfeldm.png
-cp logo/icon128.png /usr/share/icons/hicolor/128x128/apps/felfeldm.png
-cp logo/icon64.png /usr/share/icons/hicolor/64x64/apps/felfeldm.png
+$SUDO cp logo/icon256.png /usr/share/icons/hicolor/256x256/apps/felfeldm.png
+$SUDO cp logo/icon128.png /usr/share/icons/hicolor/128x128/apps/felfeldm.png
+$SUDO cp logo/icon64.png /usr/share/icons/hicolor/64x64/apps/felfeldm.png
 
-cat >/usr/share/applications/felfeldm.desktop <<EOF
+cat <<EOF | $SUDO tee /usr/share/applications/felfeldm.desktop >/dev/null
 [Desktop Entry]
 Version=1.0
 Type=Application
@@ -144,10 +150,10 @@ StartupWMClass=FelfelDM
 EOF
 
 command -v update-desktop-database >/dev/null && \
-update-desktop-database /usr/share/applications
+$SUDO update-desktop-database /usr/share/applications
 
 command -v gtk-update-icon-cache >/dev/null && \
-gtk-update-icon-cache -f /usr/share/icons/hicolor
+$SUDO gtk-update-icon-cache -f /usr/share/icons/hicolor
 
 echo
 echo -e "${GREEN}====================================${NC}"
