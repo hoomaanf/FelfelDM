@@ -181,6 +181,8 @@ class QueueSettingsDialog(QDialog):
         time_row.addWidget(self.start_time)
         time_row.addWidget(QLabel("To:"))
         time_row.addWidget(self.end_time)
+        self.start_time.setDisplayFormat("HH:mm") 
+        self.end_time.setDisplayFormat("HH:mm")  
         lay.addRow("Time Window:", time_row)
 
         days_row = QHBoxLayout()
@@ -212,83 +214,7 @@ class QueueSettingsDialog(QDialog):
             "schedule_end": dtime(en.hour(), en.minute()),
             "days": [i for i, cb in enumerate(self.day_checks) if cb.isChecked()],
         }
-
-
-class SettingsDialog(QDialog):
-    def __init__(self, settings, parent=None):
-        super().__init__(parent)
-        self.setWindowTitle("Settings")
-        self.setMinimumWidth(450)
-        
-        lay = QVBoxLayout(self)
-        lay.setSpacing(12)
-
-        rpc_group = QGroupBox("aria2 RPC")
-        rpc_layout = QFormLayout(rpc_group)
-
-        self.host = QLineEdit(settings.get("aria2_host", "http://localhost"))
-        self.port = QSpinBox()
-        self.port.setRange(1, 65535)
-        self.port.setValue(settings.get("aria2_port", 6800))
-        self.secret = QLineEdit(settings.get("aria2_secret", ""))
-        self.secret.setEchoMode(QLineEdit.EchoMode.Password)
-
-        rpc_layout.addRow("Host:", self.host)
-        rpc_layout.addRow("Port:", self.port)
-        rpc_layout.addRow("Secret:", self.secret)
-        lay.addWidget(rpc_group)
-
-        dl_group = QGroupBox("Download")
-        dl_layout = QFormLayout(dl_group)
-
-        self.max_concurrent = QSpinBox()
-        self.max_concurrent.setRange(1, 50)
-        self.max_concurrent.setValue(settings.get("max_concurrent", 5))
-        dl_layout.addRow("Max Concurrent Downloads:", self.max_concurrent)
-
-        self.max_tries = QSpinBox()
-        self.max_tries.setRange(0, 100)
-        self.max_tries.setSpecialValueText("Unlimited")
-        self.max_tries.setValue(settings.get("max_tries", 0))
-        dl_layout.addRow("Max Retry Attempts:", self.max_tries)
-
-        self.conns = QSpinBox()
-        self.conns.setRange(1, 16)
-        self.conns.setValue(settings.get("connections", 8))
-        dl_layout.addRow("Default Connections:", self.conns)
-
-        lay.addWidget(dl_group)
-
-        btn_box = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
-        btn_box.accepted.connect(self.accept)
-        btn_box.rejected.connect(self.reject)
-        lay.addWidget(btn_box)
-        cleanup_group = QGroupBox("Cleanup")
-        cleanup_layout = QVBoxLayout(cleanup_group)
-        
-        self.auto_clear_completed = QCheckBox("Auto-clear completed downloads when finished")
-        self.auto_clear_completed.setChecked(settings.get("auto_clear_completed", False))
-        cleanup_layout.addWidget(self.auto_clear_completed)
-        
-        lay.addWidget(cleanup_group)
-
-        btn_box = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
-        btn_box.accepted.connect(self.accept)
-        btn_box.rejected.connect(self.reject)
-        lay.addWidget(btn_box)
-
-   
-    def get_settings(self):
-        return {
-            "aria2_host": self.host.text().strip(),
-            "aria2_port": self.port.value(),
-            "aria2_secret": self.secret.text(),
-            "connections": self.conns.value(),
-            "max_tries": self.max_tries.value(),
-            "max_concurrent": self.max_concurrent.value(),
-            "auto_clear_completed": self.auto_clear_completed.isChecked(),
-        }
-        
+  
 class QuickDownloadDialog(QDialog):
      def __init__(self, parent=None):
          super().__init__(parent)

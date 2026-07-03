@@ -242,10 +242,8 @@ def setup_style(app, theme="auto"):
             QLineEdit, QTextEdit, QComboBox, QTimeEdit {
                 background-color: #232629;
                 color: #efeff1;
-                border: 1px solid #3d4045;
-                border-radius: 4px;
-                padding: 6px 10px;
             }
+            
             QLineEdit:focus, QTextEdit:focus { border: 1px solid #3daee9; }
             
             /* ===== SpinBox (فقط رنگ پس‌زمینه) ===== */
@@ -402,17 +400,15 @@ def setup_style(app, theme="auto"):
                 padding: 8px 20px;
                 min-width: 80px;
             }
-            QDialog QPushButton[text="OK"] {
-                background-color: #3daee9;
-                color: white;
-                font-weight: bold;
+            QDialog QPushButton:hover {
+                background-color: #4a4d53;
             }
-            QDialog QPushButton[text="OK"]:hover { background-color: #5ab8f0; }
-            QDialog QPushButton[text="Cancel"] {
-                background-color: #e74c3c;
-                color: white;
+            QDialog QPushButton:pressed {
+                background-color: #2d3035;
             }
-            QDialog QPushButton[text="Cancel"]:hover { background-color: #ff6b6b; }
+            QDialog QPushButton:disabled {
+                opacity: 0.4;
+            }
         """)
     else:
         # ===== LIGHT THEME =====
@@ -544,13 +540,9 @@ def setup_style(app, theme="auto"):
             QLineEdit, QTextEdit, QComboBox, QTimeEdit {
                 background-color: #f5f5f8;
                 color: #1e1e21;
-                border: 1px solid #d0d0d5;
-                border-radius: 4px;
-                padding: 6px 10px;
             }
             QLineEdit:focus, QTextEdit:focus { border: 1px solid #3daee9; }
             
-            /* ===== SpinBox (فقط رنگ پس‌زمینه) ===== */
             QSpinBox {
                 background-color: #f5f5f8;
                 color: #1e1e21;
@@ -704,17 +696,15 @@ def setup_style(app, theme="auto"):
                 padding: 8px 20px;
                 min-width: 80px;
             }
-            QDialog QPushButton[text="OK"] {
-                background-color: #3daee9;
-                color: white;
-                font-weight: bold;
+            QDialog QPushButton:hover {
+                background-color: #c8c8cd;
             }
-            QDialog QPushButton[text="OK"]:hover { background-color: #5ab8f0; }
-            QDialog QPushButton[text="Cancel"] {
-                background-color: #e74c3c;
-                color: white;
+            QDialog QPushButton:pressed {
+                background-color: #b8b8bd;
             }
-            QDialog QPushButton[text="Cancel"]:hover { background-color: #ff6b6b; }
+            QDialog QPushButton:disabled {
+                opacity: 0.4;
+            }
         """)
 
     print(f"✓ Theme applied: {'Dark' if is_dark else 'Light'} ({theme})")
