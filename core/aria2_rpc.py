@@ -1,6 +1,7 @@
 import requests
 import subprocess
 import time
+import os
 
 class Aria2RPC:
     def __init__(self, host="http://localhost", port=6800, secret=""):
@@ -78,7 +79,12 @@ class Aria2RPC:
         return self._call("aria2.tellStopped", [offset, num]) or []
 
     def is_connected(self):
-        return self.get_global_stat() is not None
+        """Check if aria2 is running and responding"""
+        try:
+            result = self._call("aria2.getGlobalStat")
+            return result is not None
+        except:
+            return False
     
     def get_status(self, gid):
         result = self.tell_status(gid, ["gid", "status"])
@@ -89,36 +95,56 @@ class Aria2RPC:
     def force_pause(self, gid):
         return self._call("aria2.forcePause", [gid])
 
-    # === متد جدید ===
     def start_aria2(self):
         """Start aria2 daemon if not running"""
         if self.is_connected():
+            print("✅ aria2 already running")
             return True
             
         print("Starting aria2 daemon...")
         
+        # Kill existing aria2 processes first
+        try:
+            subprocess.run(["pkill", "-f", "aria2c"], capture_output=True)
+            time.sleep(1)
+        except:
+            pass
+        
+        # Build command WITHOUT secret (use default config)
         aria2_cmd = [
             "aria2c",
             "--enable-rpc",
-            "--rpc-listen-all=false",
+            "--rpc-listen-all",
+            "--rpc-allow-origin-all",
             "--rpc-listen-port=6800",
-            f"--rpc-secret={self.secret or 'felfel'}",
-            "--daemon=true",
-            "--quiet=true",
-            "--allow-overwrite=true"
+            "--daemon",
+            "--max-concurrent-downloads=5",
+            "--max-connection-per-server=16",
+            "--split=16",
+            "--continue=true",
+            "--always-resume=true",
         ]
         
+        # Add secret only if set
+        if self.secret:
+            aria2_cmd.append(f"--rpc-secret={self.secret}")
+        
         try:
-            subprocess.Popen(aria2_cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            subprocess.Popen(
+                aria2_cmd,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL
+            )
             time.sleep(2)
             
-            for _ in range(10):
+            # Try to connect
+            for i in range(10):
                 if self.is_connected():
                     print("✅ aria2 started successfully")
                     return True
                 time.sleep(1)
                 
-            print("⚠️ aria2 failed to start")
+            print("⚠️ aria2 failed to start after 10 seconds")
             return False
         except FileNotFoundError:
             print("❌ aria2 command not found. Please install aria2.")
