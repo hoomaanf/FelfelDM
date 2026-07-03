@@ -27,24 +27,29 @@ else
 fi
 
 # ============================================
-# Detect distribution
+# Detect distribution by package manager
 # ============================================
-if [ -f /etc/os-release ]; then
-    . /etc/os-release
-    DISTRO="$ID"
-elif [ -f /etc/arch-release ]; then
-    DISTRO="arch"
-elif [ -f /etc/fedora-release ]; then
-    DISTRO="fedora"
-elif [ -f /etc/debian_version ]; then
-    DISTRO="debian"
-elif [ -f /etc/redhat-release ]; then
-    DISTRO="rhel"
-else
-    DISTRO="unknown"
-fi
+detect_distro() {
+    if command -v pacman &> /dev/null; then
+        echo "arch"
+    elif command -v apt &> /dev/null || command -v apt-get &> /dev/null; then
+        echo "debian"
+    elif command -v dnf &> /dev/null; then
+        echo "fedora"
+    elif command -v yum &> /dev/null; then
+        echo "rhel"
+    elif command -v zypper &> /dev/null; then
+        echo "opensuse"
+    elif command -v apk &> /dev/null; then
+        echo "alpine"
+    else
+        echo "unknown"
+    fi
+}
 
-echo -e "${YELLOW}Detected: $DISTRO${NC}"
+DISTRO=$(detect_distro)
+
+echo -e "${YELLOW}Detected package manager: $DISTRO${NC}"
 echo ""
 
 # ============================================
@@ -58,13 +63,14 @@ if [ -f "$SCRIPT_DIR/main.py" ]; then
 else
     echo -e "${YELLOW}⚠ Local files not found. Cloning from GitHub...${NC}"
     
-    # Check git
     if ! command -v git &> /dev/null; then
         echo -e "${RED}❌ git not found. Installing...${NC}"
         case "$DISTRO" in
             arch)   $SUDO pacman -S --needed git --noconfirm ;;
-            debian|ubuntu) $SUDO apt install -y git ;;
+            debian) $SUDO apt update && $SUDO apt install -y git ;;
             fedora|rhel) $SUDO dnf install -y git ;;
+            opensuse) $SUDO zypper install -y git ;;
+            alpine) $SUDO apk add git ;;
             *) echo -e "${RED}Please install git manually${NC}"; exit 1 ;;
         esac
     fi
@@ -82,7 +88,8 @@ echo -e "${YELLOW}📦 Installing dependencies...${NC}"
 echo ""
 
 case "$DISTRO" in
-    arch|manjaro)
+    arch)
+        echo -e "${GREEN}Installing with pacman...${NC}"
         $SUDO pacman -Sy --needed \
             python \
             python-pip \
@@ -93,7 +100,8 @@ case "$DISTRO" in
             --noconfirm
         ;;
         
-    debian|ubuntu|pop|linuxmint|elementary)
+    debian)
+        echo -e "${GREEN}Installing with apt...${NC}"
         $SUDO apt update
         $SUDO apt install -y \
             python3 \
@@ -105,26 +113,28 @@ case "$DISTRO" in
         ;;
         
     fedora)
+        echo -e "${GREEN}Installing with dnf...${NC}"
         $SUDO dnf install -y \
             python3 \
             python3-pip \
             python3-qt6 \
             aria2 \
             git \
-            papirus-icon-theme
+            papirus-icon-theme 2>/dev/null || echo "⚠ papirus-icon-theme not available"
         ;;
         
-    rhel|centos)
-        $SUDO dnf install -y \
+    rhel)
+        echo -e "${GREEN}Installing with yum...${NC}"
+        $SUDO yum install -y \
             python3 \
             python3-pip \
             aria2 \
             git
-        # papirus-icon-theme maybe not available on RHEL
-        echo -e "${YELLOW}⚠ papirus-icon-theme not available, using system icons${NC}"
+        echo -e "${YELLOW}⚠ papirus-icon-theme not available${NC}"
         ;;
         
-    opensuse*)
+    opensuse)
+        echo -e "${GREEN}Installing with zypper...${NC}"
         $SUDO zypper install -y \
             python3 \
             python3-pip \
@@ -133,9 +143,24 @@ case "$DISTRO" in
             git
         ;;
         
+    alpine)
+        echo -e "${GREEN}Installing with apk...${NC}"
+        $SUDO apk add \
+            python3 \
+            py3-pip \
+            py3-pyqt6 \
+            aria2 \
+            git
+        ;;
+        
     *)
-        echo -e "${YELLOW}⚠ Unsupported distribution. Installing via pip...${NC}"
-        $SUDO pip install -q PyQt6 requests
+        echo -e "${RED}❌ No supported package manager found!${NC}"
+        echo "Please install dependencies manually:"
+        echo "  - Python 3.10+"
+        echo "  - PyQt6"
+        echo "  - aria2"
+        echo "  - git"
+        exit 1
         ;;
 esac
 
@@ -149,10 +174,10 @@ PIP_PACKAGES="requests keyring appdirs"
 for pkg in $PIP_PACKAGES; do
     if ! python3 -c "import $pkg" >/dev/null 2>&1; then
         echo "Installing $pkg..."
-        if [ "$DISTRO" = "arch" ] || [ "$DISTRO" = "manjaro" ]; then
-            pip3 install --break-system-packages "$pkg"
+        if [ "$DISTRO" = "arch" ]; then
+            pip3 install --break-system-packages "$pkg" 2>/dev/null || pip3 install --user "$pkg"
         else
-            pip3 install --user "$pkg"
+            pip3 install --user "$pkg" 2>/dev/null || $SUDO pip3 install "$pkg"
         fi
     fi
 done
@@ -166,7 +191,6 @@ echo -e "${GREEN}📁 Installing application...${NC}"
 $SUDO rm -rf "$INSTALL_DIR"
 $SUDO mkdir -p "$INSTALL_DIR"
 
-# Copy all files
 $SUDO cp -r \
     "$SOURCE_DIR"/core \
     "$SOURCE_DIR"/ui \
@@ -204,7 +228,6 @@ $SUDO mkdir -p /usr/share/icons/hicolor/{256x256,128x128,64x64,48x48,32x32,16x16
 [ -f "$SOURCE_DIR/logo/icon32.png" ] && $SUDO cp "$SOURCE_DIR/logo/icon32.png" /usr/share/icons/hicolor/32x32/apps/felfeldm.png
 [ -f "$SOURCE_DIR/logo/icon16.png" ] && $SUDO cp "$SOURCE_DIR/logo/icon16.png" /usr/share/icons/hicolor/16x16/apps/felfeldm.png
 
-# Fallback for older systems
 [ -f "$SOURCE_DIR/logo/icon256.png" ] && $SUDO cp "$SOURCE_DIR/logo/icon256.png" /usr/share/pixmaps/felfeldm.png
 
 # ============================================
@@ -243,6 +266,18 @@ fi
 if [ -d "$TEMP_DIR" ] && [ "$SOURCE_DIR" = "$TEMP_DIR" ]; then
     rm -rf "$TEMP_DIR"
     echo -e "${GREEN}✓ Cleaned up temporary files${NC}"
+fi
+
+# ============================================
+# Test
+# ============================================
+echo ""
+echo -e "${YELLOW}🔍 Testing installation...${NC}"
+
+if command -v FelfelDM >/dev/null; then
+    echo -e "${GREEN}✅ Command 'FelfelDM' is available${NC}"
+else
+    echo -e "${RED}❌ Command 'FelfelDM' not found in PATH${NC}"
 fi
 
 # ============================================
