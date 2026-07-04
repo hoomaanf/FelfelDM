@@ -115,7 +115,7 @@ class YouTubeWorker(QThread):
             pattern = os.path.join(self.output_path, "*.f*")
             for f in glob.glob(pattern):
                 try:
-                    if os.path.getsize(f) < 1024 * 1024:  # فقط فایل‌های کوچک (ناقص)
+                    if os.path.getsize(f) < 1024 * 1024:
                         os.remove(f)
                         print(f"🗑️ Deleted: {f}")
                 except:
@@ -190,11 +190,9 @@ class YouTubeWorker(QThread):
                 if self.is_cancelled:
                     break
                 
-                # اگر Pause هستیم، خطوط رو نادیده بگیر
                 if self.is_paused:
                     continue
                 
-                # استخراج درصد
                 if "[download]" in line and "%" in line:
                     try:
                         percent_match = re.search(r'(\d+\.?\d*)%', line)
@@ -205,7 +203,6 @@ class YouTubeWorker(QThread):
                     except:
                         pass
                 
-                # استخراج سرعت و ETA
                 if "ETA" in line or "speed" in line:
                     speed_match = re.search(r'([\d.]+\s*[KM]?i?B/s)', line)
                     speed = speed_match.group(1) if speed_match else ""
@@ -216,12 +213,10 @@ class YouTubeWorker(QThread):
                     if speed and eta:
                         self.speed_eta.emit(speed, eta)
                 
-                # به‌روزرسانی وضعیت (فقط خطوطی که جدید هستن)
                 clean_line = line.strip()
                 if clean_line and "[download]" in clean_line and not self.is_paused:
-                    # خطوط تکراری رو فیلتر کن
                     if clean_line != last_status:
-                        self.status.emit(clean_line[:100])  # فقط ۱۰۰ کاراکتر اول
+                        self.status.emit(clean_line[:100])
                         last_status = clean_line
                         line_count += 1
             

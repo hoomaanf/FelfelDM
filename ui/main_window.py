@@ -1340,18 +1340,15 @@ class MainWindow(QMainWindow):
             self.store.settings.update(s)
             self.store.save()
 
-            # اعمال تم بلافاصله
             theme = self.store.settings.get("theme", "auto")
             setup_style(QApplication.instance(), theme)
 
-            # اعمال تنظیمات aria2
             if not self._apply_settings_to_aria2():
                 self._restart_aria2()
             else:
                 self.tray.showMessage("FelfelDM", "Settings applied successfully",
                                      QSystemTrayIcon.MessageIcon.Information, 2000)
 
-            # بروزرسانی UI
             self._refresh_table()
 
     def _start_backend(self):
@@ -1675,7 +1672,6 @@ class MainWindow(QMainWindow):
             self.splash = None
             
     def _youtube_download(self):
-        """دانلود از یوتیوب"""
         from ui.dialogs import YouTubeDownloadDialog
         
         dlg = YouTubeDownloadDialog(self)

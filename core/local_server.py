@@ -75,16 +75,20 @@ class Handler(BaseHTTPRequestHandler):
                 data = json.loads(self.rfile.read(length).decode())
                 urls = data.get('urls', [])
                 
-                print(f"📥 Received {len(urls)} URL(s)")  # دیباگ
+                print(f"📥 Received {len(urls)} URL(s) on port {self.server.server_port}")
                 
                 if urls and hasattr(self.server, 'server_thread'):
                     thread = self.server.server_thread
                     if thread.main_window:
-                        # حالت GUI - از main_window استفاده کن
-                        from PyQt6.QtCore import QTimer
-                        QTimer.singleShot(0, lambda: thread.main_window._add_downloads_from_extension(urls))
+                        from PyQt6.QtCore import QMetaObject, Qt, Q_ARG
+                        QMetaObject.invokeMethod(
+                            thread.main_window,
+                            '_add_downloads_from_extension',
+                            Qt.ConnectionType.QueuedConnection,
+                            Q_ARG(list, urls)
+                        )
+                        print(f"✅ Invoked _add_downloads_from_extension with {len(urls)} URL(s)")
                     else:
-                        # 🔥 حالت Daemon - اجرای مستقیم با --add
                         print(f"🚀 Daemon mode: Launching FelfelDM with {len(urls)} URL(s)")
                         self._launch_with_urls(urls)
                 
@@ -95,22 +99,19 @@ class Handler(BaseHTTPRequestHandler):
                 self.wfile.write(json.dumps({"status": "success"}).encode())
                 
             except Exception as e:
-                print(f"POST error: {e}")
+                print(f"❌ POST error: {e}")
                 self.send_response(500)
                 self.end_headers()
         else:
             self.send_response(404)
             self.end_headers()
-    
     def _launch_with_urls(self, urls):
         """Launch FelfelDM with URLs in daemon mode"""
         try:
-            # مسیر فایل اجرایی
             exe_path = "/usr/local/bin/FelfelDM"
             if not os.path.exists(exe_path):
                 exe_path = "FelfelDM"
             
-            # اجرا با --add
             cmd = [exe_path, "--add"] + urls
             subprocess.Popen(
                 cmd,

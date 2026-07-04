@@ -452,7 +452,6 @@ class SettingsDialog(QDialog):
             self.service_status.setStyleSheet("color: #95a5a6; font-size: 11px;")
 
     def _on_service_toggle(self, checked):
-        """Handle service toggle - نصب یا حذف کامل سرویس"""
         if checked:
             self.service_status.setText("⏳ Installing service...")
             self.service_status.setStyleSheet("color: #f39c12; font-size: 11px;")
@@ -469,27 +468,22 @@ class SettingsDialog(QDialog):
             QTimer.singleShot(100, self._remove_service_async)
 
     def _install_service_async(self):
-        """نصب کامل سرویس با مدیریت پورت"""
         try:
             import subprocess
             import os
             import time
             
-            # مسیر اجرایی
             import sys
             if getattr(sys, 'frozen', False):
                 exe_path = sys.executable
             else:
                 exe_path = "/usr/local/bin/FelfelDM"
             
-            # 🔥 1. چک کردن و آزاد کردن پورت 8765
             self._free_port(8765)
             
-            # 2. ایجاد پوشه سرویس
             service_dir = os.path.expanduser("~/.config/systemd/user")
             os.makedirs(service_dir, exist_ok=True)
             
-            # 3. فایل سرویس
             service_content = f'''[Unit]
 Description=FelfelDM Download Manager Service
 After=network.target
@@ -514,21 +508,17 @@ WantedBy=default.target
             with open(service_path, 'w') as f:
                 f.write(service_content)
             
-            # 4. ری‌لود systemd
             subprocess.Popen(['systemctl', '--user', 'daemon-reload'], 
                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
             time.sleep(0.5)
             
-            # 5. فعال کردن سرویس
             subprocess.Popen(['systemctl', '--user', 'enable', 'felfeldm.service'],
                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
             time.sleep(0.5)
             
-            # 6. شروع سرویس
             subprocess.Popen(['systemctl', '--user', 'start', 'felfeldm.service'],
                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
             
-            # 7. صبر برای شروع
             QTimer.singleShot(1500, self._check_service_status)
             
             self.service_status.setText("✅ Service installed and running")
@@ -543,44 +533,36 @@ WantedBy=default.target
             self.run_as_service.setChecked(False)
 
     def _remove_service_async(self):
-        """حذف کامل سرویس با کشتن پروسه"""
         try:
             import subprocess
             import os
             import time
             
-            # 🔥 1. کشتن پروسه‌های باقی‌مانده
             subprocess.Popen(['pkill', '-9', '-f', 'main.py --daemon'],
                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
             subprocess.Popen(['pkill', '-9', '-f', 'FelfelDM --daemon'],
                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
             time.sleep(0.5)
             
-            # 2. متوقف کردن سرویس
             subprocess.Popen(['systemctl', '--user', 'stop', 'felfeldm.service'],
                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
             time.sleep(0.5)
             
-            # 3. غیرفعال کردن
             subprocess.Popen(['systemctl', '--user', 'disable', 'felfeldm.service'],
                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
             time.sleep(0.5)
             
-            # 4. حذف فایل سرویس
             service_path = os.path.expanduser("~/.config/systemd/user/felfeldm.service")
             if os.path.exists(service_path):
                 os.remove(service_path)
             
-            # 5. ری‌لود systemd
             subprocess.Popen(['systemctl', '--user', 'daemon-reload'],
                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
             time.sleep(0.5)
             
-            # 6. ری‌ست failed state
             subprocess.Popen(['systemctl', '--user', 'reset-failed'],
                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
             
-            # 7. چک کن پورت آزاد شده
             self._free_port(8765)
             
             QTimer.singleShot(1000, self._check_service_status)
@@ -603,7 +585,6 @@ WantedBy=default.target
             import time
             import os
             
-            # تست اینکه پورت در حال استفاده است
             sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             sock.settimeout(1)
             result = sock.connect_ex(('localhost', port))
@@ -614,25 +595,22 @@ WantedBy=default.target
             
             print(f"🔍 Port {port} is in use, trying to free it...")
             
-            # پیدا کردن PID استفاده‌کننده از پورت
             try:
                 result = subprocess.run(
                     ['lsof', '-ti', f':{port}'],
                     capture_output=True, text=True, timeout=2
                 )
                 pids = result.stdout.strip().split('\n')
-                current_pid = str(os.getpid())  # 🔥 PID خود برنامه
+                current_pid = str(os.getpid()) 
                 
                 for pid in pids:
-                    if pid and pid.isdigit() and pid != current_pid:  # 🔥 خودش رو نادیده بگیر
+                    if pid and pid.isdigit() and pid != current_pid:  
                         print(f"🔪 Killing process {pid} on port {port}")
                         subprocess.Popen(['kill', '-9', pid],
                                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
                 
-                # صبر برای آزاد شدن پورت
                 time.sleep(1)
                 
-                # چک مجدد
                 sock2 = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
                 sock2.settimeout(1)
                 result2 = sock2.connect_ex(('localhost', port))
@@ -654,26 +632,22 @@ WantedBy=default.target
             return False
 
     def _check_service_status(self):
-        """بررسی وضعیت سرویس و آپدیت UI"""
         try:
             import subprocess
             import socket
             
-            # 1. چک کردن سرویس
             result = subprocess.run(
                 ['systemctl', '--user', 'is-active', 'felfeldm.service'],
                 capture_output=True, text=True, timeout=2
             )
             is_active = result.stdout.strip() == 'active'
             
-            # 2. چک کردن enabled
             result2 = subprocess.run(
                 ['systemctl', '--user', 'is-enabled', 'felfeldm.service'],
                 capture_output=True, text=True, timeout=2
             )
             is_enabled = result2.stdout.strip() == 'enabled'
             
-            # 3. چک کردن پورت
             sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             sock.settimeout(1)
             port_open = sock.connect_ex(('localhost', 8765)) == 0
@@ -697,7 +671,6 @@ WantedBy=default.target
             self.run_as_service.setChecked(False)
 
     def _update_service_status(self):
-        """آپدیت اولیه وضعیت سرویس"""
         QTimer.singleShot(100, self._check_service_status)
 
     def get_settings(self):

@@ -65,7 +65,6 @@ def main():
             print("✅ Data cleared!")
         return
     
-    # 🔥 حالت Daemon - فقط سرور HTTP
     if args.daemon:
         print("🌶️ FelfelDM Daemon starting...")
         

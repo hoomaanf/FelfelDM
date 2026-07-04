@@ -17,13 +17,11 @@ class YouTubeProgressDialog(QDialog):
         layout = QVBoxLayout(self)
         layout.setSpacing(12)
         
-        # ===== عنوان =====
         title_layout = QHBoxLayout()
         title_icon = QLabel()
         title_icon.setPixmap(get_icon('video-display').pixmap(24, 24))
         title_layout.addWidget(title_icon)
         
-        # عنوان اصلی با نام فیلم
         video_title = "Downloading from YouTube"
         if video_info:
             video_title = video_info.get("title", "Downloading from YouTube")
@@ -35,13 +33,11 @@ class YouTubeProgressDialog(QDialog):
         title_layout.addStretch()
         layout.addLayout(title_layout)
         
-        # ===== اطلاعات ویدیو =====
         info_group = QGroupBox("Video Information")
         info_layout = QFormLayout(info_group)
         info_layout.setSpacing(8)
         
         if video_info:
-            # عنوان
             title = video_info.get("title", "Unknown")
             self.title_info = QLabel(title)
             self.title_info.setWordWrap(True)
@@ -56,7 +52,6 @@ class YouTubeProgressDialog(QDialog):
             title_widget_layout.addWidget(self.title_info)
             info_layout.addRow("Title:", title_widget)
             
-            # کانال
             uploader = video_info.get("uploader", "Unknown")
             uploader_widget = QWidget()
             uploader_layout = QHBoxLayout(uploader_widget)
@@ -67,7 +62,6 @@ class YouTubeProgressDialog(QDialog):
             uploader_layout.addWidget(QLabel(uploader))
             info_layout.addRow("Channel:", uploader_widget)
             
-            # مدت زمان
             duration = video_info.get("duration", 0)
             minutes = duration // 60
             seconds = duration % 60
@@ -80,7 +74,6 @@ class YouTubeProgressDialog(QDialog):
             duration_layout.addWidget(QLabel(f"{minutes}:{seconds:02d}"))
             info_layout.addRow("Duration:", duration_widget)
             
-            # کیفیت
             resolution = video_info.get("resolution", "Unknown")
             if resolution:
                 res_widget = QWidget()
@@ -92,7 +85,6 @@ class YouTubeProgressDialog(QDialog):
                 res_layout.addWidget(QLabel(resolution))
                 info_layout.addRow("Quality:", res_widget)
             
-            # فرمت
             format_names = {
                 "mp4": "MP4 Video",
                 "webm": "WebM Video",
@@ -108,7 +100,6 @@ class YouTubeProgressDialog(QDialog):
             format_layout.addWidget(QLabel(format_names.get(format_type, format_type)))
             info_layout.addRow("Format:", format_widget)
             
-            # سایز
             filesize = video_info.get("filesize")
             if filesize:
                 size_widget = QWidget()
@@ -122,7 +113,6 @@ class YouTubeProgressDialog(QDialog):
         
         layout.addWidget(info_group)
         
-        # ===== نوار پیشرفت =====
         self.progress_bar = QProgressBar()
         self.progress_bar.setRange(0, 100)
         self.progress_bar.setValue(0)
@@ -130,18 +120,15 @@ class YouTubeProgressDialog(QDialog):
         self.progress_bar.setFormat("%p%")
         layout.addWidget(self.progress_bar)
         
-        # ===== وضعیت =====
         self.status_label = QLabel("Starting...")
         self.status_label.setStyleSheet("color: #95a5a6;")
         self.status_label.setWordWrap(True)
         layout.addWidget(self.status_label)
         
-        # ===== سرعت و ETA =====
         self.speed_eta_label = QLabel("")
         self.speed_eta_label.setStyleSheet("color: #95a5a6; font-size: 11px;")
         layout.addWidget(self.speed_eta_label)
         
-        # ===== دکمه‌ها =====
         btn_layout = QHBoxLayout()
         
         self.pause_btn = QPushButton()
@@ -167,7 +154,6 @@ class YouTubeProgressDialog(QDialog):
         
         layout.addLayout(btn_layout)
         
-        # شروع دانلود
         self.worker = YouTubeWorker(url, output_path, format_type, cookie_file)
         self.worker.progress.connect(self._on_progress)
         self.worker.status.connect(self._on_status)

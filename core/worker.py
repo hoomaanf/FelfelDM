@@ -52,7 +52,6 @@ class BackendWorker(QThread):
             self.msleep(1000)
 
     def stop(self):
-        """توقف تمیز worker"""
         self.running = False
         if not self.wait(2000): 
             self.terminate()
