@@ -16,16 +16,53 @@ from utils.helpers import format_size, format_speed, get_category, get_icon
 from core.local_server import LocalServer
 from utils.helpers import get_resource_path
 from utils.style import setup_style
+from ui.splash import SplashScreen
 
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
-       
+        
+        self.store = DataStore()
+        
+        theme_setting = self.store.settings.get("theme", "auto")
+        is_dark = True  
+        
+        if theme_setting == "light":
+            is_dark = False
+        elif theme_setting == "dark":
+            is_dark = True
+        elif theme_setting == "auto":
+            
+            try:
+                import subprocess
+                result = subprocess.run(
+                    ['kreadconfig5', '--group', 'Colors:Window', '--key', 'BackgroundNormal'],
+                    capture_output=True, text=True
+                )
+                if result.stdout:
+                    color = result.stdout.strip()
+                    if color.startswith('#'):
+                        r, g, b = int(color[1:3], 16), int(color[3:5], 16), int(color[5:7], 16)
+                        brightness = (r * 299 + g * 587 + b * 114) / 1000
+                        is_dark = brightness < 128
+            except:
+                is_dark = True
+
+        from ui.splash import SplashScreen
+        self.splash = SplashScreen(is_dark=is_dark)
+        self.splash.update_status("Loading FelfelDM...", 5)
+        QApplication.processEvents()
+        
         self.setWindowTitle("FelfelDM")
         self.setMinimumSize(1050, 680)
 
-        self.store = DataStore()
+        self.splash.update_status("Loading data...", 15)
+        QApplication.processEvents()
+        
         self._pending_pause = set()
+
+        self.splash.update_status("Setting up queues...", 25)
+        QApplication.processEvents()
         
         default_exists = False
         for q in self.store.queues:
@@ -37,27 +74,60 @@ class MainWindow(QMainWindow):
             default_queue = Queue("Default", paused=True)
             self.store.queues.insert(0, default_queue)  
             self.store.save()
-            
+
+        self.splash.update_status("Initializing aria2...", 35)
+        QApplication.processEvents()
+        
         self.aria2 = Aria2RPC(
             self.store.settings["aria2_host"],
             self.store.settings["aria2_port"],
             self.store.settings["aria2_secret"],
         )
         self.aria2.on_error = self._on_aria2_error
+
+        self.splash.update_status("Connecting to aria2...", 45)
+        QApplication.processEvents()
+        
         if not self.aria2.is_connected():
+            self.splash.update_status("Starting aria2 daemon...", 55)
             self.aria2.start_aria2()
+            QApplication.processEvents()
+        
+        self.splash.update_status("aria2 ready!", 60)
+        QApplication.processEvents()
+
         self._current_queue_idx = 0
         self._all_downloads = {}
         self._last_calculated_global_speed = 0
         self._cleared_gids = set()
 
+        self.splash.update_status("Building interface...", 70)
+        QApplication.processEvents()
         self._build_ui()
+
+        self.splash.update_status("Building tray...", 80)
+        QApplication.processEvents()
         self._build_tray()
+
+        self.splash.update_status("Applying settings...", 85)
+        QApplication.processEvents()
         self._apply_global_speed_limit()
+
+        self.splash.update_status("Starting services...", 90)
+        QApplication.processEvents()
         self._start_backend()
-        
+
+        self.splash.update_status("Starting local server...", 95)
+        QApplication.processEvents()
         self.local_server = LocalServer(main_window=self)
         self.local_server.start(8765)
+
+        self.splash.update_status("Ready!", 100)
+        QApplication.processEvents()
+
+        from PyQt6.QtCore import QTimer
+        QTimer.singleShot(800, self._close_splash)
+    
     def _build_ui(self):
         central = QWidget()
         self.setCentralWidget(central)
@@ -1592,3 +1662,8 @@ class MainWindow(QMainWindow):
         gid = self.model.get_gid(index.row())
         if gid:
             self._open_progress_dialog(gid)
+            
+    def _close_splash(self):
+        if hasattr(self, 'splash') and self.splash:
+            self.splash.close()
+            self.splash = None

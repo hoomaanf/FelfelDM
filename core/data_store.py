@@ -89,6 +89,7 @@ class DataStore:
             "speed_limit": 0,
             "auto_clear_completed": False,
             "theme": "auto",
+            "run_as_service": False, 
         }
 
     def load(self):

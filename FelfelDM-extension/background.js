@@ -3,7 +3,6 @@ const ICON_URL = browser.runtime.getURL("icons/icon128.png");
 
 async function isCatchEnabled() {
   const data = await browser.storage.local.get("catchDownloads");
-
   return data.catchDownloads !== undefined ? data.catchDownloads : true;
 }
 
@@ -72,19 +71,25 @@ browser.downloads.onCreated.addListener(async (item) => {
     return;
   }
 
-  const sent = await send([item.url]);
-
-  if (!sent) return;
-
   try {
     await browser.downloads.cancel(item.id);
+    console.log(`⏸️ Cancelled download: ${item.url}`);
+  } catch (e) {
+    console.error("Cancel error:", e);
+    return;
+  }
+
+  const sent = await send([item.url]);
+
+  if (sent) {
     setTimeout(async () => {
       try {
         await browser.downloads.erase({ id: item.id });
-      } catch {}
+        console.log(`🗑️ Removed from history: ${item.url}`);
+      } catch (e) {
+        console.error("Erase error:", e);
+      }
     }, 300);
-  } catch (e) {
-    console.error(e);
   }
 });
 
@@ -221,7 +226,6 @@ browser.runtime.onMessage.addListener((message, sender, sendResponse) => {
     console.log(
       `🔄 Download catching: ${message.enabled ? "ON 🟢" : "OFF 🔴"}`,
     );
-
     return;
   }
 

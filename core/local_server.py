@@ -1,22 +1,26 @@
+# core/local_server.py
+
 import json
 import socket
+import subprocess
+import os
 from http.server import HTTPServer, BaseHTTPRequestHandler
-from PyQt6.QtCore import QThread, pyqtSignal, QObject
+from PyQt6.QtCore import QThread, pyqtSignal
 
 class ServerThread(QThread):
+    urls_received = pyqtSignal(list)
     
-    urls_received = pyqtSignal(list)  
-    
-    def __init__(self, port=8765):
+    def __init__(self, port=8765, main_window=None):
         super().__init__()
         self.port = port
+        self.main_window = main_window
         self.server = None
         self.running = False
     
     def run(self):
         try:
             self.server = HTTPServer(('localhost', self.port), Handler)
-            self.server.server_thread = self  
+            self.server.server_thread = self
             self.running = True
             print(f"✅ Local server running on http://localhost:{self.port}")
             
@@ -71,9 +75,18 @@ class Handler(BaseHTTPRequestHandler):
                 data = json.loads(self.rfile.read(length).decode())
                 urls = data.get('urls', [])
                 
+                print(f"📥 Received {len(urls)} URL(s)")  # دیباگ
+                
                 if urls and hasattr(self.server, 'server_thread'):
-                    
-                    self.server.server_thread.urls_received.emit(urls)
+                    thread = self.server.server_thread
+                    if thread.main_window:
+                        # حالت GUI - از main_window استفاده کن
+                        from PyQt6.QtCore import QTimer
+                        QTimer.singleShot(0, lambda: thread.main_window._add_downloads_from_extension(urls))
+                    else:
+                        # 🔥 حالت Daemon - اجرای مستقیم با --add
+                        print(f"🚀 Daemon mode: Launching FelfelDM with {len(urls)} URL(s)")
+                        self._launch_with_urls(urls)
                 
                 self.send_response(200)
                 self.send_header('Content-Type', 'application/json')
@@ -88,6 +101,26 @@ class Handler(BaseHTTPRequestHandler):
         else:
             self.send_response(404)
             self.end_headers()
+    
+    def _launch_with_urls(self, urls):
+        """Launch FelfelDM with URLs in daemon mode"""
+        try:
+            # مسیر فایل اجرایی
+            exe_path = "/usr/local/bin/FelfelDM"
+            if not os.path.exists(exe_path):
+                exe_path = "FelfelDM"
+            
+            # اجرا با --add
+            cmd = [exe_path, "--add"] + urls
+            subprocess.Popen(
+                cmd,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                start_new_session=True
+            )
+            print(f"✅ Launched: {' '.join(cmd)}")
+        except Exception as e:
+            print(f"❌ Failed to launch: {e}")
     
     def log_message(self, *args):
         pass
@@ -104,7 +137,6 @@ class LocalServer:
             return True
         
         try:
-            
             sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             sock.settimeout(1)
             result = sock.connect_ex(('localhost', port))
@@ -114,11 +146,10 @@ class LocalServer:
                 print(f"⚠️ Port {port} already in use")
                 return True
             
+            self.thread = ServerThread(port, self.main_window)
             
-            self.thread = ServerThread(port)
-            
-            
-            self.thread.urls_received.connect(self.main_window._add_downloads_from_extension)
+            if self.main_window:
+                self.thread.urls_received.connect(self.main_window._add_downloads_from_extension)
             
             self.thread.start()
             return True

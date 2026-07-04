@@ -416,11 +416,133 @@ class SettingsDialog(QDialog):
         cleanup_layout.addWidget(self.auto_clear_completed)
         lay.addWidget(cleanup_group)
 
+        # === Service ===
+        service_group = QGroupBox("Service")
+        service_layout = QVBoxLayout(service_group)
+        
+        self.run_as_service = QCheckBox("Run as background service (auto-start on login)")
+        self.run_as_service.setChecked(settings.get("run_as_service", False))
+        self.run_as_service.toggled.connect(self._on_service_toggle)
+        service_layout.addWidget(self.run_as_service)
+        
+        self.service_status = QLabel("")
+        self.service_status.setStyleSheet("color: #95a5a6; font-size: 11px;")
+        service_layout.addWidget(self.service_status)
+        
+        lay.addWidget(service_group)
+
         # Buttons
         btn_box = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
         btn_box.accepted.connect(self.accept)
         btn_box.rejected.connect(self.reject)
         lay.addWidget(btn_box)
+        
+        # Update status on load
+        self._update_service_status()
+
+    def _update_service_status(self):
+        """Update service status label"""
+        if self.run_as_service.isChecked():
+            self.service_status.setText("✅ Service is active")
+            self.service_status.setStyleSheet("color: #27ae60; font-size: 11px;")
+        else:
+            self.service_status.setText("🔹 Service is inactive")
+            self.service_status.setStyleSheet("color: #95a5a6; font-size: 11px;")
+
+    def _on_service_toggle(self, checked):
+        """Handle service toggle"""
+        if checked:
+            self.service_status.setText("🔄 Installing service...")
+            self.service_status.setStyleSheet("color: #f39c12; font-size: 11px;")
+            QApplication.processEvents()
+            
+            success = self._install_service()
+            if success:
+                self.service_status.setText("✅ Service installed and running")
+                self.service_status.setStyleSheet("color: #27ae60; font-size: 11px;")
+            else:
+                self.service_status.setText("❌ Failed to install service")
+                self.service_status.setStyleSheet("color: #e74c3c; font-size: 11px;")
+                self.run_as_service.setChecked(False)
+        else:
+            self.service_status.setText("🔄 Removing service...")
+            self.service_status.setStyleSheet("color: #f39c12; font-size: 11px;")
+            QApplication.processEvents()
+            
+            success = self._remove_service()
+            if success:
+                self.service_status.setText("✅ Service removed")
+                self.service_status.setStyleSheet("color: #95a5a6; font-size: 11px;")
+            else:
+                self.service_status.setText("❌ Failed to remove service")
+                self.service_status.setStyleSheet("color: #e74c3c; font-size: 11px;")
+                self.run_as_service.setChecked(True)
+
+    def _install_service(self):
+        """Install user systemd service"""
+        try:
+            import subprocess
+            import os
+            
+            # Get executable path
+            import sys
+            if getattr(sys, 'frozen', False):
+                exe_path = sys.executable
+            else:
+                exe_path = "/usr/local/bin/FelfelDM"
+            
+            # Create service directory
+            service_dir = os.path.expanduser("~/.config/systemd/user")
+            os.makedirs(service_dir, exist_ok=True)
+            
+            service_content = f'''[Unit]
+Description=FelfelDM Download Manager Service
+After=network.target
+
+[Service]
+Type=simple
+ExecStart={exe_path} --daemon
+Restart=on-failure
+RestartSec=10
+
+[Install]
+WantedBy=default.target
+'''
+            
+            service_path = os.path.join(service_dir, "felfeldm.service")
+            with open(service_path, 'w') as f:
+                f.write(service_content)
+            
+            # Enable and start service
+            subprocess.run(['systemctl', '--user', 'daemon-reload'], check=True, capture_output=True)
+            subprocess.run(['systemctl', '--user', 'enable', 'felfeldm.service'], check=True, capture_output=True)
+            subprocess.run(['systemctl', '--user', 'start', 'felfeldm.service'], check=True, capture_output=True)
+            
+            return True
+        except Exception as e:
+            print(f"Service install error: {e}")
+            return False
+
+    def _remove_service(self):
+        """Remove user systemd service"""
+        try:
+            import subprocess
+            import os
+            
+            service_path = os.path.expanduser("~/.config/systemd/user/felfeldm.service")
+            
+            subprocess.run(['systemctl', '--user', 'stop', 'felfeldm.service'], check=True, capture_output=True)
+            subprocess.run(['systemctl', '--user', 'disable', 'felfeldm.service'], check=True, capture_output=True)
+            
+            if os.path.exists(service_path):
+                os.remove(service_path)
+            
+            subprocess.run(['systemctl', '--user', 'daemon-reload'], check=True, capture_output=True)
+            
+            return True
+        except Exception as e:
+            print(f"Service remove error: {e}")
+            return False
 
     def get_settings(self):
         return {
@@ -432,4 +554,5 @@ class SettingsDialog(QDialog):
             "max_concurrent": self.max_concurrent.value(),
             "auto_clear_completed": self.auto_clear_completed.isChecked(),
             "theme": self.theme_combo.currentText().lower(),
+            "run_as_service": self.run_as_service.isChecked(),
         }
