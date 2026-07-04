@@ -223,12 +223,6 @@ python3 main.py
 
 ---
 
-## 📄 License
-
-MIT License - see [LICENSE](LICENSE) file for details
-
----
-
 ## 🙏 Acknowledgments
 
 - [aria2](https://aria2.github.io/) — High-speed download utility
