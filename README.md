@@ -148,13 +148,14 @@ FelfelDM/
 ├── ui/                      # UI components (main_window, dialogs, splash)
 ├── utils/                   # Utilities (helpers, style)
 ├── FelfelDM-extension/      # Browser extension
-├── logo/ & icons/           # Application icons (circular, high quality)
+├── logo                     # Application icons (circular, high quality)
+├── screenshots              # Application ScreenShots
 ├── main.py                  # Entry point with CLI support
 ├── install.sh               # Installation script (all distros)
 ├── uninstall.sh             # Uninstallation script
 ├── build_and_install.sh     # Build and install
 ├── requirements.txt         # Python dependencies
-└── README.md               # This file
+└── README.md                # This file
 ```
 
 ---
@@ -217,11 +218,7 @@ python3 main.py
 ### Building from Source
 
 ```bash
-# With PyInstaller
-./build_and_install.sh
-
-# With Nuitka
-./build_nuitka.sh
+./install.sh
 ```
 
 ---
@@ -245,7 +242,7 @@ MIT License - see [LICENSE](LICENSE) file for details
 
 - 🐛 **Issues**: [GitHub Issues](https://github.com/hoomaanf/FelfelDM/issues)
 - 💬 **Discussions**: [GitHub Discussions](https://github.com/hoomaanf/FelfelDM/discussions)
-- 📧 **Email**: hoomaanf@example.com
+- 📧 **Email**: hoomaanfelfeli@gmail.com
 
 ---
 
