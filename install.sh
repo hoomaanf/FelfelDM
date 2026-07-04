@@ -97,6 +97,7 @@ case "$DISTRO" in
             aria2 \
             git \
             papirus-icon-theme \
+            yt-dlp \
             --noconfirm
         ;;
         
@@ -109,7 +110,8 @@ case "$DISTRO" in
             python3-pyqt6 \
             aria2 \
             git \
-            papirus-icon-theme
+            papirus-icon-theme \
+            yt-dlp
         ;;
         
     fedora)
@@ -121,6 +123,8 @@ case "$DISTRO" in
             aria2 \
             git \
             papirus-icon-theme 2>/dev/null || echo "⚠ papirus-icon-theme not available"
+        # yt-dlp on fedora
+        $SUDO dnf install -y yt-dlp 2>/dev/null || echo "⚠ yt-dlp not available, installing via pip"
         ;;
         
     rhel)
@@ -131,6 +135,7 @@ case "$DISTRO" in
             aria2 \
             git
         echo -e "${YELLOW}⚠ papirus-icon-theme not available${NC}"
+        echo -e "${YELLOW}⚠ yt-dlp not available, installing via pip${NC}"
         ;;
         
     opensuse)
@@ -141,6 +146,8 @@ case "$DISTRO" in
             python3-qt6 \
             aria2 \
             git
+        # yt-dlp on opensuse
+        $SUDO zypper install -y yt-dlp 2>/dev/null || echo "⚠ yt-dlp not available, installing via pip"
         ;;
         
     alpine)
@@ -151,6 +158,8 @@ case "$DISTRO" in
             py3-pyqt6 \
             aria2 \
             git
+        # yt-dlp on alpine
+        $SUDO apk add yt-dlp 2>/dev/null || echo "⚠ yt-dlp not available, installing via pip"
         ;;
         
     *)
@@ -160,6 +169,7 @@ case "$DISTRO" in
         echo "  - PyQt6"
         echo "  - aria2"
         echo "  - git"
+        echo "  - yt-dlp"
         exit 1
         ;;
 esac
@@ -169,7 +179,7 @@ esac
 # ============================================
 echo -e "${YELLOW}📦 Installing pip packages...${NC}"
 
-PIP_PACKAGES="requests keyring appdirs"
+PIP_PACKAGES="requests keyring appdirs yt-dlp"
 
 for pkg in $PIP_PACKAGES; do
     if ! python3 -c "import $pkg" >/dev/null 2>&1; then

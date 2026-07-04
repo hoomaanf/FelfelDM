@@ -50,6 +50,7 @@
 - 🎬 **Splash Screen** — Beautiful loading animation with circular logo
 - 🔧 **Systemd Service** — Run as background service
 - 📥 **CLI Support** — Add URLs from command line with `--add`
+- 🎵 **YouTube Download** — Download videos/audio from YouTube with cookies support
 
 ---
 
@@ -97,7 +98,7 @@ FelfelDM --clear
 
 ### Adding Downloads
 
-1. Click **Add** button or press `Ctrl+N`
+1. Click **Download** button or press `Ctrl+N`
 2. Enter URLs (one per line)
 3. Select queue and options
 4. Click OK
@@ -137,6 +138,7 @@ cd FelfelDM-extension
 - 🎯 **Download Interception** — Auto-catch browser downloads
 - 🔔 **Notifications** — Status updates and confirmations
 - 🔄 **Toggle Switch** — Enable/disable download catching
+- 📡 **Dual Port Support** — Works with both GUI and service modes
 
 ---
 
@@ -148,12 +150,11 @@ FelfelDM/
 ├── ui/                      # UI components (main_window, dialogs, splash)
 ├── utils/                   # Utilities (helpers, style)
 ├── FelfelDM-extension/      # Browser extension
-├── logo                     # Application icons (circular, high quality)
-├── screenshots              # Application ScreenShots
+├── logo/                    # Application icons (circular, high quality)
+├── screenshots/             # Application screenshots
 ├── main.py                  # Entry point with CLI support
 ├── install.sh               # Installation script (all distros)
 ├── uninstall.sh             # Uninstallation script
-├── build_and_install.sh     # Build and install
 ├── requirements.txt         # Python dependencies
 └── README.md                # This file
 ```
@@ -178,8 +179,9 @@ sudo dnf install aria2
 ### Extension not connecting
 
 1. Make sure FelfelDM is running
-2. Test: `curl http://localhost:8765/ping`
-3. Check service status: `systemctl --user status felfeldm.service`
+2. Test GUI: `curl http://localhost:8766/ping`
+3. Test Service: `curl http://localhost:8765/ping`
+4. Check service status: `systemctl --user status felfeldm.service`
 
 ### Service not starting
 
@@ -199,6 +201,12 @@ chmod +x main.py
 chmod +x install.sh
 chmod +x uninstall.sh
 ```
+
+### YouTube download requires cookies
+
+1. Install browser extension: [Get cookies.txt](https://addons.mozilla.org/en-US/firefox/addon/get-cookies-txt/)
+2. Export cookies from YouTube
+3. Use the cookie file in YouTube download dialog
 
 ---
 
@@ -229,6 +237,7 @@ python3 main.py
 - [PyQt6](https://www.riverbankcomputing.com/software/pyqt/) — Python bindings for Qt6
 - [Papirus](https://github.com/PapirusDevelopmentTeam/papirus-icon-theme) — Icon theme
 - [systemd](https://systemd.io/) — Service management
+- [yt-dlp](https://github.com/yt-dlp/yt-dlp) — YouTube downloading
 
 ---
 
