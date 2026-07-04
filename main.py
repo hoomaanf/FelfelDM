@@ -6,17 +6,51 @@ import sys
 import signal
 import os
 import argparse
+import threading
+import time
 from PyQt6.QtWidgets import QApplication
 from PyQt6.QtGui import QIcon
-from PyQt6.QtCore import Qt, QTimer
+from PyQt6.QtCore import Qt, QTimer, QCoreApplication
 from ui.main_window import MainWindow
 from utils.style import setup_style, CustomProxyStyle
 
+# Global reference for cleanup
+server = None
+app = None
+
 def signal_handler(sig, frame):
-    print("\nForce exit...")
-    sys.exit(0)
+    """Handle SIGINT and SIGTERM signals"""
+    print("\n🛑 Received signal, shutting down...")
+    
+    # Stop local server
+    global server
+    if server:
+        try:
+            server.stop()
+            print("✅ Server stopped")
+        except:
+            pass
+    
+    # Quit application
+    global app
+    if app:
+        try:
+            app.quit()
+        except:
+            pass
+    
+    # Force exit after 2 seconds
+    def force_exit():
+        print("⏰ Force exiting...")
+        sys.exit(0)
+    
+    timer = threading.Timer(2.0, force_exit)
+    timer.daemon = True
+    timer.start()
 
 def main():
+    global server, app
+    
     parser = argparse.ArgumentParser(description="FelfelDM - Download Manager")
     parser.add_argument("--add", nargs="+", help="Add URLs to download")
     parser.add_argument("--clear", action="store_true", help="Clear all data")
@@ -35,14 +69,18 @@ def main():
     if args.daemon:
         print("🌶️ FelfelDM Daemon starting...")
         
-        # ⭐ نیاز به QApplication برای event loop
+        # Create QApplication without GUI
         app = QApplication(sys.argv)
         
         from core.local_server import LocalServer
         server = LocalServer()
         server.start(8765)
         
-        # اجرای event loop
+        # Register signal handlers
+        signal.signal(signal.SIGINT, signal_handler)
+        signal.signal(signal.SIGTERM, signal_handler)
+        
+        # Start event loop
         sys.exit(app.exec())
         return
     
@@ -93,6 +131,7 @@ def main():
 
 
 if __name__ == "__main__":
+    # Default signal handlers
     signal.signal(signal.SIGINT, signal_handler)
     signal.signal(signal.SIGTERM, signal_handler)
     main()

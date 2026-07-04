@@ -120,7 +120,7 @@ class MainWindow(QMainWindow):
         self.splash.update_status("Starting local server...", 95)
         QApplication.processEvents()
         self.local_server = LocalServer(main_window=self)
-        self.local_server.start(8765)
+        self.local_server.start(8766)
 
         self.splash.update_status("Ready!", 100)
         QApplication.processEvents()
@@ -219,7 +219,7 @@ class MainWindow(QMainWindow):
         tb_lay.setContentsMargins(8, 4, 8, 4)
         tb_lay.setSpacing(4)
 
-        self.btn_add = QPushButton(get_icon('list-add'), "Download")
+        self.btn_add = QPushButton(get_icon('download'), "Download")
         self.btn_add.clicked.connect(self._quick_download)
 
         self.btn_add_queue = QPushButton(get_icon('list-add'), "Add to Queue")
@@ -244,6 +244,14 @@ class MainWindow(QMainWindow):
         self.btn_clear_completed.clicked.connect(self._clear_completed_downloads)
         tb_lay.addWidget(self.btn_clear_completed)
 
+        self.btn_youtube = QPushButton()
+        self.btn_youtube.setIcon(get_icon('video-display'))
+        self.btn_youtube.setText(" YouTube")
+        self.btn_youtube.clicked.connect(self._youtube_download)
+        tb_lay.addWidget(self.btn_youtube)
+        
+        tb_lay.addWidget(self.btn_youtube)
+            
         tb_lay.addStretch()
 
         self.search_box = QLineEdit()
@@ -742,6 +750,7 @@ class MainWindow(QMainWindow):
             self._update_queue_buttons()
             
             
+    @pyqtSlot(list)
     def _add_downloads_from_extension(self, urls):
         if not urls:
             return
@@ -750,7 +759,6 @@ class MainWindow(QMainWindow):
         self.raise_()
         self.activateWindow()
 
-        # اگه تک لینک بود، quick download کن
         if len(urls) == 1:
             from ui.dialogs import QuickDownloadDialog
             dlg = QuickDownloadDialog(self)
@@ -796,7 +804,6 @@ class MainWindow(QMainWindow):
                     QTimer.singleShot(500, lambda: self._open_progress_dialog(added_gids[0]))
             return
 
-        # چند تا لینک → add to queue
         visible_queues = [q for q in self.store.queues if q.name != "__direct__"]
         
         default_idx = 0
@@ -863,8 +870,7 @@ class MainWindow(QMainWindow):
                 self.tray.showMessage("FelfelDM", f"✅ Added {added} download(s) in paused state",
                                     QSystemTrayIcon.MessageIcon.Information, 2000)
             
-            self._refresh_table()
-            
+            self._refresh_table()   
     def _add_download(self):
         visible_queues = [q for q in self.store.queues if q.name != "__direct__"]
         
@@ -1667,3 +1673,37 @@ class MainWindow(QMainWindow):
         if hasattr(self, 'splash') and self.splash:
             self.splash.close()
             self.splash = None
+            
+    def _youtube_download(self):
+        """دانلود از یوتیوب"""
+        from ui.dialogs import YouTubeDownloadDialog
+        
+        dlg = YouTubeDownloadDialog(self)
+        
+        clip = QApplication.clipboard().text().strip()
+        if clip and ("youtube.com" in clip or "youtu.be" in clip):
+            dlg.url_edit.setText(clip)
+        
+        if dlg.exec():
+            data = dlg.get_data()
+            if not data["url"]:
+                QMessageBox.warning(self, "Error", "Please enter a YouTube URL.")
+                return
+            
+            os.makedirs(data["path"], exist_ok=True)
+            
+            from ui.youtube_progress import YouTubeProgressDialog
+            progress_dlg = YouTubeProgressDialog(
+                data["url"],
+                data["path"],
+                data["format"],
+                data["cookie_file"],
+                data.get("video_info"),
+                self
+            )
+            progress_dlg.exec()
+            
+            if progress_dlg.result() == QDialog.DialogCode.Accepted:
+                self.tray.showMessage("FelfelDM", 
+                    "YouTube download completed!",
+                    QSystemTrayIcon.MessageIcon.Information, 3000)

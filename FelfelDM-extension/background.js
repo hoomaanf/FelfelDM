@@ -1,4 +1,5 @@
-const SERVER = "http://localhost:8765";
+const SERVER_GUI = "http://localhost:8766";
+const SERVER_DAEMON = "http://localhost:8765";
 const ICON_URL = browser.runtime.getURL("icons/icon128.png");
 
 async function isCatchEnabled() {
@@ -6,21 +7,37 @@ async function isCatchEnabled() {
   return data.catchDownloads !== undefined ? data.catchDownloads : true;
 }
 
-async function ping() {
+async function ping(port) {
   try {
-    const r = await fetch(`${SERVER}/ping`);
+    const r = await fetch(`http://localhost:${port}/ping`);
     return r.ok;
   } catch {
     return false;
   }
 }
 
+async function findActiveServer() {
+  const guiOk = await ping(8766);
+  if (guiOk) {
+    console.log("🔍 Found GUI on port 8766");
+    return SERVER_GUI;
+  }
+
+  const daemonOk = await ping(8765);
+  if (daemonOk) {
+    console.log("🔍 Found Daemon on port 8765");
+    return SERVER_DAEMON;
+  }
+
+  return null;
+}
+
 async function send(urls) {
   if (!urls || urls.length === 0) return false;
 
-  const ok = await ping();
+  const server = await findActiveServer();
 
-  if (!ok) {
+  if (!server) {
     await browser.notifications.create({
       type: "basic",
       iconUrl: ICON_URL,
@@ -31,7 +48,7 @@ async function send(urls) {
   }
 
   try {
-    const r = await fetch(`${SERVER}/add`, {
+    const r = await fetch(`${server}/add`, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
@@ -237,7 +254,7 @@ browser.runtime.onMessage.addListener((message, sender, sendResponse) => {
   }
 
   if (message.action === "ping") {
-    ping().then((result) => {
+    ping(8766).then((result) => {
       sendResponse({ status: result ? "ok" : "error" });
     });
     return true;
@@ -245,3 +262,5 @@ browser.runtime.onMessage.addListener((message, sender, sendResponse) => {
 });
 
 console.log("🌶️ FelfelDM Extension loaded!");
+console.log("   GUI: http://localhost:8766");
+console.log("   Daemon: http://localhost:8765");
