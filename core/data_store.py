@@ -4,13 +4,15 @@ from datetime import datetime, time as dtime
 from pathlib import Path
 from appdirs import user_config_dir
 import keyring
+from core.proxy_manager import ProxyConfig
 
 KEYRING_SERVICE = "felfelDM"
 KEYRING_KEY = "aria2_secret"
 
 class Queue:
     def __init__(self, name, max_concurrent=3, save_path="", schedule_enabled=False,
-                 schedule_start=None, schedule_end=None, days=None, paused=True):
+                 schedule_start=None, schedule_end=None, days=None, paused=True,
+                 proxy_config=None):
         self.name = name
         self.max_concurrent = max_concurrent
         self.save_path = save_path or os.path.expanduser("~/Downloads")
@@ -19,9 +21,19 @@ class Queue:
         self.schedule_end = schedule_end or dtime(23, 59)
         self.days = days or [0, 1, 2, 3, 4, 5, 6]
         self.downloads = []
+        self.download_proxies = {}
         self.paused = paused
+        self.proxy_config = proxy_config
 
     def to_dict(self):
+        proxy_dict = None
+        if self.proxy_config:
+            from core.proxy_manager import ProxyConfig
+            if isinstance(self.proxy_config, ProxyConfig):
+                proxy_dict = self.proxy_config.to_dict()
+            else:
+                proxy_dict = self.proxy_config
+        
         return {
             "name": self.name,
             "max_concurrent": self.max_concurrent,
@@ -32,6 +44,7 @@ class Queue:
             "days": self.days,
             "downloads": self.downloads,
             "paused": self.paused,
+            "proxy_config": proxy_dict,
         }
 
     @classmethod
@@ -51,6 +64,15 @@ class Queue:
         q.days = d.get("days", [0, 1, 2, 3, 4, 5, 6])
         q.downloads = list(d.get("downloads", []))
 
+        proxy_config = d.get("proxy_config")
+        if proxy_config:
+            try:
+                q.proxy_config = ProxyConfig.from_dict(proxy_config)
+            except Exception as e:
+                print(f"⚠️ Error loading proxy config for queue {name}: {e}")
+                q.proxy_config = None
+        else:
+            q.proxy_config = None
         return q
 
     def is_scheduled_now(self):
@@ -75,6 +97,7 @@ class DataStore:
         self.data_file = self.config_dir / "data.json"
         self.queues = []
         self.settings = self._get_default_settings()
+        self.download_proxies = {} 
         self.load()
 
     def _get_default_settings(self):
@@ -90,6 +113,10 @@ class DataStore:
             "auto_clear_completed": False,
             "theme": "auto",
             "run_as_service": False, 
+            "proxy_settings": {
+                "global": None,
+                "queues": {}
+            }
         }
 
     def load(self):
@@ -100,10 +127,11 @@ class DataStore:
                 
                 self.queues = [Queue.from_dict(q) for q in data.get("queues", [])]
                 self.settings.update(data.get("settings", {}))
+                self.download_proxies = data.get("download_proxies", {})  
             except Exception as e:
                 print(f"⚠️ Error loading data: {e}")
                 self._backup_corrupted_file()
-
+                self.download_proxies = {}
         if not self.queues:
             self.queues = [Queue("Default", paused=True)]
 
@@ -130,7 +158,8 @@ class DataStore:
                 json.dump({
                     "queues": [q.to_dict() for q in self.queues],
                     "settings": self.settings,
-                }, f, indent=2, ensure_ascii=False)
+                    "download_proxies": self.download_proxies if hasattr(self, 'download_proxies') else {},}
+                    , f, indent=2, ensure_ascii=False)
         except Exception as e:
             print(f"⚠️ Error saving data: {e}")
 

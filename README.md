@@ -51,6 +51,8 @@
 - 🔧 **Systemd Service** — Run as background service
 - 📥 **CLI Support** — Add URLs from command line with `--add`
 - 🎵 **YouTube Download** — Download videos/audio from YouTube with cookies support
+- 🌐 **Proxy Support** — Global, per-queue, and per-download proxy configuration (HTTP/HTTPS/SOCKS5)
+- 📦 **Independent Progress Windows** — Separate windows for download progress that stay open even when main window is closed
 
 ---
 
@@ -103,6 +105,21 @@ FelfelDM --clear
 3. Select queue and options
 4. Click OK
 
+### Proxy Configuration
+
+FelfelDM supports proxy configuration at three levels:
+
+| Level | Description | Where to Configure |
+|-------|-------------|-------------------|
+| **Global Proxy** | Applies to all downloads by default | Settings → Proxy Settings |
+| **Queue Proxy** | Overrides global proxy for a specific queue | Right-click queue → Settings → Proxy Settings |
+| **Download Proxy** | Overrides all other proxy settings for a single download | Add Download dialog → Proxy Settings or right-click → Proxy Settings |
+
+**Supported Proxy Types:**
+- HTTP/HTTPS Proxy (`http://proxy:port`)
+- SOCKS5 Proxy (`socks5://proxy:port`)
+- Authentication supported via `user:pass@host:port`
+
 ### Keyboard Shortcuts
 
 | Shortcut | Action              |
@@ -146,8 +163,8 @@ cd FelfelDM-extension
 
 ```bash
 FelfelDM/
-├── core/                    # Core modules (aria2, worker, data_store)
-├── ui/                      # UI components (main_window, dialogs, splash)
+├── core/                    # Core modules (aria2, worker, data_store, proxy_manager)
+├── ui/                      # UI components (main_window, dialogs, splash, proxy_dialog)
 ├── utils/                   # Utilities (helpers, style)
 ├── FelfelDM-extension/      # Browser extension
 ├── logo/                    # Application icons (circular, high quality)
@@ -166,14 +183,14 @@ FelfelDM/
 ### aria2 not found
 
 ```bash
-# Arch
-sudo pacman -S aria2
+# Arch / Manjaro
+sudo pacman -S aria2 yt-dlp
 
-# Debian/Ubuntu
-sudo apt install aria2
+# Debian / Ubuntu / Mint
+sudo apt install aria2 yt-dlp
 
 # Fedora
-sudo dnf install aria2
+sudo dnf install aria2 yt-dlp
 ```
 
 ### Extension not connecting
@@ -204,9 +221,16 @@ chmod +x uninstall.sh
 
 ### YouTube download requires cookies
 
-1. Install browser extension: [Get cookies.txt](https://addons.mozilla.org/en-US/firefox/addon/get-cookies-txt/)
+1. Install browser extension: [Get cookies.txt](https://github.com/rotemdan/ExportCookies)
 2. Export cookies from YouTube
 3. Use the cookie file in YouTube download dialog
+
+### Proxy not working
+
+1. Test proxy in terminal: `curl -x http://proxy:port https://www.google.com`
+2. For SOCKS5, use: `curl -x socks5://proxy:port https://www.google.com`
+3. Check authentication format: `http://user:pass@proxy:port`
+4. Make sure proxy is enabled in Settings
 
 ---
 

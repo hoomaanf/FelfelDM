@@ -1,5 +1,3 @@
-# ui/youtube_progress.py
-
 import os
 from PyQt6.QtWidgets import QDialog, QMessageBox, QVBoxLayout, QLabel, QProgressBar, QPushButton, QHBoxLayout, QGroupBox, QFormLayout, QWidget
 from PyQt6.QtCore import Qt
@@ -8,15 +6,33 @@ from core.youtube_worker import YouTubeWorker
 from utils.helpers import format_size, get_icon
 
 class YouTubeProgressDialog(QDialog):
-    def __init__(self, url, output_path, format_type="mp4", cookie_file=None, video_info=None, parent=None):
+    def __init__(self, url, output_path, format_type="mp4", cookie_file=None, video_info=None, parent=None, proxy_url=None):
         super().__init__(parent)
         self.setWindowTitle("YouTube Download")
         self.setMinimumWidth(520)
+        
+        self.setWindowFlags(
+            Qt.WindowType.Window |
+            Qt.WindowType.WindowCloseButtonHint |
+            Qt.WindowType.WindowMinimizeButtonHint |
+            Qt.WindowType.WindowMaximizeButtonHint
+        )
+        self.setWindowModality(Qt.WindowModality.NonModal)
+        
+        self.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose, True)
         self.setWindowFlags(self.windowFlags() & ~Qt.WindowType.WindowContextHelpButtonHint)
+        
+        # Store proxy_url
+        self.proxy_url = proxy_url
+        
+        # اگر proxy_url از parent نیامد، از parent بگیر
+        if not self.proxy_url and hasattr(parent, '_get_proxy_url'):
+            self.proxy_url = parent._get_proxy_url()
         
         layout = QVBoxLayout(self)
         layout.setSpacing(12)
         
+        # === Title ===
         title_layout = QHBoxLayout()
         title_icon = QLabel()
         title_icon.setPixmap(get_icon('video-display').pixmap(24, 24))
@@ -33,6 +49,7 @@ class YouTubeProgressDialog(QDialog):
         title_layout.addStretch()
         layout.addLayout(title_layout)
         
+        # === Video Information ===
         info_group = QGroupBox("Video Information")
         info_layout = QFormLayout(info_group)
         info_layout.setSpacing(8)
@@ -111,8 +128,23 @@ class YouTubeProgressDialog(QDialog):
                 size_layout.addWidget(QLabel(format_size(filesize)))
                 info_layout.addRow("Size:", size_widget)
         
+        # Show proxy info if available
+        if self.proxy_url:
+            proxy_widget = QWidget()
+            proxy_layout = QHBoxLayout(proxy_widget)
+            proxy_layout.setContentsMargins(0, 0, 0, 0)
+            proxy_icon = QLabel()
+            proxy_icon.setPixmap(get_icon('network').pixmap(16, 16))
+            proxy_layout.addWidget(proxy_icon)
+            proxy_label = QLabel(f"✅ {self.proxy_url}")
+            proxy_label.setStyleSheet("color: #27ae60;")
+            proxy_label.setWordWrap(True)
+            proxy_layout.addWidget(proxy_label)
+            info_layout.addRow("Proxy:", proxy_widget)
+        
         layout.addWidget(info_group)
         
+        # === Progress ===
         self.progress_bar = QProgressBar()
         self.progress_bar.setRange(0, 100)
         self.progress_bar.setValue(0)
@@ -129,6 +161,7 @@ class YouTubeProgressDialog(QDialog):
         self.speed_eta_label.setStyleSheet("color: #95a5a6; font-size: 11px;")
         layout.addWidget(self.speed_eta_label)
         
+        # === Buttons ===
         btn_layout = QHBoxLayout()
         
         self.pause_btn = QPushButton()
@@ -154,7 +187,14 @@ class YouTubeProgressDialog(QDialog):
         
         layout.addLayout(btn_layout)
         
-        self.worker = YouTubeWorker(url, output_path, format_type, cookie_file)
+        # === Create Worker with proxy ===
+        self.worker = YouTubeWorker(
+            url=url,
+            output_path=output_path,
+            format_type=format_type,
+            cookie_file=cookie_file,
+            proxy_url=self.proxy_url 
+        )
         self.worker.progress.connect(self._on_progress)
         self.worker.status.connect(self._on_status)
         self.worker.speed_eta.connect(self._on_speed_eta)
@@ -164,34 +204,51 @@ class YouTubeProgressDialog(QDialog):
         self.worker.start()
     
     def _on_progress(self, value):
+        """Update progress bar"""
         self.progress_bar.setValue(value)
         self.progress_bar.setFormat(f"{value}%")
     
     def _on_status(self, text):
+        """Update status label"""
         self.status_label.setText(text)
     
     def _on_speed_eta(self, speed, eta):
-        self.speed_eta_label.setText(f"Speed: {speed}  |  ETA: {eta}")
+        """Update speed and ETA"""
+        if speed and eta:
+            self.speed_eta_label.setText(f"Speed: {speed}  |  ETA: {eta}")
+        elif speed:
+            self.speed_eta_label.setText(f"Speed: {speed}")
+        elif eta:
+            self.speed_eta_label.setText(f"ETA: {eta}")
+        else:
+            self.speed_eta_label.setText("")
     
     def _on_paused(self):
+        """Handle pause"""
         self.pause_btn.setEnabled(False)
         self.resume_btn.setEnabled(True)
-        self.status_label.setText("Paused")
+        self.status_label.setText("⏸ Paused")
+        self.status_label.setStyleSheet("color: #f39c12;")
     
     def _on_resumed(self):
+        """Handle resume"""
         self.pause_btn.setEnabled(True)
         self.resume_btn.setEnabled(False)
-        self.status_label.setText("Resuming...")
+        self.status_label.setText("▶ Downloading...")
+        self.status_label.setStyleSheet("color: #3daee9;")
     
     def _on_pause(self):
+        """Pause button clicked"""
         if hasattr(self, 'worker'):
             self.worker.pause()
     
     def _on_resume(self):
+        """Resume button clicked"""
         if hasattr(self, 'worker'):
             self.worker.resume()
     
     def _on_finished(self, success, message):
+        """Handle download completion"""
         self.progress_bar.setValue(100 if success else 0)
         self.pause_btn.setEnabled(False)
         self.resume_btn.setEnabled(False)
@@ -199,7 +256,9 @@ class YouTubeProgressDialog(QDialog):
         
         if success:
             self.title_label.setText("✅ Download completed!")
+            self.title_label.setStyleSheet("font-size: 15px; font-weight: bold; color: #27ae60;")
             self.status_label.setText(message)
+            self.status_label.setStyleSheet("color: #27ae60;")
             self.speed_eta_label.setText("")
             self.cancel_btn.setText(" Close")
             self.cancel_btn.setIcon(get_icon('window-close'))
@@ -208,7 +267,9 @@ class YouTubeProgressDialog(QDialog):
             self.cancel_btn.clicked.connect(self.accept)
         else:
             self.title_label.setText("❌ Download failed!")
+            self.title_label.setStyleSheet("font-size: 15px; font-weight: bold; color: #e74c3c;")
             self.status_label.setText(message)
+            self.status_label.setStyleSheet("color: #e74c3c;")
             self.cancel_btn.setText(" Close")
             self.cancel_btn.setIcon(get_icon('window-close'))
             self.cancel_btn.setEnabled(True)
@@ -216,12 +277,26 @@ class YouTubeProgressDialog(QDialog):
             self.cancel_btn.clicked.connect(self.reject)
     
     def _on_cancel(self):
+        """Cancel button clicked"""
         if hasattr(self, 'worker'):
-            self.worker.cancel()
-        self.reject()
+            reply = QMessageBox.question(
+                self,
+                "Cancel Download",
+                "Are you sure you want to cancel this download?",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
+            )
+            if reply == QMessageBox.StandardButton.Yes:
+                self.worker.cancel()
+                self.status_label.setText("⏹ Cancelled")
+                self.status_label.setStyleSheet("color: #f39c12;")
+                self.pause_btn.setEnabled(False)
+                self.resume_btn.setEnabled(False)
+                self.cancel_btn.setEnabled(False)
+                QMessageBox.information(self, "Cancelled", "Download cancelled.")
+                self.reject()
     
     def closeEvent(self, event):
-        """When user closes the dialog"""
+        """Handle close event"""
         if hasattr(self, 'worker') and self.worker.isRunning():
             reply = QMessageBox.question(
                 self,
@@ -230,12 +305,10 @@ class YouTubeProgressDialog(QDialog):
                 QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
             )
             if reply == QMessageBox.StandardButton.Yes:
-                # Cancel and wait for thread to finish
                 self.worker.cancel()
-                self.worker.wait() 
+                self.worker.wait()
                 event.accept()
             else:
                 event.ignore()
         else:
             event.accept()
-            

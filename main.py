@@ -71,7 +71,6 @@ def main():
         from PyQt6.QtCore import QCoreApplication
         from core.local_server import LocalServer
         import signal
-        import sys
         import time
         
         app = QCoreApplication(sys.argv)

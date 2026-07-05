@@ -9,7 +9,7 @@ from PyQt6.QtCore import *
 from PyQt6.QtGui import *
 
 from core import Aria2RPC, DataStore, Queue, BackendWorker
-from ui.dialogs import AddDownloadDialog, SingleDownloadDialog, QueueSettingsDialog, SettingsDialog, DownloadProgressDialog
+from ui.dialogs import AddDownloadDialog, SingleDownloadDialog, QueueSettingsDialog, SettingsDialog, DownloadProgressDialog,QuickDownloadDialog
 from ui.table_model import DownloadTableModel
 from ui.delegates import ProgressDelegate
 from utils.helpers import format_size, format_speed, get_category, get_icon
@@ -17,6 +17,7 @@ from core.local_server import LocalServer
 from utils.helpers import get_resource_path
 from utils.style import setup_style
 from ui.splash import SplashScreen
+from core.proxy_manager import ProxyManager, ProxyConfig
 
 class MainWindow(QMainWindow):
     def __init__(self):
@@ -83,6 +84,8 @@ class MainWindow(QMainWindow):
             self.store.settings["aria2_port"],
             self.store.settings["aria2_secret"],
         )
+        self.proxy_manager = ProxyManager(self.store)
+        self._apply_proxy_to_aria2()
         self.aria2.on_error = self._on_aria2_error
 
         self.splash.update_status("Connecting to aria2...", 45)
@@ -250,8 +253,6 @@ class MainWindow(QMainWindow):
         self.btn_youtube.clicked.connect(self._youtube_download)
         tb_lay.addWidget(self.btn_youtube)
         
-        tb_lay.addWidget(self.btn_youtube)
-            
         tb_lay.addStretch()
 
         self.search_box = QLineEdit()
@@ -402,21 +403,63 @@ class MainWindow(QMainWindow):
         "<p>Built with PyQt6 and aria2</p>")
 
     def closeEvent(self, event):
+        """Handle close event - allow closing main window while downloads continue"""
+        has_active = False
+        for q in self.store.queues:
+            for gid in q.downloads:
+                if gid in self._all_downloads:
+                    status = self._all_downloads[gid].get("status")
+                    if status in ["active", "waiting"]:
+                        has_active = True
+                        break
+            if has_active:
+                break
+        
+        if has_active:
+            reply = QMessageBox.question(
+                self,
+                "Downloads in Progress",
+                "There are active downloads. Closing the main window will "
+                "keep downloads running in the background.\n\n"
+                "Do you want to close the main window?",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
+            )
+            if reply == QMessageBox.StandardButton.Yes:
+                self.hide()
+                self.tray.showMessage(
+                    "FelfelDM",
+                    "Downloads are running in the background.\n"
+                    "Double-click the tray icon to show the main window.",
+                    QSystemTrayIcon.MessageIcon.Information,
+                    3000
+                )
+                event.ignore()
+                return
+        
         if hasattr(self, 'tray') and self.tray.isVisible():
             self.hide()
-            self.tray.showMessage(
-                "FelfelDM",
-                "Application minimized to system tray.",
-                QSystemTrayIcon.MessageIcon.Information,
-                3000
-            )
             event.ignore()
         else:
             self.quit_app()
             event.accept()
         
     def quit_app(self):
-        print("Force shutting down...")
+        """Quit application and close all windows"""
+        print("🛑 Shutting down...")
+        
+        if hasattr(self, '_progress_dialog') and self._progress_dialog is not None:
+            try:
+                self._progress_dialog.close()
+            except:
+                pass
+            self._progress_dialog = None
+        
+        if hasattr(self, '_youtube_dialog') and self._youtube_dialog is not None:
+            try:
+                self._youtube_dialog.close()
+            except:
+                pass
+            self._youtube_dialog = None
         
         # Kill all background
         if hasattr(self, 'worker'):
@@ -699,12 +742,12 @@ class MainWindow(QMainWindow):
     def _add_queue(self):
         name, ok = QInputDialog.getText(self, "New Queue", "Queue name:")
         if ok and name.strip():
-            
             if name.strip() == "Default":
                 QMessageBox.warning(self, "Error", "Queue name 'Default' is reserved.")
                 return
             
-            self.store.queues.append(Queue(name.strip(), paused=True))
+            new_queue = Queue(name.strip(), paused=True, proxy_config=None)
+            self.store.queues.append(new_queue)
             self.store.save()
             self._refresh_queue_list()
             self._update_queue_buttons()
@@ -723,6 +766,14 @@ class MainWindow(QMainWindow):
             q.schedule_start = d["schedule_start"]
             q.schedule_end = d["schedule_end"]
             q.days = d["days"]
+            
+            q.proxy_config = d.get("proxy_config")
+        
+            if q.proxy_config:
+                self.proxy_manager.set_queue_proxy(q.name, q.proxy_config)
+            else:
+                self.proxy_manager.remove_queue_proxy(q.name)
+                
             self.store.save()
             self._refresh_queue_list()
             self._update_queue_buttons()
@@ -871,6 +922,7 @@ class MainWindow(QMainWindow):
                                     QSystemTrayIcon.MessageIcon.Information, 2000)
             
             self._refresh_table()   
+
     def _add_download(self):
         visible_queues = [q for q in self.store.queues if q.name != "__direct__"]
         
@@ -903,7 +955,9 @@ class MainWindow(QMainWindow):
             q = visible_queues[queue_index]
 
             self._apply_settings_to_aria2()
-
+            
+            proxy_mode = d.get("proxy_mode", 0)  # 0: global, 1: custom, 2: none
+            
             options = {
                 "dir": d["path"],
                 "split": str(d["connections"]),
@@ -914,12 +968,37 @@ class MainWindow(QMainWindow):
                 "always-resume": "true",
                 "header": ["User-Agent: Mozilla/5.0 (X11; Linux x86_64; rv:125.0) Gecko/20100101 Firefox/125.0"]
             }
+            
+            if proxy_mode == 0:  # Use Global/Queue Proxy
+                proxy = self.proxy_manager.get_proxy_for_queue(q.name)
+                if proxy and proxy.is_valid():
+                    options["all-proxy"] = proxy._build_proxy_url()
+                    print(f"🌐 Using queue/global proxy for {q.name}: {proxy._build_proxy_url()}")
+            elif proxy_mode == 1:  # Custom Proxy for this download
+                custom_proxy = d.get("custom_proxy")
+                if custom_proxy and custom_proxy.is_valid():
+                    options["all-proxy"] = custom_proxy._build_proxy_url()
+                    print(f"🔧 Using custom proxy: {custom_proxy._build_proxy_url()}")
+            elif proxy_mode == 2:  # No Proxy (Direct Connection)
+                options["all-proxy"] = ""
+                print(f"⛔ No proxy for this download")
+            else:
+                proxy = self.proxy_manager.get_proxy_for_queue(q.name)
+                if proxy and proxy.is_valid():
+                    options["all-proxy"] = proxy._build_proxy_url()
 
             added = 0
             new_gids = []
             for url in d["urls"]:
                 gid = self.aria2.add_url(url, options)
                 if gid:
+                    if gid in self._cleared_gids:
+                        self._cleared_gids.remove(gid)
+                    q.downloads.append(gid)
+                    new_gids.append(gid)
+                    added += 1
+                    self._pending_pause.add(gid)
+
                     self._all_downloads[gid] = {
                         "gid": gid,
                         "name": url.split("/")[-1] or "Unknown",
@@ -930,32 +1009,9 @@ class MainWindow(QMainWindow):
                         "connections": 0,
                         "files": [],
                         "errorMessage": "",
-                        "category": "📁 Other",
+                        "category": "📁 Other"
                     }
-
-                    self._refresh_table()
-                    QApplication.processEvents()
-                if gid:
-                    if gid in self._cleared_gids:
-                        self._cleared_gids.remove(gid)
-                    q.downloads.append(gid)
-                    new_gids.append(gid)
-                    added += 1
-                    if gid:
-                        self._pending_pause.add(gid)
-
-                        self._all_downloads[gid] = {
-                            "gid": gid,
-                            "name": url.split("/")[-1] or "Unknown",
-                            "status": "waiting",
-                            "totalLength": 0,
-                            "completedLength": 0,
-                            "downloadSpeed": 0,
-                            "connections": 0,
-                            "files": [],
-                            "errorMessage": "",
-                            "category": "📁 Other"
-                        }
+            
             self._refresh_table()
             self.store.save()
             self._refresh_queue_list()
@@ -974,7 +1030,6 @@ class MainWindow(QMainWindow):
                                     QSystemTrayIcon.MessageIcon.Information, 2000)
 
             self._refresh_table()
-            
     def _add_single_download(self):
         dlg = SingleDownloadDialog(self)
 
@@ -990,6 +1045,7 @@ class MainWindow(QMainWindow):
 
             self._apply_settings_to_aria2()
 
+            # === Proxy handling ===
             options = {
                 "dir": data["path"],
                 "split": str(data["connections"]),
@@ -998,6 +1054,19 @@ class MainWindow(QMainWindow):
                 "always-resume": "true",
                 "header": ["User-Agent: Mozilla/5.0 (X11; Linux x86_64; rv:125.0) Gecko/20100101 Firefox/125.0"]
             }
+
+            # Add proxy based on selection
+            proxy_mode = data.get("proxy_mode", 0)
+            if proxy_mode == 0:  # Use global/queue proxy
+                # Get proxy from queue or global
+                proxy = self.proxy_manager.get_proxy_for_queue("Single Downloads")
+                if proxy and proxy.is_valid():
+                    options["all-proxy"] = proxy._build_proxy_url()
+            elif proxy_mode == 1:  # Custom proxy
+                custom_proxy = data.get("custom_proxy")
+                if custom_proxy and custom_proxy.is_valid():
+                    options["all-proxy"] = custom_proxy._build_proxy_url()
+            # mode 2: No proxy - don't add any proxy
 
             gid = self.aria2.add_url(data["url"], options)
 
@@ -1032,7 +1101,7 @@ class MainWindow(QMainWindow):
                     f"Download added to 'Single Downloads' queue.\n"
                     f"Status: {'Downloading' if data['start_immediately'] else 'Paused'}")
             else:
-                QMessageBox.warning(self, "Error", "Could not add download. Is aria2 running?")
+                QMessageBox.warning(self, "Error", "Could not add download. Is aria2 running?")            
 
     def _pause_selected(self):
         gid = self._selected_gid()
@@ -1218,10 +1287,33 @@ class MainWindow(QMainWindow):
             return
         
         dl_data = self._all_downloads.get(gid, {})
-
+        download_name = dl_data.get("name", "Unknown")
+        
         menu = QMenu(self)
         menu.addAction(get_icon('media-playback-pause'), "Pause", self._pause_selected)
         menu.addAction(get_icon('media-playback-start'), "Resume", self._resume_selected)
+        menu.addSeparator()
+        
+        proxy_menu = menu.addMenu(get_icon('network'), "Proxy Settings")
+        
+        # Check current proxy
+        current_proxy = self.proxy_manager.get_proxy_for_download(gid)
+        if current_proxy:
+            proxy_menu.addAction(f"✅ Current: {current_proxy.get_display_string()}")
+        else:
+            # Check queue proxy
+            q = self._current_queue()
+            if q:
+                queue_proxy = self.proxy_manager.get_proxy_for_queue(q.name)
+                if queue_proxy:
+                    proxy_menu.addAction(f"📦 Queue: {queue_proxy.get_display_string()}")
+                else:
+                    proxy_menu.addAction("🌐 Global/No Proxy")
+        
+        proxy_menu.addSeparator()
+        proxy_menu.addAction("Set Custom Proxy", lambda: self._set_download_proxy(gid, download_name))
+        proxy_menu.addAction("Clear Custom Proxy", lambda: self._clear_download_proxy(gid))
+        
         menu.addSeparator()
 
         def _open_folder():
@@ -1275,22 +1367,30 @@ class MainWindow(QMainWindow):
 
             row = self._all_downloads[gid].copy()
 
-            if q.name != "__direct__":
+            real_status = self.aria2.get_status(gid)
+            
+            if real_status == "paused":
+                row["status"] = "paused"
+                row["downloadSpeed"] = 0
+            elif q.name == "__direct__":
+                if real_status:
+                    row["status"] = real_status
+                    if real_status == "paused":
+                        row["downloadSpeed"] = 0
+            else:
                 if q.paused and row.get("status") not in ["complete", "error", "removed"]:
                     row["status"] = "paused"
                     row["downloadSpeed"] = 0
                 elif not q.paused and row.get("status") == "paused":
-                    row["status"] = "waiting"
+                    if real_status != "paused":
+                        row["status"] = "waiting"
 
             if search_text and search_text not in row.get("name", "").lower():
                 continue
 
             rows.append(row)
 
-        self.model.update_rows(rows)
-
-        if hasattr(self.model, 'sort_column') and self.model.sort_column >= 0:
-            self.model.sort(self.model.sort_column, self.model.sort_order)      
+        self.model.update_rows(rows)     
             
     def _toggle_shutdown(self, checked):
         self.store.settings["shutdown_after_finish"] = checked
@@ -1374,7 +1474,7 @@ class MainWindow(QMainWindow):
 
         self._apply_settings_to_aria2()
 
-        
+        # Auto clear completed
         if self.store.settings.get("auto_clear_completed", False):
             q = self._current_queue()
             if q:
@@ -1392,10 +1492,9 @@ class MainWindow(QMainWindow):
                     self.store.save()
                     self._refresh_queue_list()
 
-        
         self._update_progress_bar()
 
-        
+        # Shutdown check
         if self.shutdown_cb.isChecked():
             total_active = int(stat.get("numActive", 0))
             total_waiting = int(stat.get("numWaiting", 0))
@@ -1414,7 +1513,7 @@ class MainWindow(QMainWindow):
                                             QSystemTrayIcon.MessageIcon.Information, 3000)
                         os.system("systemctl poweroff")
 
-        
+        # ===== Process downloads =====
         all_downloads_dict = {}
         
         def process_dl(dl, default_status):
@@ -1424,6 +1523,12 @@ class MainWindow(QMainWindow):
             
             if gid in self._cleared_gids:
                 return None
+            
+            old_status = None
+            old_speed = 0
+            if gid in self._all_downloads:
+                old_status = self._all_downloads[gid].get("status")
+                old_speed = self._all_downloads[gid].get("downloadSpeed", 0)
             
             name = "Unknown File"
             files = dl.get("files", [])
@@ -1443,11 +1548,19 @@ class MainWindow(QMainWindow):
             except (ValueError, TypeError):
                 speed = 0
 
+            status = default_status
+            if old_status == "paused":
+                status = "paused"
+                speed = 0
+            elif default_status == "paused":
+                status = "paused"
+                speed = 0
+
             return {
                 "gid": gid,
                 "name": name,
                 "category": get_category(name),
-                "status": default_status,
+                "status": status,
                 "totalLength": dl.get("totalLength", 0),
                 "completedLength": dl.get("completedLength", 0),
                 "downloadSpeed": speed,
@@ -1456,19 +1569,19 @@ class MainWindow(QMainWindow):
                 "errorMessage": dl.get("errorMessage", "")
             }
 
-        
+        # Active downloads
         for dl in result["active"]:
             data = process_dl(dl, "active")
             if data:
                 all_downloads_dict[data["gid"]] = data
 
-        
+        # Waiting downloads
         for dl in result["waiting"]:
             data = process_dl(dl, "waiting")
             if data and data["gid"] not in all_downloads_dict:
                 all_downloads_dict[data["gid"]] = data
 
-        
+        # Stopped downloads
         for dl in result["stopped"]:
             gid = dl.get("gid")
             if gid and gid not in all_downloads_dict:
@@ -1476,21 +1589,20 @@ class MainWindow(QMainWindow):
                 if data:
                     all_downloads_dict[gid] = data
 
-        
+        # Handle pending pause
         for gid, data in all_downloads_dict.items():
             if (
                 gid in self._pending_pause
                 and int(data.get("totalLength", 0)) > 0
             ):
                 self.aria2.pause(gid)
-
                 data["status"] = "paused"
                 data["downloadSpeed"] = 0
-
                 self._pending_pause.remove(gid)
 
         self._all_downloads = all_downloads_dict
 
+        # Check queue completion
         for q in self.store.queues:
             if not q.paused and q.downloads:
                 has_any_download = any(gid in self._all_downloads for gid in q.downloads)
@@ -1506,36 +1618,57 @@ class MainWindow(QMainWindow):
                         QSystemTrayIcon.MessageIcon.Information, 4000)
                         self.store.save()
 
+        # Schedule management
         for q in self.store.queues:
             if q.paused or not q.schedule_enabled:
                 continue
 
             if q.is_scheduled_now():
-              
                 for gid in q.downloads:
                     if self.aria2.get_status(gid) == "paused":
                         self.aria2.resume(gid)
-
                         if gid in self._all_downloads:
                             self._all_downloads[gid]["status"] = "active"
-
             else:
-               
                 for gid in q.downloads:
                     if gid in self._all_downloads and self._all_downloads[gid].get("status") == "active":
                         self.aria2.pause(gid)
                         self._all_downloads[gid]["status"] = "paused"
                         self._all_downloads[gid]["downloadSpeed"] = 0
-                
-        if hasattr(self, '_progress_dialog') and self._progress_dialog.isVisible():
-            gid = self._progress_dialog.gid
-            if gid in self._all_downloads:
-                self._progress_dialog.update_data(self._all_downloads[gid])
-                
+
+        # ===== Update progress dialog =====
+        try:
+            if hasattr(self, '_progress_dialog'):
+                dialog = self._progress_dialog
+                if dialog is not None:
+                    try:
+                        if dialog.isVisible():
+                            gid = dialog.gid
+                            if gid in self._all_downloads:
+                                dialog.update_data(self._all_downloads[gid])
+                    except (RuntimeError, AttributeError):
+                        self._progress_dialog = None
+        except Exception as e:
+            print(f"Progress dialog update error: {e}")
+            self._progress_dialog = None
+
+        # ===== Update YouTube dialog =====
+        try:
+            if hasattr(self, '_youtube_dialog'):
+                dialog = self._youtube_dialog
+                if dialog is not None:
+                    try:
+                        if dialog.isVisible() and hasattr(dialog, 'worker'):
+                            pass
+                    except (RuntimeError, AttributeError):
+                        self._youtube_dialog = None
+        except Exception:
+            self._youtube_dialog = None
+
+        # ===== Refresh UI =====
         self._refresh_table()
         self._update_queue_status()
         self._refresh_queue_list()
-    
     def _start_aria2_if_needed(self):
         if self.aria2.is_connected():
             return
@@ -1579,43 +1712,152 @@ class MainWindow(QMainWindow):
         self.status_label.setText(f"⚠ {message}")
         
     def _open_progress_dialog(self, gid):
+        """Open progress dialog for a download"""
         dl_data = self._all_downloads.get(gid, {})
-        self._progress_dialog = DownloadProgressDialog(gid, dl_data, self)
+        
+        if hasattr(self, '_progress_dialog') and self._progress_dialog is not None:
+            try:
+                self._progress_dialog.close()
+            except:
+                pass
+            self._progress_dialog = None
+        
+        self._progress_dialog = DownloadProgressDialog(gid, dl_data, None) 
         self._progress_dialog.pause_requested.connect(self._pause_from_dialog)
         self._progress_dialog.resume_requested.connect(self._resume_from_dialog)
         self._progress_dialog.cancel_requested.connect(self._cancel_from_dialog)
+        self._progress_dialog.cancel_with_delete_requested.connect(self._cancel_with_delete_from_dialog)
+        self._progress_dialog.finished.connect(self._on_progress_dialog_closed)
         self._progress_dialog.show()
+        
+        self._center_dialog_on_screen(self._progress_dialog)
+
+    def _center_dialog_on_screen(self, dialog):
+        """Center dialog on screen"""
+        screen = QApplication.primaryScreen().geometry()
+        dialog.move(
+            screen.center().x() - dialog.width() // 2,
+            screen.center().y() - dialog.height() // 2
+        )
+
+    def _on_progress_dialog_closed(self):
+        """Clean up progress dialog reference"""
+        if hasattr(self, '_progress_dialog'):
+            self._progress_dialog = None
 
     def _pause_from_dialog(self, gid):
+        """Pause download from progress dialog"""
         real_status = self.aria2.get_status(gid)
         if real_status in ["active", "waiting"]:
             self.aria2.force_pause(gid)
             if gid in self._all_downloads:
                 self._all_downloads[gid]["status"] = "paused"
                 self._all_downloads[gid]["downloadSpeed"] = 0
+            
             self._refresh_table()
+            self._update_progress_bar()
+            
+            if hasattr(self, '_progress_dialog') and self._progress_dialog is not None:
+                if self._progress_dialog.isVisible() and gid in self._all_downloads:
+                    self._progress_dialog.update_data(self._all_downloads[gid])
 
     def _resume_from_dialog(self, gid):
+        """Resume download from progress dialog"""
         real_status = self.aria2.get_status(gid)
         if real_status == "paused":
             self.aria2.resume(gid)
             if gid in self._all_downloads:
                 self._all_downloads[gid]["status"] = "active"
+            
             self._refresh_table()
+            self._update_progress_bar()
+            
+            if hasattr(self, '_progress_dialog') and self._progress_dialog is not None:
+                if self._progress_dialog.isVisible() and gid in self._all_downloads:
+                    self._progress_dialog.update_data(self._all_downloads[gid])
 
     def _cancel_from_dialog(self, gid):
-        self.aria2.remove(gid)
+        """Cancel download from progress dialog (without deleting files)"""
+        try:
+            self.aria2.remove(gid)
+        except Exception as e:
+            print(f"⚠ Could not remove GID {gid} from aria2: {e}")
+        
         for q in self.store.queues:
             if gid in q.downloads:
                 q.downloads.remove(gid)
+        
         if gid in self._all_downloads:
             del self._all_downloads[gid]
+        
         self.store.save()
         self._refresh_table()
         self._refresh_queue_list()
-        if hasattr(self, '_progress_dialog'):
-            self._progress_dialog.close()
-
+        self._update_progress_bar()
+        
+        self._progress_dialog = None
+        
+        self.tray.showMessage("FelfelDM", 
+            "Download cancelled.",
+            QSystemTrayIcon.MessageIcon.Information, 2000)
+    def _cancel_with_delete_from_dialog(self, gid):
+        """Cancel download and delete files from progress dialog"""
+        file_paths = []
+        aria2_files = []
+        
+        if gid in self._all_downloads:
+            files = self._all_downloads[gid].get("files", [])
+            for f in files:
+                path = f.get("path")
+                if path and os.path.exists(path):
+                    file_paths.append(path)
+                    aria2_path = path + ".aria2"
+                    if os.path.exists(aria2_path):
+                        aria2_files.append(aria2_path)
+        
+        try:
+            self.aria2.remove(gid)
+        except Exception as e:
+            print(f"⚠ Could not remove GID {gid} from aria2: {e}")
+        
+        for q in self.store.queues:
+            if gid in q.downloads:
+                q.downloads.remove(gid)
+        
+        if gid in self._all_downloads:
+            del self._all_downloads[gid]
+        
+        for path in file_paths:
+            try:
+                if os.path.isfile(path):
+                    os.remove(path)
+                    print(f"🗑 Deleted file: {path}")
+                elif os.path.isdir(path):
+                    import shutil
+                    shutil.rmtree(path)
+                    print(f"🗑 Deleted folder: {path}")
+            except Exception as e:
+                print(f"⚠ Could not delete {path}: {e}")
+        
+        for aria2_path in aria2_files:
+            try:
+                if os.path.exists(aria2_path):
+                    os.remove(aria2_path)
+                    print(f"🗑 Deleted aria2 file: {aria2_path}")
+            except Exception as e:
+                print(f"⚠ Could not delete {aria2_path}: {e}")
+        
+        self.store.save()
+        self._refresh_table()
+        self._refresh_queue_list()
+        self._update_progress_bar()
+        
+        self._progress_dialog = None
+        
+        self.tray.showMessage("FelfelDM", 
+            "Download cancelled and files deleted.",
+            QSystemTrayIcon.MessageIcon.Information, 2000)     
+           
     def _quick_download(self):
         from ui.dialogs import QuickDownloadDialog
         dlg = QuickDownloadDialog(self)
@@ -1647,20 +1889,34 @@ class MainWindow(QMainWindow):
                 "always-resume": "true",
                 "header": ["User-Agent: Mozilla/5.0 (X11; Linux x86_64; rv:125.0) Gecko/20100101 Firefox/125.0"]
             }
+
+            proxy_mode = d.get("proxy_mode", 0)
+            if proxy_mode == 0:  # Use Global Proxy
+                proxy = self.proxy_manager.get_proxy_for_queue(None)
+                if proxy and proxy.is_valid():
+                    options["all-proxy"] = proxy._build_proxy_url()
+            elif proxy_mode == 1:  # Custom Proxy
+                custom_proxy = d.get("custom_proxy")
+                if custom_proxy and custom_proxy.is_valid():
+                    options["all-proxy"] = custom_proxy._build_proxy_url()
+            elif proxy_mode == 2:  
+                options["all-proxy"] = "" 
+
             added_gids = []
             for url in d["urls"]:
                 gid = self.aria2.add_url(url, options)
                 if gid:
                     direct_queue.downloads.append(gid)
                     self.aria2.resume(gid)
-                    added_gids.append(gid) 
+                    added_gids.append(gid)
+
             self.store.save()
             self._refresh_queue_list()
             self._refresh_table()
+
             if len(added_gids) == 1:
-                 QTimer.singleShot(500, lambda: self._open_progress_dialog(added_gids[0]))
-                 
-                 
+                QTimer.singleShot(500, lambda: self._open_progress_dialog(added_gids[0]))
+          
     def _on_table_double_click(self, index):
         gid = self.model.get_gid(index.row())
         if gid:
@@ -1688,18 +1944,50 @@ class MainWindow(QMainWindow):
             
             os.makedirs(data["path"], exist_ok=True)
             
-            from ui.youtube_progress import YouTubeProgressDialog
-            progress_dlg = YouTubeProgressDialog(
-                data["url"],
-                data["path"],
-                data["format"],
-                data["cookie_file"],
-                data.get("video_info"),
-                self
-            )
-            progress_dlg.exec()
+            proxy_url = data.get("proxy_url")
             
-            if progress_dlg.result() == QDialog.DialogCode.Accepted:
-                self.tray.showMessage("FelfelDM", 
-                    "YouTube download completed!",
-                    QSystemTrayIcon.MessageIcon.Information, 3000)
+            from ui.youtube_progress import YouTubeProgressDialog
+            self._youtube_dialog = YouTubeProgressDialog(
+                url=data["url"],
+                output_path=data["path"],
+                format_type=data["format"],
+                cookie_file=data["cookie_file"],
+                video_info=data.get("video_info"),
+                parent=None,  # ⭐ parent=None
+                proxy_url=proxy_url
+            )
+            self._youtube_dialog.show() 
+            
+            self._youtube_dialog.worker.finished.connect(
+                lambda success, msg: self._on_youtube_finished(success, msg)
+            )
+
+    def _on_youtube_finished(self, success, message):
+        """Handle YouTube download finished"""
+        if success:
+            self.tray.showMessage(
+                "FelfelDM",
+                "✅ YouTube download completed!",
+                QSystemTrayIcon.MessageIcon.Information,
+                3000
+            )
+        else:
+            self.tray.showMessage(
+                "FelfelDM",
+                f"❌ YouTube download failed: {message}",
+                QSystemTrayIcon.MessageIcon.Warning,
+                3000
+            )        
+                
+    def _apply_proxy_to_aria2(self):
+        proxy = self.proxy_manager.get_proxy_for_queue(None) 
+        
+        if proxy and proxy.enabled and proxy.is_valid():
+            result = self.aria2.set_global_proxy(proxy)
+            if result is not None:
+                print(f"✅ Global proxy applied: {proxy.get_display_string()}")
+            else:
+                print("⚠️ Failed to apply proxy")
+        else:
+            self.aria2.change_global_option({"all-proxy": ""})
+            print("✅ Proxy disabled")

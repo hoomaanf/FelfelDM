@@ -45,7 +45,9 @@ class Aria2RPC:
             return None
 
     def add_url(self, url, options=None):
-        return self._call("aria2.addUri", [[url], options or {}])
+        if options is None:
+            options = {}
+        return self._call("aria2.addUri", [[url], options])
 
     def pause(self, gid):
         return self._call("aria2.pause", [gid])
@@ -152,3 +154,17 @@ class Aria2RPC:
         except Exception as e:
             print(f"Error starting aria2: {e}")
             return False
+        
+    def set_global_proxy(self, proxy_config):
+        """تنظیم پروکسی سراسری در aria2"""
+        if not proxy_config or not proxy_config.enabled:
+            return self.change_global_option({"all-proxy": ""})
+        
+        if not proxy_config.is_valid():
+            return False
+        
+        proxy_url = proxy_config._build_proxy_url()
+        return self.change_global_option({"all-proxy": proxy_url})
+    
+    def set_queue_proxy(self, queue_name: str, proxy_config):
+        pass
