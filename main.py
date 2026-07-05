@@ -68,19 +68,36 @@ def main():
     if args.daemon:
         print("🌶️ FelfelDM Daemon starting...")
         
-        # Create QApplication without GUI
-        app = QApplication(sys.argv)
-        
+        from PyQt6.QtCore import QCoreApplication
         from core.local_server import LocalServer
+        import signal
+        import sys
+        import time
+        
+        app = QCoreApplication(sys.argv)
         server = LocalServer()
         server.start(8765)
         
-        # Register signal handlers
+        running = True
+        
+        def signal_handler(sig, frame):
+            global running
+            print(f"🛑 Received signal {sig}, shutting down daemon...")
+            running = False
+            server.stop()
+            app.quit()
+            sys.exit(0)
+        
         signal.signal(signal.SIGINT, signal_handler)
         signal.signal(signal.SIGTERM, signal_handler)
         
-        # Start event loop
-        sys.exit(app.exec())
+        while running:
+            try:
+                time.sleep(0.5)
+            except:
+                break
+        
+        print("Daemon stopped.")
         return
     
     # Normal GUI mode
