@@ -2,6 +2,11 @@ const SERVER_GUI = "http://localhost:8766";
 const SERVER_DAEMON = "http://localhost:8765";
 const ICON_URL = browser.runtime.getURL("icons/icon128.png");
 
+// ===== Connection state =====
+let isConnected = false;
+let connectionChecked = false;
+let connectionAttempts = 0;
+
 async function isCatchEnabled() {
   const data = await browser.storage.local.get("catchDownloads");
   return data.catchDownloads !== undefined ? data.catchDownloads : true;
@@ -9,7 +14,9 @@ async function isCatchEnabled() {
 
 async function ping(port) {
   try {
-    const r = await fetch(`http://localhost:${port}/ping`);
+    const r = await fetch(`http://localhost:${port}/ping`, {
+      signal: AbortSignal.timeout(1000),
+    });
     return r.ok;
   } catch {
     return false;
@@ -32,17 +39,59 @@ async function findActiveServer() {
   return null;
 }
 
+// ===== Check connection status =====
+async function checkConnection() {
+  const server = await findActiveServer();
+  isConnected = server !== null;
+  connectionChecked = true;
+
+  // Update badge
+  if (isConnected) {
+    browser.action.setBadgeText({ text: "●" });
+    browser.action.setBadgeBackgroundColor({ color: "#27ae60" });
+    console.log("✅ Connected to FelfelDM");
+  } else {
+    browser.action.setBadgeText({ text: "✕" });
+    browser.action.setBadgeBackgroundColor({ color: "#e74c3c" });
+    console.log("⚠️ FelfelDM not running");
+  }
+
+  return isConnected;
+}
+
+// Check connection every 5 seconds
+setInterval(checkConnection, 5000);
+
+// Check on startup
+checkConnection();
+
+// ===== Send URLs =====
 async function send(urls) {
   if (!urls || urls.length === 0) return false;
 
-  const server = await findActiveServer();
+  // ⭐ Check connection before sending
+  const connected = await checkConnection();
+  if (!connected) {
+    // Show notification with clear message
+    await browser.notifications.create({
+      type: "basic",
+      iconUrl: ICON_URL,
+      title: "🌶️ FelfelDM",
+      message:
+        "⚠️ FelfelDM is not running!\nPlease start the application first.",
+      priority: 2,
+    });
+    return false;
+  }
 
+  const server = await findActiveServer();
   if (!server) {
     await browser.notifications.create({
       type: "basic",
       iconUrl: ICON_URL,
       title: "🌶️ FelfelDM",
-      message: "FelfelDM is not running. Please open the app.",
+      message:
+        "⚠️ Could not connect to FelfelDM.\nPlease make sure it's running.",
     });
     return false;
   }
@@ -72,6 +121,7 @@ async function send(urls) {
   }
 }
 
+// ===== Download interception =====
 const ignored = new Set();
 
 browser.downloads.onCreated.addListener(async (item) => {
@@ -86,6 +136,20 @@ browser.downloads.onCreated.addListener(async (item) => {
   if (ignored.has(item.url)) {
     ignored.delete(item.url);
     return;
+  }
+
+  // ⭐ Check connection before cancelling
+  const connected = await checkConnection();
+  if (!connected) {
+    // Show notification and keep download (don't cancel)
+    await browser.notifications.create({
+      type: "basic",
+      iconUrl: ICON_URL,
+      title: "🌶️ FelfelDM",
+      message: "⚠️ FelfelDM is not running!\nDownload was not intercepted.",
+      priority: 2,
+    });
+    return; // ⭐ Don't cancel, let download proceed normally
   }
 
   try {
@@ -110,6 +174,7 @@ browser.downloads.onCreated.addListener(async (item) => {
   }
 });
 
+// ===== Context Menus =====
 browser.runtime.onInstalled.addListener(() => {
   if (browser.contextMenus.removeAll) {
     browser.contextMenus.removeAll();
@@ -160,6 +225,20 @@ browser.contextMenus.onClicked.addListener(async (info, tab) => {
       iconUrl: ICON_URL,
       title: "🌶️ FelfelDM",
       message: "⛔ Download catching is disabled. Enable it from the popup.",
+    });
+    return;
+  }
+
+  // ⭐ Check connection before context menu actions
+  const connected = await checkConnection();
+  if (!connected) {
+    browser.notifications.create({
+      type: "basic",
+      iconUrl: ICON_URL,
+      title: "🌶️ FelfelDM",
+      message:
+        "⚠️ FelfelDM is not running!\nPlease start the application first.",
+      priority: 2,
     });
     return;
   }
@@ -236,6 +315,7 @@ browser.contextMenus.onClicked.addListener(async (info, tab) => {
   }
 });
 
+// ===== Message handling =====
 browser.runtime.onMessage.addListener((message, sender, sendResponse) => {
   console.log("📨 Message received:", message);
 

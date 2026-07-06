@@ -1,8 +1,6 @@
-# utils/style.py
-
 import os
 import subprocess
-from PyQt6.QtWidgets import QApplication, QProxyStyle, QStyle
+from PyQt6.QtWidgets import QApplication, QProxyStyle, QStyle, QStyleFactory
 from PyQt6.QtCore import Qt, QPoint
 from PyQt6.QtGui import QPalette, QColor, QBrush, QPen, QIcon
 
@@ -54,63 +52,133 @@ class CustomProxyStyle(QProxyStyle):
         super().drawPrimitive(element, option, painter, widget)
 
 
+def detect_system_theme():
+    """Detect system theme (dark/light) from various sources"""
+    # 1. Check KDE using kreadconfig5
+    try:
+        result = subprocess.run(
+            ['kreadconfig5', '--group', 'Colors:Window', '--key', 'BackgroundNormal'],
+            capture_output=True, text=True, timeout=1
+        )
+        if result.stdout:
+            color = result.stdout.strip()
+            if color.startswith('#'):
+                r, g, b = int(color[1:3], 16), int(color[3:5], 16), int(color[5:7], 16)
+                brightness = (r * 299 + g * 587 + b * 114) / 1000
+                return brightness < 128
+    except:
+        pass
+    
+    # 2. Check KDE using config file
+    try:
+        import configparser
+        config = configparser.ConfigParser()
+        config_path = os.path.expanduser('~/.config/kdeglobals')
+        if os.path.exists(config_path):
+            config.read(config_path)
+            if config.has_section('Colors:Window'):
+                bg = config.get('Colors:Window', 'BackgroundNormal', fallback='')
+                if bg.startswith('#'):
+                    r, g, b = int(bg[1:3], 16), int(bg[3:5], 16), int(bg[5:7], 16)
+                    brightness = (r * 299 + g * 587 + b * 114) / 1000
+                    return brightness < 128
+    except:
+        pass
+    
+    # 3. Check GTK using gsettings (GNOME)
+    try:
+        result = subprocess.run(
+            ['gsettings', 'get', 'org.gnome.desktop.interface', 'gtk-theme'],
+            capture_output=True, text=True, timeout=1
+        )
+        if result.stdout:
+            theme_name = result.stdout.strip().strip("'")
+            # Dark themes usually contain 'dark', 'night', 'black' in name
+            if any(x in theme_name.lower() for x in ['dark', 'night', 'black']):
+                return True
+    except:
+        pass
+    
+    # 4. Check GTK using gsettings (color-scheme)
+    try:
+        result = subprocess.run(
+            ['gsettings', 'get', 'org.gnome.desktop.interface', 'color-scheme'],
+            capture_output=True, text=True, timeout=1
+        )
+        if result.stdout:
+            scheme = result.stdout.strip().strip("'")
+            if 'dark' in scheme.lower():
+                return True
+    except:
+        pass
+    
+    # 5. Check if QT_QPA_PLATFORMTHEME is set
+    platform_theme = os.environ.get('QT_QPA_PLATFORMTHEME', '')
+    if platform_theme in ['kde', 'gtk3']:
+        # Default to dark if we can't detect
+        return True
+    
+    # Default: check if Papirus-Dark is available (system preference)
+    try:
+        result = subprocess.run(
+            ['fc-match', 'Papirus-Dark'],
+            capture_output=True, timeout=1
+        )
+        if result.returncode == 0:
+            return True
+    except:
+        pass
+    
+    # Fallback to dark theme
+    return True
+
+
 def setup_style(app, theme="auto"):
     """Setup application style with theme support
     theme: 'auto', 'dark', 'light'
     """
     # Determine if dark mode
     if theme == "auto":
-        try:
-            is_dark = True
-            try:
-                result = subprocess.run(['kreadconfig5', '--group', 'Colors:Window', '--key', 'BackgroundNormal'], 
-                               capture_output=True, text=True)
-                if result.stdout:
-                    color = result.stdout.strip()
-                    if color.startswith('#'):
-                        r, g, b = int(color[1:3], 16), int(color[3:5], 16), int(color[5:7], 16)
-                        brightness = (r * 299 + g * 587 + b * 114) / 1000
-                        is_dark = brightness < 128
-            except:
-                pass
-            
-            if 'QT_QPA_PLATFORMTHEME' in os.environ:
-                if os.environ['QT_QPA_PLATFORMTHEME'] == 'kde':
-                    try:
-                        import configparser
-                        config = configparser.ConfigParser()
-                        config_path = os.path.expanduser('~/.config/kdeglobals')
-                        if os.path.exists(config_path):
-                            config.read(config_path)
-                            if config.has_section('Colors:Window'):
-                                bg = config.get('Colors:Window', 'BackgroundNormal', fallback='')
-                                if bg.startswith('#'):
-                                    r, g, b = int(bg[1:3], 16), int(bg[3:5], 16), int(bg[5:7], 16)
-                                    brightness = (r * 299 + g * 587 + b * 114) / 1000
-                                    is_dark = brightness < 128
-                    except:
-                        pass
-        except:
-            is_dark = True
+        is_dark = detect_system_theme()
     else:
         is_dark = (theme == "dark")
 
+    # Set icon theme
     if is_dark:
-        if subprocess.run(['fc-match', 'Papirus-Dark'], capture_output=True).returncode == 0:
+        if subprocess.run(['fc-match', 'Papirus-Dark'], capture_output=True, timeout=1).returncode == 0:
             QIcon.setThemeName('Papirus-Dark')
             print("✓ Using Papirus-Dark (system)")
         else:
             QIcon.setThemeName('breeze-dark')
             print("⚠ Papirus-Dark not found on system → Using breeze-dark")
     else:
-        if subprocess.run(['fc-match', 'Papirus-Light'], capture_output=True).returncode == 0:
+        if subprocess.run(['fc-match', 'Papirus-Light'], capture_output=True, timeout=1).returncode == 0:
             QIcon.setThemeName('Papirus-Light')
             print("✓ Using Papirus-Light (system)")
         else:
             QIcon.setThemeName('breeze')
             print("⚠ Papirus-Light not found on system → Using breeze")
 
-    app.setStyle('Fusion')
+    platform_theme = os.environ.get('QT_QPA_PLATFORMTHEME', '')
+    
+    if platform_theme in ['kde', 'gtk3']:
+        app.setStyle('Fusion')
+        print(f"✓ Using Fusion style for {platform_theme} platform")
+    else:
+        try:
+            available_styles = QStyleFactory.keys()
+            if 'gtk3' in available_styles and platform_theme == 'gtk3':
+                app.setStyle('gtk3')
+                print("✓ Using GTK3 style")
+            elif 'breeze' in available_styles and platform_theme == 'kde':
+                app.setStyle('breeze')
+                print("✓ Using Breeze style")
+            else:
+                app.setStyle('Fusion')
+                print("✓ Using Fusion style")
+        except:
+            app.setStyle('Fusion')
+            print("✓ Using Fusion style (fallback)")
 
     if is_dark:
         # ===== DARK THEME =====
@@ -246,7 +314,7 @@ def setup_style(app, theme="auto"):
             
             QLineEdit:focus, QTextEdit:focus { border: 1px solid #3daee9; }
             
-            /* ===== SpinBox (فقط رنگ پس‌زمینه) ===== */
+            /* ===== SpinBox ===== */
             QSpinBox {
                 background-color: #232629;
                 color: #efeff1;

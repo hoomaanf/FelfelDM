@@ -70,7 +70,7 @@ class ProxyDialog(QDialog):
         pwd_layout.addWidget(self.password_edit)
         
         show_pwd = QPushButton()
-        show_pwd.setIcon(get_icon('view-show'))
+        show_pwd.setIcon(get_icon('password-show-off'))
         show_pwd.setFixedWidth(30)
         show_pwd.setFixedHeight(30)
         show_pwd.setToolTip("Show/Hide Password")
@@ -132,10 +132,10 @@ class ProxyDialog(QDialog):
         """Toggle password visibility"""
         if self.password_edit.echoMode() == QLineEdit.EchoMode.Password:
             self.password_edit.setEchoMode(QLineEdit.EchoMode.Normal)
-            self.sender().setIcon(get_icon('view-hide'))
+            self.sender().setIcon(get_icon('password-show-on')) 
         else:
             self.password_edit.setEchoMode(QLineEdit.EchoMode.Password)
-            self.sender().setIcon(get_icon('view-show'))
+            self.sender().setIcon(get_icon('password-show-off'))  
     
     def _test_proxy(self):
         """Test proxy connection"""
@@ -238,8 +238,6 @@ class QueueProxyDialog(QDialog):
         
         # Use existing ProxyDialog
         self.proxy_dialog = ProxyDialog(proxy_config, self, f"Proxy for {queue_name}")
-        # We'll just use the same fields as ProxyDialog
-        # Reuse the same logic
         self.proxy_dialog.setParent(self)
         
         # Copy widgets from ProxyDialog

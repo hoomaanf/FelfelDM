@@ -2,6 +2,7 @@
 
 import os
 from PyQt6.QtWidgets import *
+from PyQt6.QtGui import QDesktopServices
 from PyQt6.QtCore import *
 from utils.helpers import get_icon
 from core.queue_model import Queue
@@ -141,23 +142,17 @@ class AddDownloadDialog(QDialog):
 
     def _configure_custom_proxy(self):
         """Open custom proxy configuration dialog"""
-        from ui.download_proxy_dialog import DownloadProxyDialog
+        from ui.download_proxy_dialog import SimpleProxyDialog
         
-        # Get first URL for display name
-        urls = self._get_urls()
-        display_name = os.path.basename(urls[0]) if urls else "Selected URLs"
+        url = self.url_edit.text().strip()
+        display_name = os.path.basename(url) if url else "YouTube Download"
         
-        dlg = DownloadProxyDialog(display_name, self._custom_proxy, self)
+        dlg = SimpleProxyDialog(display_name, self._custom_proxy, self)
         if dlg.exec():
-            data = dlg.get_data()
-            if data["use_custom"] and data["config"]:
-                self._custom_proxy = data["config"]
-                self.proxy_clear_btn.setEnabled(True)
-                self._update_proxy_status()
-            else:
-                self._custom_proxy = None
-                self.proxy_clear_btn.setEnabled(False)
-                self.proxy_status_label.setText("")
+            new_config = dlg.get_proxy_config()
+            self._custom_proxy = new_config
+            self.proxy_clear_btn.setEnabled(True)
+            self._update_proxy_status()
     
     def _clear_custom_proxy(self):
         """Clear custom proxy"""
@@ -688,7 +683,7 @@ class DownloadProgressDialog(QDialog):
     def __init__(self, gid, dl_data, parent=None):
         super().__init__(parent)
         self.gid = gid
-        self.setWindowTitle("Download")
+        self.setWindowTitle("Download Progress")
         self.setMinimumWidth(480)
         self.setWindowFlags(
             Qt.WindowType.Window |
@@ -708,12 +703,14 @@ class DownloadProgressDialog(QDialog):
         self.name_lbl.setStyleSheet("font-weight: bold; font-size: 13px;")
         lay.addWidget(self.name_lbl)
 
+        # Progress Bar
         self.progress_bar = QProgressBar()
         self.progress_bar.setMinimum(0)
         self.progress_bar.setMaximum(100)
         self.progress_bar.setTextVisible(True)
         lay.addWidget(self.progress_bar)
 
+        # Info Group
         info_group = QGroupBox("Info")
         info_lay = QFormLayout(info_group)
         self.size_lbl = QLabel("—")
@@ -729,24 +726,58 @@ class DownloadProgressDialog(QDialog):
         lay.addWidget(info_group)
 
         btn_lay = QHBoxLayout()
-        self.pause_btn = QPushButton(get_icon('media-playback-pause'), "Pause")
-        self.resume_btn = QPushButton(get_icon('media-playback-start'), "Resume")
-        self.cancel_btn = QPushButton(get_icon('edit-delete'), "Cancel")
         
-        self.pause_btn.clicked.connect(lambda: self.pause_requested.emit(self.gid))
-        self.resume_btn.clicked.connect(lambda: self.resume_requested.emit(self.gid))
-        self.cancel_btn.clicked.connect(self._on_cancel_clicked)
+        self.action_btn = QPushButton()
+        self.action_btn.setIcon(get_icon('media-playback-pause'))
+        self.action_btn.setText(" Pause")
+        self.action_btn.clicked.connect(self._on_action_clicked)
+        btn_lay.addWidget(self.action_btn)
         
-        btn_lay.addWidget(self.pause_btn)
-        btn_lay.addWidget(self.resume_btn)
         btn_lay.addStretch()
+        
+        self.cancel_btn = QPushButton()
+        self.cancel_btn.setIcon(get_icon('edit-delete'))
+        self.cancel_btn.setText(" Cancel")
+        self.cancel_btn.clicked.connect(self._on_cancel_clicked)
         btn_lay.addWidget(self.cancel_btn)
+        
         lay.addLayout(btn_lay)
+
+        self._status = "unknown"
+        self._is_complete = False
+        self._file_path = None
+        
+        if dl_data:
+            files = dl_data.get("files", [])
+            if files and files[0].get("path"):
+                self._file_path = files[0]["path"]
 
         self.update_data(dl_data)
 
+    def _on_action_clicked(self):
+        """Handle action button click (Pause/Resume/Open)"""
+        if self._is_complete:
+            if self._file_path and os.path.exists(self._file_path):
+                folder = os.path.dirname(self._file_path)
+                QDesktopServices.openUrl(QUrl.fromLocalFile(folder))
+            else:
+                QMessageBox.warning(self, "Folder Not Found", "Folder not found.")
+            return
+        
+        # Pause/Resume
+        if self._status == "active":
+            self.pause_requested.emit(self.gid)
+        elif self._status == "paused":
+            self.resume_requested.emit(self.gid)
+        elif self._status == "waiting":
+            self.pause_requested.emit(self.gid)
+
     def _on_cancel_clicked(self):
-        """Handle cancel button click - show confirmation dialog"""
+        """Handle cancel button click"""
+        if self._is_complete:
+            self.close()
+            return
+            
         reply = QMessageBox.question(
             self,
             "Cancel Download",
@@ -762,7 +793,7 @@ class DownloadProgressDialog(QDialog):
         elif reply == QMessageBox.StandardButton.Yes:
             self.cancel_with_delete_requested.emit(self.gid)
             self.close()
-        else: 
+        else:
             self.cancel_requested.emit(self.gid)
             self.close()
 
@@ -778,6 +809,13 @@ class DownloadProgressDialog(QDialog):
         speed = int(dl_data.get("downloadSpeed", 0))
         status = dl_data.get("status", "unknown")
         name = dl_data.get("name", "")
+        
+        self._status = status
+        self._is_complete = (status == "complete")
+        
+        files = dl_data.get("files", [])
+        if files and files[0].get("path"):
+            self._file_path = files[0]["path"]
         
         if name:
             self.name_lbl.setText(name)
@@ -808,7 +846,6 @@ class DownloadProgressDialog(QDialog):
 
         self.conn_lbl.setText(str(dl_data.get("connections", 0)))
         
-        # Status
         status_map = {
             "active": "⬇ Downloading",
             "waiting": "⏳ Waiting",
@@ -819,7 +856,6 @@ class DownloadProgressDialog(QDialog):
         }
         self.status_lbl.setText(status_map.get(status, status.capitalize()))
         
-        # Status color
         status_colors = {
             "active": "#3daee9",
             "waiting": "#95a5a6",
@@ -828,12 +864,97 @@ class DownloadProgressDialog(QDialog):
             "error": "#e74c3c",
         }
         self.status_lbl.setStyleSheet(f"color: {status_colors.get(status, '#95a5a6')}; font-weight: bold;")
-
-        # Buttons
-        self.pause_btn.setEnabled(status in ["active", "waiting"])
-        self.resume_btn.setEnabled(status == "paused")
-        self.cancel_btn.setEnabled(status not in ["complete", "removed"])
         
+        self._update_buttons(status)
+
+    def _update_buttons(self, status):
+        """Update button states based on download status"""
+        
+        if status == "complete":
+            self.action_btn.setIcon(get_icon('folder'))
+            self.action_btn.setText(" 📂 Open Folder")
+            self.action_btn.setEnabled(True)
+            
+            self.cancel_btn.setText(" Close")
+            self.cancel_btn.setIcon(get_icon('window-close'))
+            self.cancel_btn.setEnabled(True)
+            
+        elif status == "active":
+            self.action_btn.setIcon(get_icon('media-playback-pause'))
+            self.action_btn.setText(" Pause")
+            self.action_btn.setEnabled(True)
+            
+            self.cancel_btn.setText(" Cancel")
+            self.cancel_btn.setIcon(get_icon('edit-delete'))
+            self.cancel_btn.setEnabled(True)
+            
+        elif status == "paused":
+            self.action_btn.setIcon(get_icon('media-playback-start'))
+            self.action_btn.setText(" Resume")
+            self.action_btn.setEnabled(True)
+            
+            self.cancel_btn.setText(" Cancel")
+            self.cancel_btn.setIcon(get_icon('edit-delete'))
+            self.cancel_btn.setEnabled(True)
+            
+        elif status == "waiting":
+            self.action_btn.setIcon(get_icon('media-playback-pause'))
+            self.action_btn.setText(" Pause")
+            self.action_btn.setEnabled(True)
+            
+            self.cancel_btn.setText(" Cancel")
+            self.cancel_btn.setIcon(get_icon('edit-delete'))
+            self.cancel_btn.setEnabled(True)
+            
+        else:
+            self.action_btn.setEnabled(False)
+            self.cancel_btn.setEnabled(False)
+    def _update_buttons(self, status):
+        """Update button states based on download status"""
+        
+        if status == "complete":
+            self.action_btn.setIcon(get_icon('folder'))
+            self.action_btn.setText("Open Folder")
+            self.action_btn.setEnabled(True)
+            
+            self.cancel_btn.setText(" Close")
+            self.cancel_btn.setIcon(get_icon('window-close'))
+            self.cancel_btn.setEnabled(True)
+            
+            self.status_lbl.setText("✅ Complete")
+            self.status_lbl.setStyleSheet("color: #27ae60; font-weight: bold;")
+            
+        elif status == "active":
+            self.action_btn.setIcon(get_icon('media-playback-pause'))
+            self.action_btn.setText(" Pause")
+            self.action_btn.setEnabled(True)
+            
+            self.cancel_btn.setText(" Cancel")
+            self.cancel_btn.setIcon(get_icon('edit-delete'))
+            self.cancel_btn.setEnabled(True)
+            
+        elif status == "paused":
+            self.action_btn.setIcon(get_icon('media-playback-start'))
+            self.action_btn.setText(" Resume")
+            self.action_btn.setEnabled(True)
+            
+            self.cancel_btn.setText(" Cancel")
+            self.cancel_btn.setIcon(get_icon('edit-delete'))
+            self.cancel_btn.setEnabled(True)
+            
+        elif status == "waiting":
+            self.action_btn.setIcon(get_icon('media-playback-pause'))
+            self.action_btn.setText(" Pause")
+            self.action_btn.setEnabled(True)
+            
+            self.cancel_btn.setText(" Cancel")
+            self.cancel_btn.setIcon(get_icon('edit-delete'))
+            self.cancel_btn.setEnabled(True)
+            
+        else:
+            self.action_btn.setEnabled(False)
+            self.cancel_btn.setEnabled(False)
+            
 class SettingsDialog(QDialog):
     def __init__(self, settings, parent=None):
         super().__init__(parent)
@@ -1228,7 +1349,6 @@ WantedBy=default.target
             "run_as_service": self.run_as_service.isChecked(),
         }
 
-
 class YouTubeDownloadDialog(QDialog):
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -1269,16 +1389,8 @@ class YouTubeDownloadDialog(QDialog):
         options_layout = QFormLayout(options_group)
         
         self.format_combo = QComboBox()
-        self.format_combo.addItems([
-            "Video (MP4) - Best",
-            "Video (MP4) - 1080p",
-            "Video (MP4) - 720p",
-            "Video (WebM)",
-            "Audio (MP3)",
-            "Audio (M4A)",
-        ])
         self.format_combo.setEnabled(False)
-        options_layout.addRow("Format:", self.format_combo)
+        options_layout.addRow("Quality/Format:", self.format_combo)
         
         path_row = QHBoxLayout()
         self.path_edit = QLineEdit(os.path.expanduser("~/Downloads"))
@@ -1351,6 +1463,7 @@ class YouTubeDownloadDialog(QDialog):
         
         self.video_info = None
         self._custom_proxy = None
+        self._format_map = {}
     
     def _browse(self):
         d = QFileDialog.getExistingDirectory(self, "Select Directory", self.path_edit.text())
@@ -1367,7 +1480,7 @@ class YouTubeDownloadDialog(QDialog):
     
     def _on_proxy_mode_changed(self, index):
         """Enable/disable custom proxy config based on selection"""
-        is_custom = (index == 1)  # Custom proxy mode
+        is_custom = (index == 1)
         self.proxy_config_btn.setEnabled(is_custom)
         self.proxy_clear_btn.setEnabled(is_custom and self._custom_proxy is not None)
         
@@ -1378,22 +1491,17 @@ class YouTubeDownloadDialog(QDialog):
     
     def _configure_custom_proxy(self):
         """Open custom proxy configuration dialog"""
-        from ui.download_proxy_dialog import DownloadProxyDialog
+        from ui.download_proxy_dialog import SimpleProxyDialog
         
         url = self.url_edit.text().strip()
         display_name = os.path.basename(url) if url else "YouTube Download"
         
-        dlg = DownloadProxyDialog(display_name, self._custom_proxy, self)
+        dlg = SimpleProxyDialog(display_name, self._custom_proxy, self)
         if dlg.exec():
-            data = dlg.get_data()
-            if data["use_custom"] and data["config"]:
-                self._custom_proxy = data["config"]
-                self.proxy_clear_btn.setEnabled(True)
-                self._update_proxy_status()
-            else:
-                self._custom_proxy = None
-                self.proxy_clear_btn.setEnabled(False)
-                self.proxy_status_label.setText("")
+            new_config = dlg.get_proxy_config()
+            self._custom_proxy = new_config
+            self.proxy_clear_btn.setEnabled(True)
+            self._update_proxy_status()
     
     def _clear_custom_proxy(self):
         """Clear custom proxy"""
@@ -1431,8 +1539,6 @@ class YouTubeDownloadDialog(QDialog):
             from core.youtube_worker import YouTubeWorker
             
             cookie_file = self.cookie_edit.text().strip() or None
-            
-            # Get proxy if needed
             proxy_url = self._get_proxy_url()
             
             self.worker = YouTubeWorker(url, "", "mp4", cookie_file, proxy_url)
@@ -1454,7 +1560,6 @@ class YouTubeDownloadDialog(QDialog):
         proxy_mode = self.proxy_combo.currentIndex()
         
         if proxy_mode == 0:  # Use Global Proxy
-            # Get global proxy from settings
             if hasattr(self.parent(), 'proxy_manager'):
                 proxy = self.parent().proxy_manager.get_proxy_for_queue(None)
                 if proxy and proxy.is_valid():
@@ -1462,8 +1567,6 @@ class YouTubeDownloadDialog(QDialog):
         elif proxy_mode == 1:  # Custom Proxy
             if self._custom_proxy and self._custom_proxy.is_valid():
                 return self._custom_proxy._build_proxy_url()
-        # mode 2: No proxy
-        
         return None
     
     def clear_info_layout(self):
@@ -1495,15 +1598,67 @@ class YouTubeDownloadDialog(QDialog):
         seconds = duration % 60
         self.info_layout.addRow("Duration:", QLabel(f"{minutes}:{seconds:02d}"))
         
-        # Resolutions
         formats = info.get("formats", [])
-        resolutions = set()
-        for f in formats:
-            if f.get("resolution") and f.get("resolution") != "audio only":
-                resolutions.add(f.get("resolution"))
         
-        if resolutions:
-            self.info_layout.addRow("Qualities:", QLabel(", ".join(sorted(resolutions))))
+        self.format_combo.clear()
+        self._format_map = {}
+        
+        video_formats = []
+        audio_formats = []
+        
+        for f in formats:
+            format_id = f.get("format_id")
+            resolution = f.get("resolution")
+            ext = f.get("ext")
+            filesize = f.get("filesize")
+            vcodec = f.get("vcodec")
+            acodec = f.get("acodec")
+            
+            if vcodec and vcodec != "none":
+                label = f"Video ({ext.upper()})"
+                if resolution and resolution != "audio only":
+                    label += f" - {resolution}"
+                if filesize:
+                    from utils.helpers import format_size
+                    label += f" ({format_size(filesize)})"
+                video_formats.append((format_id, label, f))
+            
+            elif acodec and acodec != "none" and (not vcodec or vcodec == "none"):
+                bitrate = f.get("abr")
+                label = f"Audio ({ext.upper()})"
+                if bitrate:
+                    label += f" - {bitrate}kbps"
+                if filesize:
+                    from utils.helpers import format_size
+                    label += f" ({format_size(filesize)})"
+                audio_formats.append((format_id, label, f))
+        
+        def sort_key(item):
+            resolution = item[2].get("resolution", "")
+            if "p" in resolution:
+                return int(resolution.replace("p", ""))
+            return 0
+        
+        video_formats.sort(key=sort_key, reverse=True)
+        
+        for format_id, label, f in video_formats:
+            self.format_combo.addItem(label, format_id)
+            self._format_map[format_id] = f
+        
+        if audio_formats:
+            self.format_combo.addItem("--- Audio Only ---", None)
+            for format_id, label, f in audio_formats:
+                self.format_combo.addItem(label, format_id)
+                self._format_map[format_id] = f
+        
+        if video_formats:
+            self.format_combo.insertItem(0, "Best Quality (Auto)", "best")
+        
+        self.format_combo.setCurrentIndex(0)
+        
+        if video_formats:
+            quality_labels = [f"{f[2].get('resolution', 'Unknown')}" for f in video_formats[:5]]
+            self.info_layout.addRow("Qualities:", QLabel(", ".join(quality_labels)))
         
         # File size
         filesize = info.get("filesize")
@@ -1529,30 +1684,39 @@ class YouTubeDownloadDialog(QDialog):
         self.fetch_btn.setText("Get Video Info")
     
     def get_data(self):
-        format_map = {
-            0: "mp4",
-            1: "mp4",
-            2: "mp4",
-            3: "webm",
-            4: "mp3",
-            5: "m4a",
-        }
-        
+        """Get all dialog data"""
         proxy_mode = self.proxy_combo.currentIndex()
+        
+        selected_format_id = self.format_combo.currentData()
+        format_type = "mp4"
+        
+        if selected_format_id == "best":
+            format_type = "best"
+        else:
+            format_info = self._format_map.get(selected_format_id, {})
+            ext = format_info.get("ext", "mp4")
+            if ext == "m4a":
+                format_type = "m4a"
+            elif ext == "mp3":
+                format_type = "mp3"
+            elif ext == "webm":
+                format_type = "webm"
+            else:
+                format_type = "mp4"
         
         return {
             "url": self.url_edit.text().strip(),
             "path": self.path_edit.text().strip(),
-            "format": format_map.get(self.format_combo.currentIndex(), "mp4"),
-            "format_name": self.format_combo.currentText(),
+            "format": format_type,
+            "format_id": selected_format_id,  # ⭐ فرمت ID برای yt-dlp
+            "format_info": self._format_map.get(selected_format_id, {}),
             "cookie_file": self.cookie_edit.text().strip() or None,
             "video_info": self.video_info,
             "proxy_mode": proxy_mode,
             "custom_proxy": self._custom_proxy if proxy_mode == 1 else None,
-            "proxy_url": self._get_proxy_url()  # Proxy URL for yt-dlp
-        }
+            "proxy_url": self._get_proxy_url()
+        }      
 
-        
 class ProxyDialog(QDialog):
     def __init__(self, proxy_config: ProxyConfig = None, parent=None, title="Proxy Settings"):
         super().__init__(parent)

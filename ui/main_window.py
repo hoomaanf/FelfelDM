@@ -84,6 +84,7 @@ class MainWindow(QMainWindow):
             self.store.settings["aria2_port"],
             self.store.settings["aria2_secret"],
         )
+        
         self.proxy_manager = ProxyManager(self.store)
         self._apply_proxy_to_aria2()
         self.aria2.on_error = self._on_aria2_error
@@ -120,6 +121,10 @@ class MainWindow(QMainWindow):
         QApplication.processEvents()
         self._start_backend()
 
+        self.splash.update_status("Waiting for aria2...", 92)
+        QApplication.processEvents()
+        QTimer.singleShot(500, self._delayed_restore)
+
         self.splash.update_status("Starting local server...", 95)
         QApplication.processEvents()
         self.local_server = LocalServer(main_window=self)
@@ -128,7 +133,6 @@ class MainWindow(QMainWindow):
         self.splash.update_status("Ready!", 100)
         QApplication.processEvents()
 
-        from PyQt6.QtCore import QTimer
         QTimer.singleShot(800, self._close_splash)
     
     def _build_ui(self):
@@ -154,7 +158,7 @@ class MainWindow(QMainWindow):
 
         header_lay = QHBoxLayout()
         
- 
+    
         header_lay.addStretch()
         sb_lay.addLayout(header_lay)
 
@@ -231,13 +235,15 @@ class MainWindow(QMainWindow):
         tb_lay.addWidget(self.btn_add)
 
 
-        self.btn_pause = QPushButton(get_icon('media-playback-pause'), "Pause")
-        self.btn_pause.clicked.connect(self._pause_selected)
-        tb_lay.addWidget(self.btn_pause)
-
-        self.btn_resume = QPushButton(get_icon('media-playback-start'), "Resume")
-        self.btn_resume.clicked.connect(self._resume_selected)
-        tb_lay.addWidget(self.btn_resume)
+        self.btn_toggle = QPushButton(get_icon('media-playback-pause'), "Pause")
+        self.btn_toggle.clicked.connect(self._toggle_pause_resume)
+        self.btn_toggle.setEnabled(False)  # Disabled initially
+        tb_lay.addWidget(self.btn_toggle)
+        
+        self.btn_move_queue = QPushButton(get_icon('go-next'), "Move to Queue")
+        self.btn_move_queue.clicked.connect(self._move_selected_to_queue)
+        self.btn_move_queue.setEnabled(False)
+        tb_lay.addWidget(self.btn_move_queue)
 
         self.btn_remove = QPushButton(get_icon('edit-delete'), "Remove")
         self.btn_remove.clicked.connect(self._remove_selected)
@@ -302,6 +308,9 @@ class MainWindow(QMainWindow):
         self.table.setSortingEnabled(True)
         self.table.sortByColumn(0, Qt.SortOrder.AscendingOrder)
         ma_lay.addWidget(self.table)
+        
+        if self.table.selectionModel():
+            self.table.selectionModel().selectionChanged.connect(self._update_toggle_button)
 
         self.progress_bar = QProgressBar()
         self.progress_bar.setMaximum(100)
@@ -363,7 +372,7 @@ class MainWindow(QMainWindow):
 
         self._refresh_queue_list()
         self._update_queue_buttons()
-
+    
     def _build_tray(self):
         self.tray = QSystemTrayIcon(self)
         
@@ -405,13 +414,20 @@ class MainWindow(QMainWindow):
     def closeEvent(self, event):
         """Handle close event - allow closing main window while downloads continue"""
         has_active = False
+        
         for q in self.store.queues:
             for gid in q.downloads:
-                if gid in self._all_downloads:
-                    status = self._all_downloads[gid].get("status")
-                    if status in ["active", "waiting"]:
-                        has_active = True
-                        break
+                real_status = self.aria2.get_status(gid)
+                
+                if not real_status:
+                    if gid in self._all_downloads:
+                        real_status = self._all_downloads[gid].get("status")
+                    else:
+                        continue
+                
+                if real_status in ["active", "waiting"]:
+                    has_active = True
+                    break
             if has_active:
                 break
         
@@ -425,6 +441,8 @@ class MainWindow(QMainWindow):
                 QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
             )
             if reply == QMessageBox.StandardButton.Yes:
+                self._pause_all_downloads()
+                
                 self.hide()
                 self.tray.showMessage(
                     "FelfelDM",
@@ -436,16 +454,36 @@ class MainWindow(QMainWindow):
                 event.ignore()
                 return
         
+        # If no active downloads or user said close
         if hasattr(self, 'tray') and self.tray.isVisible():
             self.hide()
             event.ignore()
         else:
             self.quit_app()
             event.accept()
-        
+    
     def quit_app(self):
         """Quit application and close all windows"""
         print("🛑 Shutting down...")
+        
+        print("⏸️ Pausing all downloads...")
+        for q in self.store.queues:
+            for gid in q.downloads:
+                try:
+                    real_status = self.aria2.get_status(gid)
+                    if real_status in ["active", "waiting"]:
+                        self.aria2.pause(gid)
+                        print(f"⏸️ Paused: {gid}")
+                        if gid in self._all_downloads:
+                            self._all_downloads[gid]["status"] = "paused"
+                            self._all_downloads[gid]["downloadSpeed"] = 0
+                        if gid in q.downloads_info:
+                            q.downloads_info[gid]["status"] = "paused"
+                except Exception as e:
+                    print(f"⚠️ Could not pause {gid}: {e}")
+        
+        self.store.save()
+        print("💾 Data saved with paused status")
         
         if hasattr(self, '_progress_dialog') and self._progress_dialog is not None:
             try:
@@ -477,8 +515,117 @@ class MainWindow(QMainWindow):
         import sys
         sys.exit(0)
 
+    def _restore_downloads_with_progress(self):
+        """Restore downloads with progress updates"""
+        print("🔄 Restoring downloads...")
+        restored_count = 0
+        total_downloads = sum(len(q.downloads) for q in self.store.queues)
+        
+        if total_downloads == 0:
+            self.splash.update_status("No downloads to restore", 95)
+            QApplication.processEvents()
+            return
+        
+        wait_count = 0
+        while not self.aria2.is_connected() and wait_count < 25:
+            time.sleep(0.2)
+            wait_count += 1
+        
+        if not self.aria2.is_connected():
+            print("⚠️ aria2 not ready, skipping restore")
+            self.splash.update_status("aria2 not ready, skipping restore", 95)
+            QApplication.processEvents()
+            return
+        
+        processed = 0
+        for q in self.store.queues:
+            for gid in q.downloads[:]:
+                processed += 1
+                progress = 92 + int((processed / total_downloads) * 8)
+                self.splash.update_status(f"Restoring... ({processed}/{total_downloads})", progress)
+                QApplication.processEvents()
+                
+                try:
+                    status = self.aria2.get_status(gid)
+                except:
+                    status = None
+                
+                if not status:
+                    info = q.downloads_info.get(gid, {})
+                    url = info.get("url")
+                    
+                    if url:
+                        print(f"🔄 Restoring: {info.get('name', url)}")
+                        
+                        options = {
+                            "dir": q.save_path,
+                            "split": "8",
+                            "max-connection-per-server": "8",
+                            "continue": "true",
+                            "always-resume": "true",
+                        }
+                        
+                        try:
+                            new_gid = self.aria2.add_url(url, options)
+                        except:
+                            new_gid = None
+                        
+                        if new_gid:
+                            idx = q.downloads.index(gid)
+                            q.downloads[idx] = new_gid
+                            
+                            old_info = info.copy()
+                            if gid in q.downloads_info:
+                                q.downloads_info.pop(gid, None)
+                            q.downloads_info[new_gid] = old_info
+                            
+                            self._all_downloads[new_gid] = {
+                                "gid": new_gid,
+                                "name": old_info.get("name", url.split("/")[-1] or "Unknown"),
+                                "status": "paused",
+                                "totalLength": old_info.get("totalLength", 0),
+                                "completedLength": old_info.get("completedLength", 0),
+                                "downloadSpeed": 0,
+                                "connections": 0,
+                                "files": old_info.get("files", []),
+                                "errorMessage": "",
+                                "category": old_info.get("category", "📁 Other")
+                            }
+                            
+                            try:
+                                self.aria2.pause(new_gid)
+                                print(f"⏸️ Restored as paused: {old_info.get('name', url)}")
+                            except:
+                                pass
+                            
+                            restored_count += 1
+                        else:
+                            print(f"⚠️ Failed to restore: {url}")
+                            q.downloads.remove(gid)
+                            if gid in q.downloads_info:
+                                del q.downloads_info[gid]
+                    else:
+                        print(f"⚠️ No URL for GID {gid}, removing...")
+                        q.downloads.remove(gid)
+                        if gid in q.downloads_info:
+                            del q.downloads_info[gid]
+        
+        if restored_count > 0:
+            self.store.save()
+            print(f"✅ Restored {restored_count} download(s)")
+        
+        self.splash.update_status("Ready!", 100)
+        QApplication.processEvents()
+        
+    def _delayed_restore(self):
+        """Delay restore until aria2 is fully ready"""
+        if self.aria2.is_connected():
+            self.splash.update_status("Restoring downloads...", 93)
+            QApplication.processEvents()
+            self._restore_downloads_with_progress()
+        else:
+            QTimer.singleShot(200, self._delayed_restore)
     
-
     def _on_queue_changed(self, idx):
         if idx >= 0:
             self._current_queue_idx = idx
@@ -608,29 +755,36 @@ class MainWindow(QMainWindow):
         self._refresh_queue_list()
 
         resumed = 0
-        if is_scheduled:
-            for gid in q.downloads:
-                real_status = self.aria2.get_status(gid)
-                if real_status == "paused":
-                    result = self.aria2.resume(gid)
-                    if result is not None:
-                        resumed += 1
-                        if gid in self._all_downloads:
-                            self._all_downloads[gid]["status"] = "active"
-        else:
-            days_text = ", ".join(["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"][i] for i in q.days)
-            self.tray.showMessage("FelfelDM", 
-                f"⏰ Queue started. Waiting for schedule: {q.schedule_start.strftime('%H:%M')}-{q.schedule_end.strftime('%H:%M')} {days_text}",
-                QSystemTrayIcon.MessageIcon.Information, 4000)
+        for gid in q.downloads:
+            real_status = self.aria2.get_status(gid)
+            if real_status == "paused":
+                result = self.aria2.resume(gid)
+                if result is not None:
+                    resumed += 1
+                    if gid in self._all_downloads:
+                        self._all_downloads[gid]["status"] = "active"
+                    if gid in q.downloads_info:
+                        q.downloads_info[gid]["status"] = "active"
+            elif real_status in ["active", "waiting"]:
+                if gid in self._all_downloads:
+                    self._all_downloads[gid]["status"] = real_status
+                if gid in q.downloads_info:
+                    q.downloads_info[gid]["status"] = real_status
 
+        self.store.save()
         self._refresh_table()
         self._update_queue_status()
         self._update_queue_buttons()
 
         if resumed > 0:
-            self.tray.showMessage("FelfelDM", f"Started {resumed} download(s)",
+            self.tray.showMessage("FelfelDM", f"▶️ Resumed {resumed} download(s)",
                                 QSystemTrayIcon.MessageIcon.Information, 2000)
-
+        elif is_scheduled:
+            days_text = ", ".join(["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"][i] for i in q.days)
+            self.tray.showMessage("FelfelDM", 
+                f"⏰ Queue started. Waiting for schedule: {q.schedule_start.strftime('%H:%M')}-{q.schedule_end.strftime('%H:%M')} {days_text}",
+                QSystemTrayIcon.MessageIcon.Information, 4000)
+    
     def _pause_current_queue(self):
         q = self._current_queue()
         if not q:
@@ -642,28 +796,31 @@ class MainWindow(QMainWindow):
 
         paused = 0
         for gid in q.downloads:
+            real_status = self.aria2.get_status(gid)
+            
+            if real_status in ["active", "waiting"]:
+                self.aria2.pause(gid)
+                paused += 1
+            
             if gid in self._all_downloads:
-                status = self._all_downloads[gid].get("status")
-                if status == "active":
-                    self.aria2.pause(gid)
-                    paused += 1
-                    self._all_downloads[gid]["status"] = "paused"
-                    self._all_downloads[gid]["downloadSpeed"] = 0
-                elif status == "waiting":
-                    self.aria2.pause(gid)
-                    self._all_downloads[gid]["status"] = "paused"
+                self._all_downloads[gid]["status"] = "paused"
+                self._all_downloads[gid]["downloadSpeed"] = 0
+            
+            if gid in q.downloads_info:
+                q.downloads_info[gid]["status"] = "paused"
 
+        self.store.save()
         self._refresh_table()
         self._update_queue_status()
         self._update_queue_buttons()
 
         if paused > 0:
-            self.tray.showMessage("FelfelDM", f"Paused {paused} download(s)",
+            self.tray.showMessage("FelfelDM", f"⏸️ Paused {paused} download(s)",
                                 QSystemTrayIcon.MessageIcon.Information, 2000)
         else:
             self.tray.showMessage("FelfelDM", "No active downloads to pause",
                                 QSystemTrayIcon.MessageIcon.Information, 2000)
-
+   
     def _clear_completed_downloads(self):
         q = self._current_queue()
         if not q:
@@ -844,6 +1001,27 @@ class MainWindow(QMainWindow):
                     gid = self.aria2.add_url(url, options)
                     if gid:
                         direct_queue.downloads.append(gid)
+                        raw_name = url.split('/')[-1]
+                        clean_name = raw_name.split('?')[0] if '?' in raw_name else raw_name
+                        if not clean_name:
+                            clean_name = "Unknown"
+                        full_path = os.path.join(d["path"], clean_name)
+                        
+                        direct_queue.downloads_info[gid] = {
+                            "url": url,
+                            "name": clean_name,
+                            "totalLength": 0,
+                            "completedLength": 0,
+                            "status": "waiting",
+                            "files": [{
+                                "path": full_path,
+                                "length": "0",
+                                "completedLength": "0",
+                                "selected": "true",
+                                "uris": []
+                            }],
+                            "category": "📁 Other"
+                        }
                         self.aria2.resume(gid)
                         added_gids.append(gid)
                 
@@ -898,6 +1076,13 @@ class MainWindow(QMainWindow):
                     if gid in self._cleared_gids:
                         self._cleared_gids.remove(gid)
                     q.downloads.append(gid)
+                    
+                    # Save URL for restore
+                    q.downloads_info[gid] = {
+                        "url": url,
+                        "name": url.split("/")[-1] or "Unknown"
+                    }
+                    
                     new_gids.append(gid)
                     added += 1
                     self.aria2.pause(gid)
@@ -921,8 +1106,8 @@ class MainWindow(QMainWindow):
                 self.tray.showMessage("FelfelDM", f"✅ Added {added} download(s) in paused state",
                                     QSystemTrayIcon.MessageIcon.Information, 2000)
             
-            self._refresh_table()   
-
+            self._refresh_table()
+    
     def _add_download(self):
         visible_queues = [q for q in self.store.queues if q.name != "__direct__"]
         
@@ -956,7 +1141,7 @@ class MainWindow(QMainWindow):
 
             self._apply_settings_to_aria2()
             
-            proxy_mode = d.get("proxy_mode", 0)  # 0: global, 1: custom, 2: none
+            proxy_mode = d.get("proxy_mode", 0)
             
             options = {
                 "dir": d["path"],
@@ -969,17 +1154,17 @@ class MainWindow(QMainWindow):
                 "header": ["User-Agent: Mozilla/5.0 (X11; Linux x86_64; rv:125.0) Gecko/20100101 Firefox/125.0"]
             }
             
-            if proxy_mode == 0:  # Use Global/Queue Proxy
+            if proxy_mode == 0:
                 proxy = self.proxy_manager.get_proxy_for_queue(q.name)
                 if proxy and proxy.is_valid():
                     options["all-proxy"] = proxy._build_proxy_url()
                     print(f"🌐 Using queue/global proxy for {q.name}: {proxy._build_proxy_url()}")
-            elif proxy_mode == 1:  # Custom Proxy for this download
+            elif proxy_mode == 1:
                 custom_proxy = d.get("custom_proxy")
                 if custom_proxy and custom_proxy.is_valid():
                     options["all-proxy"] = custom_proxy._build_proxy_url()
                     print(f"🔧 Using custom proxy: {custom_proxy._build_proxy_url()}")
-            elif proxy_mode == 2:  # No Proxy (Direct Connection)
+            elif proxy_mode == 2:
                 options["all-proxy"] = ""
                 print(f"⛔ No proxy for this download")
             else:
@@ -995,19 +1180,42 @@ class MainWindow(QMainWindow):
                     if gid in self._cleared_gids:
                         self._cleared_gids.remove(gid)
                     q.downloads.append(gid)
+                    
+                    raw_name = url.split('/')[-1]
+                    clean_name = raw_name.split('?')[0] if '?' in raw_name else raw_name
+                    if not clean_name:
+                        clean_name = "Unknown"
+                    full_path = os.path.join(d["path"], clean_name)
+                    
+                    q.downloads_info[gid] = {
+                        "url": url,
+                        "name": clean_name,
+                        "totalLength": 0,
+                        "completedLength": 0,
+                        "status": "waiting",
+                        "files": [{
+                            "path": full_path,
+                            "length": "0",
+                            "completedLength": "0",
+                            "selected": "true",
+                            "uris": []
+                        }],
+                        "category": "📁 Other"
+                    }
+                    
                     new_gids.append(gid)
                     added += 1
                     self._pending_pause.add(gid)
 
                     self._all_downloads[gid] = {
                         "gid": gid,
-                        "name": url.split("/")[-1] or "Unknown",
+                        "name": clean_name,
                         "status": "waiting",
                         "totalLength": 0,
                         "completedLength": 0,
                         "downloadSpeed": 0,
                         "connections": 0,
-                        "files": [],
+                        "files": [{"path": full_path}],
                         "errorMessage": "",
                         "category": "📁 Other"
                     }
@@ -1030,6 +1238,7 @@ class MainWindow(QMainWindow):
                                     QSystemTrayIcon.MessageIcon.Information, 2000)
 
             self._refresh_table()
+    
     def _add_single_download(self):
         dlg = SingleDownloadDialog(self)
 
@@ -1110,7 +1319,14 @@ class MainWindow(QMainWindow):
             if gid in self._all_downloads:
                 self._all_downloads[gid]["status"] = "paused"
                 self._all_downloads[gid]["downloadSpeed"] = 0
+                
+                q = self._current_queue()
+                if q and gid in q.downloads_info:
+                    q.downloads_info[gid]["status"] = "paused"
+                    self.store.save()
+                
             self._refresh_table()
+            self._update_toggle_button()
 
     def _resume_selected(self):
         gid = self._selected_gid()
@@ -1121,13 +1337,16 @@ class MainWindow(QMainWindow):
                     "This queue is paused. Please click 'Start Queue' to begin all downloads.")
                 return
 
+            self.aria2.resume(gid)
             if gid in self._all_downloads:
-                status = self._all_downloads[gid].get("status")
-                if status == "paused":
-                    self.aria2.resume(gid)
-                    self._all_downloads[gid]["status"] = "active"
-
+                self._all_downloads[gid]["status"] = "active"
+                
+                if q and gid in q.downloads_info:
+                    q.downloads_info[gid]["status"] = "active"
+                    self.store.save()
+                
             self._refresh_table()
+            self._update_toggle_button()
 
     def _remove_selected(self):
         selected = self.table.selectionModel().selectedRows()
@@ -1210,26 +1429,55 @@ class MainWindow(QMainWindow):
         
         for gid in gids_to_remove:
             file_paths = []
-            aria2_files = []
+            download_path = None
             
-            if delete_files and gid in self._all_downloads:
-                files = self._all_downloads[gid].get("files", [])
+            for q in self.store.queues:
+                if gid in q.downloads_info:
+                    info = q.downloads_info[gid]
+                    download_path = q.save_path
+                    name = info.get("name", "")
+                    files = info.get("files", [])
+                    for f in files:
+                        path = f.get("path")
+                        if path:
+                            file_paths.append(path)
+                    if not file_paths and name and download_path:
+                        possible_path = os.path.join(download_path, name)
+                        if os.path.exists(possible_path):
+                            file_paths.append(possible_path)
+                    break
+            
+            if not file_paths and gid in self._all_downloads:
+                dl = self._all_downloads[gid]
+                name = dl.get("name", "")
+                files = dl.get("files", [])
                 for f in files:
                     path = f.get("path")
-                    if path and os.path.exists(path):
+                    if path:
                         file_paths.append(path)
-                        aria2_path = path + ".aria2"
-                        if os.path.exists(aria2_path):
-                            aria2_files.append(aria2_path)
+                if not file_paths and name:
+                    for q in self.store.queues:
+                        if gid in q.downloads:
+                            possible_path = os.path.join(q.save_path, name)
+                            if os.path.exists(possible_path):
+                                file_paths.append(possible_path)
+                            break
             
             try:
                 self.aria2.remove(gid)
             except Exception as e:
                 print(f"⚠ Could not remove GID {gid} from aria2: {e}")
             
+            try:
+                self.aria2._call("aria2.removeDownloadResult", [gid])
+            except Exception as e:
+                print(f"⚠ Could not remove result for {gid}: {e}")
+            
             for q in self.store.queues:
                 if gid in q.downloads:
                     q.downloads.remove(gid)
+                if gid in q.downloads_info:
+                    del q.downloads_info[gid]
             
             if gid in self._all_downloads:
                 del self._all_downloads[gid]
@@ -1237,17 +1485,21 @@ class MainWindow(QMainWindow):
             if delete_files:
                 for path in file_paths:
                     try:
-                        if os.path.isfile(path):
-                            os.remove(path)
-                            print(f"🗑 Deleted file: {path}")
-                        elif os.path.isdir(path):
-                            import shutil
-                            shutil.rmtree(path)
-                            print(f"🗑 Deleted folder: {path}")
+                        if os.path.exists(path):
+                            if os.path.isfile(path):
+                                os.remove(path)
+                                print(f"🗑 Deleted file: {path}")
+                            elif os.path.isdir(path):
+                                import shutil
+                                shutil.rmtree(path)
+                                print(f"🗑 Deleted folder: {path}")
+                        else:
+                            print(f"⚠ File not found: {path}")
                     except Exception as e:
                         print(f"⚠ Could not delete {path}: {e}")
                 
-                for aria2_path in aria2_files:
+                for path in file_paths:
+                    aria2_path = path + ".aria2"
                     try:
                         if os.path.exists(aria2_path):
                             os.remove(aria2_path)
@@ -1269,8 +1521,12 @@ class MainWindow(QMainWindow):
             self.tray.showMessage("FelfelDM", msg_text,
                                 QSystemTrayIcon.MessageIcon.Information, 2000)
     def _selected_gid(self):
+        """Get selected download GID"""
         idx = self.table.currentIndex()
-        return self.model.get_gid(idx.row()) if idx.isValid() else None
+        if idx.isValid():
+            return self.model.get_gid(idx.row())
+        return None
+
 
     def _context_menu(self, pos):
         gid = self._selected_gid()
@@ -1289,19 +1545,28 @@ class MainWindow(QMainWindow):
         dl_data = self._all_downloads.get(gid, {})
         download_name = dl_data.get("name", "Unknown")
         
+        # Get real status from aria2
+        real_status = self.aria2.get_status(gid)
+        if not real_status:
+            real_status = dl_data.get("status", "")
+        
         menu = QMenu(self)
-        menu.addAction(get_icon('media-playback-pause'), "Pause", self._pause_selected)
-        menu.addAction(get_icon('media-playback-start'), "Resume", self._resume_selected)
+        
+        # Single Pause/Resume option based on real status
+        if real_status in ["active", "waiting"]:
+            menu.addAction(get_icon('media-playback-pause'), "Pause", self._pause_selected)
+        elif real_status == "paused":
+            menu.addAction(get_icon('media-playback-start'), "Resume", self._resume_selected)
+        
         menu.addSeparator()
         
+        # ===== Proxy Settings =====
         proxy_menu = menu.addMenu(get_icon('network'), "Proxy Settings")
         
-        # Check current proxy
         current_proxy = self.proxy_manager.get_proxy_for_download(gid)
         if current_proxy:
             proxy_menu.addAction(f"✅ Current: {current_proxy.get_display_string()}")
         else:
-            # Check queue proxy
             q = self._current_queue()
             if q:
                 queue_proxy = self.proxy_manager.get_proxy_for_queue(q.name)
@@ -1316,12 +1581,17 @@ class MainWindow(QMainWindow):
         
         menu.addSeparator()
 
+        # ===== Open Folder =====
         def _open_folder():
             files = dl_data.get("files", [])
             if files and files[0].get("path"):
-                QDesktopServices.openUrl(QUrl.fromLocalFile(os.path.dirname(files[0]["path"])))
+                path = files[0]["path"]
+                folder = os.path.dirname(path)
+                if os.path.exists(folder):
+                    QDesktopServices.openUrl(QUrl.fromLocalFile(folder))
         menu.addAction(get_icon('folder'), "Open Folder", _open_folder)
 
+        # ===== Copy URL =====
         def _copy_link():
             files = dl_data.get("files", [])
             if files and files[0].get("uris"):
@@ -1329,9 +1599,13 @@ class MainWindow(QMainWindow):
         menu.addAction(get_icon('edit-copy'), "Copy URL", _copy_link)
 
         menu.addSeparator()
+        
+        # ===== Remove =====
         menu.addAction(get_icon('edit-delete'), "Remove", self._remove_selected)
+        
         menu.exec(self.table.viewport().mapToGlobal(pos))
 
+    
     def _filter_downloads(self, text):
         q = self._current_queue()
         if not q:
@@ -1363,35 +1637,115 @@ class MainWindow(QMainWindow):
 
         for gid in q.downloads:
             if gid not in self._all_downloads:
-                continue
+                info = q.downloads_info.get(gid, {})
+                if info:
+                    self._all_downloads[gid] = {
+                        "gid": gid,
+                        "name": info.get("name", "Unknown"),
+                        "status": info.get("status", "paused"),
+                        "totalLength": info.get("totalLength", 0),
+                        "completedLength": info.get("completedLength", 0),
+                        "downloadSpeed": 0,
+                        "connections": 0,
+                        "files": info.get("files", []),
+                        "errorMessage": "",
+                        "category": info.get("category", "📁 Other")
+                    }
+                else:
+                    continue
 
             row = self._all_downloads[gid].copy()
 
             real_status = self.aria2.get_status(gid)
             
-            if real_status == "paused":
-                row["status"] = "paused"
-                row["downloadSpeed"] = 0
-            elif q.name == "__direct__":
+            if q.paused:
+                if real_status not in ["complete", "error", "removed"]:
+                    row["status"] = "paused"
+                    row["downloadSpeed"] = 0
+                    if real_status in ["active", "waiting"]:
+                        try:
+                            self.aria2.pause(gid)
+                        except:
+                            pass
+                else:
+                    row["status"] = real_status
+            else:
                 if real_status:
                     row["status"] = real_status
                     if real_status == "paused":
                         row["downloadSpeed"] = 0
-            else:
-                if q.paused and row.get("status") not in ["complete", "error", "removed"]:
-                    row["status"] = "paused"
-                    row["downloadSpeed"] = 0
-                elif not q.paused and row.get("status") == "paused":
-                    if real_status != "paused":
-                        row["status"] = "waiting"
+                else:
+                    info = q.downloads_info.get(gid, {})
+                    row["status"] = info.get("status", "waiting")
 
             if search_text and search_text not in row.get("name", "").lower():
                 continue
 
             rows.append(row)
 
-        self.model.update_rows(rows)     
+        self.model.update_rows(rows)
             
+    def _update_toggle_button(self):
+        """Update toggle button state based on selected download"""
+        if not hasattr(self, 'table') or not self.table.selectionModel():
+            self.btn_toggle.setEnabled(False)
+            self.btn_toggle.setText("Pause")
+            self.btn_toggle.setIcon(get_icon('media-playback-pause'))
+            self.btn_move_queue.setEnabled(False)
+            return
+        
+        selected_indexes = self.table.selectionModel().selectedRows()
+        if not selected_indexes:
+            self.btn_toggle.setEnabled(False)
+            self.btn_toggle.setText("Pause")
+            self.btn_toggle.setIcon(get_icon('media-playback-pause'))
+            self.btn_move_queue.setEnabled(False)
+            return
+        
+        idx = selected_indexes[0]
+        if not idx.isValid():
+            self.btn_toggle.setEnabled(False)
+            self.btn_toggle.setText("Pause")
+            self.btn_toggle.setIcon(get_icon('media-playback-pause'))
+            self.btn_move_queue.setEnabled(False)
+            return
+        
+        self.btn_move_queue.setEnabled(True)
+        
+        gid = self.model.get_gid(idx.row())
+        
+        if not gid:
+            self.btn_toggle.setEnabled(False)
+            self.btn_toggle.setText("Pause")
+            self.btn_toggle.setIcon(get_icon('media-playback-pause'))
+            return
+        
+        # Get real status from aria2
+        real_status = self.aria2.get_status(gid)
+        
+        # If aria2 fails, fallback to _all_downloads
+        if not real_status:
+            if gid in self._all_downloads:
+                real_status = self._all_downloads[gid].get("status")
+            else:
+                self.btn_toggle.setEnabled(False)
+                self.btn_toggle.setText("Pause")
+                self.btn_toggle.setIcon(get_icon('media-playback-pause'))
+                return
+        
+        if real_status in ["active", "waiting"]:
+            self.btn_toggle.setEnabled(True)
+            self.btn_toggle.setText("Pause")
+            self.btn_toggle.setIcon(get_icon('media-playback-pause'))
+        elif real_status == "paused":
+            self.btn_toggle.setEnabled(True)
+            self.btn_toggle.setText("Resume")
+            self.btn_toggle.setIcon(get_icon('media-playback-start'))
+        else:  # complete, error, removed
+            self.btn_toggle.setEnabled(False)
+            self.btn_toggle.setText("Pause")
+            self.btn_toggle.setIcon(get_icon('media-playback-pause'))
+    
     def _toggle_shutdown(self, checked):
         self.store.settings["shutdown_after_finish"] = checked
         self.store.save()
@@ -1513,6 +1867,12 @@ class MainWindow(QMainWindow):
                                             QSystemTrayIcon.MessageIcon.Information, 3000)
                         os.system("systemctl poweroff")
 
+        # ===== Build saved_info lookup =====
+        saved_info_map = {}
+        for q in self.store.queues:
+            for gid, info in q.downloads_info.items():
+                saved_info_map[gid] = info
+
         # ===== Process downloads =====
         all_downloads_dict = {}
         
@@ -1524,23 +1884,32 @@ class MainWindow(QMainWindow):
             if gid in self._cleared_gids:
                 return None
             
-            old_status = None
-            old_speed = 0
-            if gid in self._all_downloads:
-                old_status = self._all_downloads[gid].get("status")
-                old_speed = self._all_downloads[gid].get("downloadSpeed", 0)
+            saved_info = saved_info_map.get(gid, {})
+            saved_total = saved_info.get("totalLength", 0)
+            saved_completed = saved_info.get("completedLength", 0)
+            saved_name = saved_info.get("name", "")
+            saved_status = saved_info.get("status", "")
+            saved_category = saved_info.get("category", "📁 Other")
             
-            name = "Unknown File"
-            files = dl.get("files", [])
-            if files and files[0].get("path"):
-                name = os.path.basename(files[0]["path"])
-            elif files and files[0].get("uris"):
-                name = files[0]["uris"][0]["uri"].split("/")[-1] or "Unknown File"
+            old_data = self._all_downloads.get(gid, {})
+            old_status = old_data.get("status")
             
-            if not name or name == "Unknown File":
+            name = saved_name
+            if not name or name == "Unknown":
+                files = dl.get("files", [])
+                if files and files[0].get("path"):
+                    aria2_name = os.path.basename(files[0]["path"])
+                    if aria2_name and aria2_name != "Unknown File":
+                        name = aria2_name
+                elif files and files[0].get("uris"):
+                    aria2_name = files[0]["uris"][0]["uri"].split("/")[-1] or "Unknown File"
+                    if aria2_name and aria2_name != "Unknown File":
+                        name = aria2_name
+            
+            if not name or name == "Unknown" or name == "Unknown File":
                 bittorrent = dl.get("bittorrent", {})
                 info = bittorrent.get("info", {})
-                name = info.get("name", "Unknown File")
+                name = info.get("name", saved_name or "Unknown File")
 
             speed = dl.get("downloadSpeed", 0)
             try:
@@ -1548,27 +1917,50 @@ class MainWindow(QMainWindow):
             except (ValueError, TypeError):
                 speed = 0
 
+            total_length = saved_total
+            completed_length = saved_completed
+            
+            aria2_total = dl.get("totalLength", 0)
+            try:
+                aria2_total = int(aria2_total)
+            except (ValueError, TypeError):
+                aria2_total = 0
+            
+            if aria2_total > 0:
+                total_length = aria2_total
+            
+            aria2_completed = dl.get("completedLength", 0)
+            try:
+                aria2_completed = int(aria2_completed)
+            except (ValueError, TypeError):
+                aria2_completed = 0
+            
+            if aria2_completed > 0:
+                completed_length = aria2_completed
+
             status = default_status
-            if old_status == "paused":
+            if old_status == "paused" or saved_status == "paused":
                 status = "paused"
                 speed = 0
             elif default_status == "paused":
                 status = "paused"
                 speed = 0
+            elif default_status == "complete":
+                status = "complete"
+                speed = 0
 
             return {
                 "gid": gid,
                 "name": name,
-                "category": get_category(name),
+                "category": saved_category,
                 "status": status,
-                "totalLength": dl.get("totalLength", 0),
-                "completedLength": dl.get("completedLength", 0),
+                "totalLength": total_length,
+                "completedLength": completed_length,
                 "downloadSpeed": speed,
                 "files": dl.get("files", []),
                 "connections": dl.get("connections", 0),
                 "errorMessage": dl.get("errorMessage", "")
             }
-
         # Active downloads
         for dl in result["active"]:
             data = process_dl(dl, "active")
@@ -1601,6 +1993,25 @@ class MainWindow(QMainWindow):
                 self._pending_pause.remove(gid)
 
         self._all_downloads = all_downloads_dict
+
+        # ===== Save complete download info to data_store =====
+        for q in self.store.queues:
+            for gid in q.downloads:
+                if gid in self._all_downloads:
+                    dl = self._all_downloads[gid]
+                    if gid not in q.downloads_info:
+                        q.downloads_info[gid] = {}
+                    
+                    q.downloads_info[gid].update({
+                        "totalLength": dl.get("totalLength", 0),
+                        "completedLength": dl.get("completedLength", 0),
+                        "status": dl.get("status", "unknown"),
+                        "name": dl.get("name", "Unknown"),
+                        "files": dl.get("files", []),
+                        "category": dl.get("category", "📁 Other")
+                    })
+                        
+        self.store.save()
 
         # Check queue completion
         for q in self.store.queues:
@@ -1669,6 +2080,9 @@ class MainWindow(QMainWindow):
         self._refresh_table()
         self._update_queue_status()
         self._refresh_queue_list()
+        self._update_toggle_button()
+        
+        
     def _start_aria2_if_needed(self):
         if self.aria2.is_connected():
             return
@@ -1859,7 +2273,6 @@ class MainWindow(QMainWindow):
             QSystemTrayIcon.MessageIcon.Information, 2000)     
            
     def _quick_download(self):
-        from ui.dialogs import QuickDownloadDialog
         dlg = QuickDownloadDialog(self)
 
         clip = QApplication.clipboard().text().strip()
@@ -1891,11 +2304,11 @@ class MainWindow(QMainWindow):
             }
 
             proxy_mode = d.get("proxy_mode", 0)
-            if proxy_mode == 0:  # Use Global Proxy
+            if proxy_mode == 0:
                 proxy = self.proxy_manager.get_proxy_for_queue(None)
                 if proxy and proxy.is_valid():
                     options["all-proxy"] = proxy._build_proxy_url()
-            elif proxy_mode == 1:  # Custom Proxy
+            elif proxy_mode == 1:
                 custom_proxy = d.get("custom_proxy")
                 if custom_proxy and custom_proxy.is_valid():
                     options["all-proxy"] = custom_proxy._build_proxy_url()
@@ -1907,6 +2320,28 @@ class MainWindow(QMainWindow):
                 gid = self.aria2.add_url(url, options)
                 if gid:
                     direct_queue.downloads.append(gid)
+                    
+                    raw_name = url.split('/')[-1]
+                    clean_name = raw_name.split('?')[0] if '?' in raw_name else raw_name
+                    if not clean_name:
+                        clean_name = "Unknown"
+                    full_path = os.path.join(d["path"], clean_name)
+                    
+                    direct_queue.downloads_info[gid] = {
+                        "url": url,
+                        "name": clean_name,
+                        "totalLength": 0,
+                        "completedLength": 0,
+                        "status": "waiting",
+                        "files": [{
+                            "path": full_path,
+                            "length": "0",
+                            "completedLength": "0",
+                            "selected": "true",
+                            "uris": []
+                        }],
+                        "category": "📁 Other"
+                    }
                     self.aria2.resume(gid)
                     added_gids.append(gid)
 
@@ -1916,7 +2351,7 @@ class MainWindow(QMainWindow):
 
             if len(added_gids) == 1:
                 QTimer.singleShot(500, lambda: self._open_progress_dialog(added_gids[0]))
-          
+   
     def _on_table_double_click(self, index):
         gid = self.model.get_gid(index.row())
         if gid:
@@ -1953,7 +2388,7 @@ class MainWindow(QMainWindow):
                 format_type=data["format"],
                 cookie_file=data["cookie_file"],
                 video_info=data.get("video_info"),
-                parent=None,  # ⭐ parent=None
+                parent=None,
                 proxy_url=proxy_url
             )
             self._youtube_dialog.show() 
@@ -1991,3 +2426,186 @@ class MainWindow(QMainWindow):
         else:
             self.aria2.change_global_option({"all-proxy": ""})
             print("✅ Proxy disabled")
+            
+    def _toggle_pause_resume(self):
+        """Toggle pause/resume for selected download"""
+        gid = self._selected_gid()
+        if not gid:
+            return
+        
+        # Get real status from aria2
+        real_status = self.aria2.get_status(gid)
+        
+        # If aria2 fails, fallback to _all_downloads
+        if not real_status:
+            if gid in self._all_downloads:
+                real_status = self._all_downloads[gid].get("status")
+            else:
+                return
+        
+        if real_status in ["active", "waiting"]:
+            self._pause_selected()
+        elif real_status == "paused":
+            self._resume_selected()
+    
+    def _set_download_proxy(self, gid, download_name):
+        """Set custom proxy for a specific download"""
+        from ui.download_proxy_dialog import DownloadProxyDialog
+        
+        current = self.proxy_manager.get_proxy_for_download(gid)
+        dlg = DownloadProxyDialog(download_name, current, self)
+        
+        if dlg.exec():
+            data = dlg.get_data()
+            if data["use_custom"]:
+                self.proxy_manager.set_download_proxy(gid, data["config"])
+                self.tray.showMessage("FelfelDM", 
+                    f"✅ Custom proxy set for: {download_name}",
+                    QSystemTrayIcon.MessageIcon.Information, 2000)
+            else:
+                self.proxy_manager.set_download_proxy(gid, None)
+                self.tray.showMessage("FelfelDM", 
+                    f"ℹ️ Proxy cleared for: {download_name}",
+                    QSystemTrayIcon.MessageIcon.Information, 2000)
+            
+            # Refresh table
+            self._refresh_table()
+
+    def _clear_download_proxy(self, gid):
+        """Clear custom proxy for a download"""
+        self.proxy_manager.set_download_proxy(gid, None)
+        dl_data = self._all_downloads.get(gid, {})
+        name = dl_data.get("name", "Unknown")
+        
+        self.tray.showMessage("FelfelDM", 
+            f"🗑 Proxy cleared for: {name}",
+            QSystemTrayIcon.MessageIcon.Information, 2000)
+        self._refresh_table()
+        
+        
+    def _move_selected_to_queue(self):
+        """Move selected downloads to another queue"""
+        selected = self.table.selectionModel().selectedRows()
+        if not selected:
+            QMessageBox.information(self, "Info", "No downloads selected.")
+            return
+
+        gids_to_move = []
+        for idx in selected:
+            gid = self.model.get_gid(idx.row())
+            if gid:
+                gids_to_move.append(gid)
+
+        if not gids_to_move:
+            QMessageBox.warning(self, "Error", "No valid downloads selected.")
+            return
+
+        source_queue = self._current_queue()
+        if not source_queue:
+            QMessageBox.warning(self, "Error", "No source queue selected.")
+            return
+
+        target_queues = [q for q in self.store.queues if q.name != source_queue.name and q.name != "__direct__"]
+        
+        if not target_queues:
+            QMessageBox.warning(self, "Error", "No other queues available to move to.")
+            return
+
+        dlg = QDialog(self)
+        dlg.setWindowTitle("Move to Queue")
+        dlg.setMinimumWidth(400)
+        
+        layout = QVBoxLayout(dlg)
+        layout.setSpacing(12)
+        layout.setContentsMargins(20, 20, 20, 20)
+        
+        info_label = QLabel(f"Move {len(gids_to_move)} download(s) from '{source_queue.name}' to:")
+        info_label.setWordWrap(True)
+        layout.addWidget(info_label)
+        
+        queue_combo = QComboBox()
+        for q in target_queues:
+            queue_combo.addItem(q.name, q)
+        layout.addWidget(queue_combo)
+        
+        layout.addSpacing(10)
+        
+        btn_layout = QHBoxLayout()
+        btn_move = QPushButton("Move")
+        btn_move.setIcon(get_icon('go-next'))
+        btn_cancel = QPushButton("Cancel")
+        
+        btn_layout.addStretch()
+        btn_layout.addWidget(btn_move)
+        btn_layout.addWidget(btn_cancel)
+        layout.addLayout(btn_layout)
+        
+        result = None
+        
+        def on_move():
+            nonlocal result
+            result = queue_combo.currentData()
+            dlg.accept()
+        
+        def on_cancel():
+            nonlocal result
+            result = None
+            dlg.reject()
+        
+        btn_move.clicked.connect(on_move)
+        btn_cancel.clicked.connect(on_cancel)
+        
+        dlg.exec()
+        
+        if result is None:
+            return
+        
+        target_queue = result
+        moved_count = 0
+        
+        for gid in gids_to_move:
+            real_status = self.aria2.get_status(gid)
+            if not real_status and gid in self._all_downloads:
+                real_status = self._all_downloads[gid].get("status")
+            
+            if gid in source_queue.downloads:
+                source_queue.downloads.remove(gid)
+            
+            if gid not in target_queue.downloads:
+                target_queue.downloads.append(gid)
+                
+                if gid in source_queue.downloads_info:
+                    info = source_queue.downloads_info.pop(gid)
+                    if real_status:
+                        info["status"] = real_status
+                    target_queue.downloads_info[gid] = info
+                
+                if gid in self._all_downloads:
+                    if real_status:
+                        self._all_downloads[gid]["status"] = real_status
+                    if target_queue.paused:
+                        self._all_downloads[gid]["status"] = "paused"
+                        self._all_downloads[gid]["downloadSpeed"] = 0
+                        try:
+                            self.aria2.pause(gid)
+                        except:
+                            pass
+                
+                moved_count += 1
+        
+        if len(source_queue.downloads) == 0:
+            source_queue.paused = True
+        
+        self.store.save()
+        
+        self._refresh_queue_list()
+        self._refresh_table()
+        self._update_queue_buttons()
+        self._update_toggle_button()
+        
+        self.tray.showMessage(
+            "FelfelDM",
+            f"✅ Moved {moved_count} download(s) to '{target_queue.name}'",
+            QSystemTrayIcon.MessageIcon.Information,
+            2000
+        )
