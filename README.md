@@ -1,3 +1,83 @@
+```markdown
+### Extension Features
+
+- 📥 **One-click Download** — Add current page to FelfelDM
+- 🖱️ **Context Menu** — Right-click links, images, videos
+- 🔗 **Selected Links** — Download multiple links from selection
+- 🎯 **Download Interception** — Auto-catch browser downloads
+- 🔔 **Notifications** — Status updates and confirmations
+- 🔄 **Toggle Switch** — Enable/disable download catching
+- 📡 **Dual Port Support** — Works with both GUI and service modes
+- **🟢 Connection Status** — Shows connection status via badge icon (● = connected, ✕ = disconnected)
+- **⚠️ Smart Fallback** — When FelfelDM is not running, downloads proceed normally instead of failing
+```
+
+### ۲. **اضافه کردن بخش جدید در Troubleshooting:**
+
+```markdown
+### Extension shows "✕" badge
+
+1. Make sure FelfelDM is running
+2. Check if the application is listening on port 8766/8765
+3. Test connection: `curl http://localhost:8766/ping`
+4. If you see a red "✕" on the extension icon, it means FelfelDM is not running
+5. Downloads will proceed normally (not intercepted) when the app is not running
+```
+
+### ۳. **به‌روزرسانی بخش Proxy Configuration (اگه تغییر کرده):**
+
+```markdown
+### Proxy Configuration
+
+FelfelDM supports proxy configuration at three levels:
+
+| Level | Description | Where to Configure |
+|-------|-------------|-------------------|
+| **Global Proxy** | Applies to all downloads by default | Settings → Proxy Settings |
+| **Queue Proxy** | Overrides global proxy for a specific queue | Right-click queue → Settings → Proxy Settings |
+| **Download Proxy** | Overrides all other proxy settings for a single download | Add Download dialog → Proxy Settings or right-click → Proxy Settings |
+
+**Supported Proxy Types:**
+- HTTP/HTTPS Proxy (`http://proxy:port`)
+- SOCKS5 Proxy (`socks5://proxy:port`)
+- Authentication supported via `user:pass@host:port`
+
+**YouTube Proxy Support:**
+- YouTube downloads also support proxy configuration
+- Proxy settings from the main dialog are automatically applied to the download progress window
+- No need to re-enter proxy details in the progress dialog
+```
+
+### ۴. **اضافه کردن بخش YouTube Quality Selection:**
+
+```markdown
+### YouTube Download
+
+FelfelDM supports downloading videos and audio from YouTube with advanced features:
+
+**Quality Selection:**
+- **Dynamic Quality List** — Automatically fetches available qualities for each video
+- **Video Formats** — MP4, WebM with various resolutions
+- **Audio Formats** — MP3, M4A with bitrate options
+- **Best Quality** — Automatically selects the best available format
+
+**Requirements:**
+- yt-dlp must be installed
+- For age-restricted or private videos, export cookies from your browser
+
+**Supported Formats:**
+| Type | Formats | Description |
+|------|---------|-------------|
+| Video | MP4, WebM | 1080p, 720p, 480p, 360p |
+| Audio | MP3, M4A | Various bitrates |
+| Auto | Best | Automatically selects optimal format |
+```
+
+---
+
+## 📝 **نسخه کامل README به‌روز شده:**
+
+```markdown
 # 🌶️ FelfelDM
 
 <div align="center">
@@ -50,9 +130,10 @@
 - 🎬 **Splash Screen** — Beautiful loading animation with circular logo
 - 🔧 **Systemd Service** — Run as background service
 - 📥 **CLI Support** — Add URLs from command line with `--add`
-- 🎵 **YouTube Download** — Download videos/audio from YouTube with cookies support
+- 🎵 **YouTube Download** — Download videos/audio from YouTube with dynamic quality selection
 - 🌐 **Proxy Support** — Global, per-queue, and per-download proxy configuration (HTTP/HTTPS/SOCKS5)
 - 📦 **Independent Progress Windows** — Separate windows for download progress that stay open even when main window is closed
+- **🟢 Smart Extension** — Browser extension shows connection status and handles disconnections gracefully
 
 ---
 
@@ -120,6 +201,25 @@ FelfelDM supports proxy configuration at three levels:
 - SOCKS5 Proxy (`socks5://proxy:port`)
 - Authentication supported via `user:pass@host:port`
 
+**YouTube Proxy Support:**
+- YouTube downloads also support proxy configuration
+- Proxy settings from the main dialog are automatically applied to the download progress window
+- No need to re-enter proxy details in the progress dialog
+
+### YouTube Download
+
+FelfelDM supports downloading videos and audio from YouTube with advanced features:
+
+**Quality Selection:**
+- **Dynamic Quality List** — Automatically fetches available qualities for each video
+- **Video Formats** — MP4, WebM with various resolutions (1080p, 720p, 480p, etc.)
+- **Audio Formats** — MP3, M4A with bitrate options
+- **Best Quality** — Automatically selects the best available format
+
+**Requirements:**
+- yt-dlp must be installed
+- For age-restricted or private videos, export cookies from your browser
+
 ### Keyboard Shortcuts
 
 | Shortcut | Action              |
@@ -156,6 +256,8 @@ cd FelfelDM-extension
 - 🔔 **Notifications** — Status updates and confirmations
 - 🔄 **Toggle Switch** — Enable/disable download catching
 - 📡 **Dual Port Support** — Works with both GUI and service modes
+- 🟢 **Connection Status** — Shows connection status via badge icon (● = connected, ✕ = disconnected)
+- ⚠️ **Smart Fallback** — When FelfelDM is not running, downloads proceed normally instead of failing
 
 ---
 
@@ -199,6 +301,14 @@ sudo dnf install aria2 yt-dlp
 2. Test GUI: `curl http://localhost:8766/ping`
 3. Test Service: `curl http://localhost:8765/ping`
 4. Check service status: `systemctl --user status felfeldm.service`
+
+### Extension shows "✕" badge
+
+1. Make sure FelfelDM is running
+2. Check if the application is listening on port 8766/8765
+3. Test connection: `curl http://localhost:8766/ping`
+4. If you see a red "✕" on the extension icon, it means FelfelDM is not running
+5. Downloads will proceed normally (not intercepted) when the app is not running
 
 ### Service not starting
 
@@ -278,3 +388,4 @@ python3 main.py
   <br>
   <sub>© 2026 FelfelDM Contributors</sub>
 </div>
+```
