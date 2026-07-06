@@ -1,13 +1,40 @@
-const SERVER = "http://localhost:8765";
+const SERVER_GUI = "http://localhost:8766";
+const SERVER_DAEMON = "http://localhost:8765";
 
 async function ping() {
   const statusEl = document.getElementById("status");
 
   try {
-    const r = await fetch(`${SERVER}/ping`);
+    // ⭐ اول GUI رو چک کن
+    let guiOk = false;
+    try {
+      const r = await fetch(`${SERVER_GUI}/ping`, {
+        signal: AbortSignal.timeout(1000),
+      });
+      guiOk = r.ok;
+    } catch {
+      guiOk = false;
+    }
 
-    if (r.ok) {
-      statusEl.textContent = "🟢 Connected to FelfelDM";
+    // ⭐ بعد Daemon رو چک کن
+    let daemonOk = false;
+    if (!guiOk) {
+      try {
+        const r = await fetch(`${SERVER_DAEMON}/ping`, {
+          signal: AbortSignal.timeout(1000),
+        });
+        daemonOk = r.ok;
+      } catch {
+        daemonOk = false;
+      }
+    }
+
+    if (guiOk) {
+      statusEl.textContent = "🟢 Connected to FelfelDM (GUI)";
+      statusEl.className = "connected";
+      return true;
+    } else if (daemonOk) {
+      statusEl.textContent = "🟢 Connected to FelfelDM (Service)";
       statusEl.className = "connected";
       return true;
     } else {
@@ -68,6 +95,6 @@ function updateStatusText(enabled) {
   }
 }
 
+// ⭐ چک کردن اتصال هر 5 ثانیه
 ping();
-
-setInterval(ping, 10000);
+setInterval(ping, 5000);

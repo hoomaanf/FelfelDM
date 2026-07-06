@@ -41,7 +41,7 @@
 
 ### Advanced Features
 
-- 🌐 **Browser Extension** — Firefox & Chrome extension for one-click downloads
+- 🌐 **Browser Extension** — Firefox & Chrome extension with smart connection handling
 - 🔌 **aria2 Integration** — High-performance multi-connection downloads
 - 🎨 **Modern UI** — Dark/Light theme with Papirus icons
 - ⚡ **Speed Limit** — Global download speed limiting
@@ -53,7 +53,8 @@
 - 🎵 **YouTube Download** — Download videos/audio from YouTube with dynamic quality selection
 - 🌐 **Proxy Support** — Global, per-queue, and per-download proxy configuration (HTTP/HTTPS/SOCKS5)
 - 📦 **Independent Progress Windows** — Separate windows for download progress that stay open even when main window is closed
-- **🟢 Smart Extension** — Browser extension shows connection status and handles disconnections gracefully
+- 🟢 **Smart Extension** — Browser extension shows connection status with visual badges
+- ⚡ **Smart Fallback** — When FelfelDM is not running, downloads proceed normally
 
 ---
 
@@ -176,8 +177,27 @@ cd FelfelDM-extension
 - 🔔 **Notifications** — Status updates and confirmations
 - 🔄 **Toggle Switch** — Enable/disable download catching
 - 📡 **Dual Port Support** — Works with both GUI and service modes
-- 🟢 **Connection Status** — Shows connection status via badge icon (● = connected, ✕ = disconnected)
-- ⚠️ **Smart Fallback** — When FelfelDM is not running, downloads proceed normally instead of failing
+- 🟢 **Visual Badges** — Status indicators on extension icon:
+  - **⬇️ Green** — Connected and ready
+  - **⛔ Yellow** — Catch mode is off
+  - **✕ Red** — Application is not running
+- ⚠️ **Smart Fallback** — When FelfelDM is not running, downloads proceed normally instead of failing silently
+- 📊 **Statistics** — Track intercepted and added downloads
+
+### Extension Status Guide
+
+The FelfelDM browser extension shows its status through visual badges on its icon:
+
+| Badge | Color | Meaning |
+|-------|-------|---------|
+| **⬇️** | 🟢 Green | Connected to FelfelDM, ready to intercept downloads |
+| **⛔** | 🟡 Yellow | Connected but download catching is disabled |
+| **✕** | 🔴 Red | FelfelDM is not running |
+
+**What happens when FelfelDM is not running:**
+- Downloads will proceed normally (not intercepted)
+- You'll receive a notification explaining why
+- No downloads are lost or canceled
 
 ---
 
@@ -229,6 +249,18 @@ sudo dnf install aria2 yt-dlp
 3. Test connection: `curl http://localhost:8766/ping`
 4. If you see a red "✕" on the extension icon, it means FelfelDM is not running
 5. Downloads will proceed normally (not intercepted) when the app is not running
+
+### Extension shows "⛔" badge
+
+1. Download catching is disabled
+2. Click on the extension icon and toggle "Catch Downloads" to enable it
+3. The badge will change to "⬇️" when enabled
+
+### Extension not showing any badge
+
+1. Try reloading the extension
+2. Check if the extension is properly installed
+3. Restart your browser
 
 ### Service not starting
 

@@ -4,8 +4,29 @@ const ICON_URL = browser.runtime.getURL("icons/icon128.png");
 
 // ===== Connection state =====
 let isConnected = false;
-let connectionChecked = false;
-let connectionAttempts = 0;
+let activeServer = null;
+let lastConnectionCheck = 0;
+
+// ===== Update badge =====
+async function updateBadge() {
+  const catchEnabled = await isCatchEnabled();
+
+  if (isConnected) {
+    if (catchEnabled) {
+      browser.action.setBadgeText({ text: "⬇" });
+      browser.action.setBadgeBackgroundColor({ color: "#27ae60" });
+      browser.action.setTitle({ title: "FelfelDM ⬇ Ready" });
+    } else {
+      browser.action.setBadgeText({ text: "⛔" });
+      browser.action.setBadgeBackgroundColor({ color: "#f39c12" });
+      browser.action.setTitle({ title: "FelfelDM ⛔ Catch Off" });
+    }
+  } else {
+    browser.action.setBadgeText({ text: "✕" });
+    browser.action.setBadgeBackgroundColor({ color: "#e74c3c" });
+    browser.action.setTitle({ title: "FelfelDM ✕ Offline" });
+  }
+}
 
 async function isCatchEnabled() {
   const data = await browser.storage.local.get("catchDownloads");
@@ -14,65 +35,69 @@ async function isCatchEnabled() {
 
 async function ping(port) {
   try {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 1000);
     const r = await fetch(`http://localhost:${port}/ping`, {
-      signal: AbortSignal.timeout(1000),
+      signal: controller.signal,
     });
+    clearTimeout(timeoutId);
     return r.ok;
   } catch {
     return false;
   }
 }
 
-async function findActiveServer() {
-  const guiOk = await ping(8766);
-  if (guiOk) {
-    console.log("🔍 Found GUI on port 8766");
-    return SERVER_GUI;
+async function checkConnection(force = false) {
+  const now = Date.now();
+  if (!force && now - lastConnectionCheck < 2000) {
+    return isConnected;
   }
+  lastConnectionCheck = now;
 
-  const daemonOk = await ping(8765);
-  if (daemonOk) {
-    console.log("🔍 Found Daemon on port 8765");
-    return SERVER_DAEMON;
-  }
+  try {
+    const [guiOk, daemonOk] = await Promise.all([ping(8766), ping(8765)]);
 
-  return null;
-}
+    if (guiOk) {
+      activeServer = SERVER_GUI;
+      isConnected = true;
+      console.log("✅ Connected to GUI on port 8766");
+    } else if (daemonOk) {
+      activeServer = SERVER_DAEMON;
+      isConnected = true;
+      console.log("✅ Connected to Daemon on port 8765");
+    } else {
+      activeServer = null;
+      isConnected = false;
+      console.log("⚠️ No FelfelDM server found");
+    }
 
-// ===== Check connection status =====
-async function checkConnection() {
-  const server = await findActiveServer();
-  isConnected = server !== null;
-  connectionChecked = true;
-
-  // Update badge
-  if (isConnected) {
-    browser.action.setBadgeText({ text: "●" });
-    browser.action.setBadgeBackgroundColor({ color: "#27ae60" });
-    console.log("✅ Connected to FelfelDM");
-  } else {
-    browser.action.setBadgeText({ text: "✕" });
-    browser.action.setBadgeBackgroundColor({ color: "#e74c3c" });
-    console.log("⚠️ FelfelDM not running");
+    await updateBadge();
+  } catch (e) {
+    console.error("Connection check error:", e);
+    isConnected = false;
+    activeServer = null;
+    await updateBadge();
   }
 
   return isConnected;
 }
 
-// Check connection every 5 seconds
-setInterval(checkConnection, 5000);
+// ===== Storage change listener for badge update =====
+browser.storage.onChanged.addListener((changes, namespace) => {
+  if (changes.catchDownloads) {
+    updateBadge();
+  }
+});
 
-// Check on startup
-checkConnection();
+// ===== Check connection every 3 seconds =====
+setInterval(() => checkConnection(true), 3000);
+setTimeout(() => checkConnection(true), 500);
 
 // ===== Send URLs =====
 async function send(urls) {
   if (!urls || urls.length === 0) return false;
-
-  // ⭐ Check connection before sending
-  const connected = await checkConnection();
+  const connected = await checkConnection(true);
   if (!connected) {
-    // Show notification with clear message
     await browser.notifications.create({
       type: "basic",
       iconUrl: ICON_URL,
@@ -84,14 +109,13 @@ async function send(urls) {
     return false;
   }
 
-  const server = await findActiveServer();
+  const server = activeServer;
   if (!server) {
     await browser.notifications.create({
       type: "basic",
       iconUrl: ICON_URL,
       title: "🌶️ FelfelDM",
-      message:
-        "⚠️ Could not connect to FelfelDM.\nPlease make sure it's running.",
+      message: "⚠️ Could not connect to FelfelDM.",
     });
     return false;
   }
@@ -99,9 +123,7 @@ async function send(urls) {
   try {
     const r = await fetch(`${server}/add`, {
       method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-      },
+      headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ urls }),
     });
 
@@ -116,7 +138,7 @@ async function send(urls) {
     }
     return false;
   } catch (e) {
-    console.error(e);
+    console.error("Send error:", e);
     return false;
   }
 }
@@ -138,18 +160,10 @@ browser.downloads.onCreated.addListener(async (item) => {
     return;
   }
 
-  // ⭐ Check connection before cancelling
-  const connected = await checkConnection();
+  const connected = await checkConnection(false);
   if (!connected) {
-    // Show notification and keep download (don't cancel)
-    await browser.notifications.create({
-      type: "basic",
-      iconUrl: ICON_URL,
-      title: "🌶️ FelfelDM",
-      message: "⚠️ FelfelDM is not running!\nDownload was not intercepted.",
-      priority: 2,
-    });
-    return; // ⭐ Don't cancel, let download proceed normally
+    console.log("⚠️ FelfelDM not connected, not intercepting");
+    return;
   }
 
   try {
@@ -229,15 +243,13 @@ browser.contextMenus.onClicked.addListener(async (info, tab) => {
     return;
   }
 
-  // ⭐ Check connection before context menu actions
-  const connected = await checkConnection();
+  const connected = await checkConnection(false);
   if (!connected) {
     browser.notifications.create({
       type: "basic",
       iconUrl: ICON_URL,
       title: "🌶️ FelfelDM",
-      message:
-        "⚠️ FelfelDM is not running!\nPlease start the application first.",
+      message: "⚠️ FelfelDM is not running!",
       priority: 2,
     });
     return;
@@ -323,6 +335,7 @@ browser.runtime.onMessage.addListener((message, sender, sendResponse) => {
     console.log(
       `🔄 Download catching: ${message.enabled ? "ON 🟢" : "OFF 🔴"}`,
     );
+    updateBadge();
     return;
   }
 
