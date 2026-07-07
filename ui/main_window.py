@@ -2786,7 +2786,7 @@ class MainWindow(QMainWindow):
             QSystemTrayIcon.MessageIcon.Information,
             3000
         )
-        # os.system("systemctl poweroff")
+        os.system("systemctl poweroff")
 
     def _cancel_shutdown(self):
         """کنسل کردن خاموشی"""
