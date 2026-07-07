@@ -1,6 +1,6 @@
 from PyQt6.QtCore import QAbstractTableModel, QModelIndex, Qt
 from PyQt6.QtGui import QColor
-from utils.helpers import format_size, format_speed, format_eta
+from utils.helpers import format_size, format_speed, format_eta, get_category_from_filename
 
 class DownloadTableModel(QAbstractTableModel):
     COLS = ["Name", "Size", "Progress", "Speed", "ETA", "Status", "Category"]
@@ -77,7 +77,12 @@ class DownloadTableModel(QAbstractTableModel):
                 return status_map.get(status, status.capitalize())
             
             if col == 6:  # Category
-                return row.get("category", "📁 Other")
+                category = row.get("category", "📁 Other")
+                if category == "📁 Other" or category == "" or category is None:
+                    name = row.get("name", "")
+                    if name:
+                        category = get_category_from_filename(name)
+                return category
 
         if role == Qt.ItemDataRole.ToolTipRole and col == 2:
             t = int(row.get("totalLength", 0))

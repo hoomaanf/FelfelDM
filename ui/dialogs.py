@@ -343,6 +343,7 @@ class SingleDownloadDialog(QDialog):
             "proxy_mode": proxy_mode,
             "custom_proxy": self._custom_proxy if proxy_mode == 1 else None
         }
+
 class QueueSettingsDialog(QDialog):
     def __init__(self, queue: Queue, parent=None):
         super().__init__(parent)
@@ -519,10 +520,10 @@ class QueueSettingsDialog(QDialog):
         return data
   
 class QuickDownloadDialog(QDialog):
-    def __init__(self, parent=None):
+    def __init__(self, queues, parent=None):
         super().__init__(parent)
-        self.setWindowTitle("Download")
-        self.setMinimumWidth(500)
+        self.setWindowTitle("Quick Download")
+        self.setMinimumWidth(550)
         
         lay = QVBoxLayout(self)
         lay.setSpacing(10)
@@ -542,9 +543,35 @@ class QuickDownloadDialog(QDialog):
         self.path_edit = QLineEdit(os.path.expanduser("~/Downloads"))
         path_layout.addWidget(self.path_edit)
         browse = QPushButton(get_icon('folder-open'), "Browse")
-        browse.clicked.connect(self._browse)
+        browse.clicked.connect(self._browse) 
         path_layout.addWidget(browse)
         lay.addWidget(path_group)
+        
+        # === Queue Selection ===
+        queue_group = QGroupBox("Queue")
+        queue_layout = QFormLayout(queue_group)
+        self.queue_combo = QComboBox()
+        
+        has_direct = False
+        for q in queues:
+            if q.name == "__direct__":
+                has_direct = True
+                self.queue_combo.addItem("Direct Downloads", "__direct__")
+            else:
+                self.queue_combo.addItem(q.name, q.name)
+
+        if not has_direct:
+            self.queue_combo.addItem("Direct Downloads", "__direct__")
+
+        direct_idx = 0
+        for i in range(self.queue_combo.count()):
+            if self.queue_combo.itemData(i) == "__direct__":
+                direct_idx = i
+                break
+        self.queue_combo.setCurrentIndex(direct_idx)
+
+        queue_layout.addRow("Add to:", self.queue_combo)
+        lay.addWidget(queue_group)
         
         # === Options Group ===
         options_group = QGroupBox("Options")
@@ -554,6 +581,10 @@ class QuickDownloadDialog(QDialog):
         self.conn_spin.setRange(1, 16)
         self.conn_spin.setValue(8)
         options_layout.addRow("Connections:", self.conn_spin)
+        
+        self.start_immediately = QCheckBox("Start download immediately")
+        self.start_immediately.setChecked(True)
+        options_layout.addRow("", self.start_immediately)
         
         lay.addWidget(options_group)
         
@@ -600,6 +631,7 @@ class QuickDownloadDialog(QDialog):
         
         # Custom proxy storage
         self._custom_proxy = None
+        self.queues = queues
     
     def _browse(self):
         d = QFileDialog.getExistingDirectory(self, "Select Directory", self.path_edit.text())
@@ -608,7 +640,7 @@ class QuickDownloadDialog(QDialog):
     
     def _on_proxy_mode_changed(self, index):
         """Enable/disable custom proxy config based on selection"""
-        is_custom = (index == 1)  # Custom proxy mode
+        is_custom = (index == 1)
         self.proxy_config_btn.setEnabled(is_custom)
         self.proxy_clear_btn.setEnabled(is_custom and self._custom_proxy is not None)
         
@@ -621,7 +653,6 @@ class QuickDownloadDialog(QDialog):
         """Open custom proxy configuration dialog"""
         from ui.download_proxy_dialog import DownloadProxyDialog
         
-        # Get first URL for display name
         urls = self._get_urls()
         display_name = os.path.basename(urls[0]) if urls else "Quick Download"
         
@@ -664,16 +695,18 @@ class QuickDownloadDialog(QDialog):
         """Get all dialog data"""
         raw = self.url_edit.toPlainText()
         urls = [l.strip() for l in raw.split('\n') if l.strip()]
-        proxy_mode = self.proxy_combo.currentIndex()  # 0: global, 1: custom, 2: none
+        proxy_mode = self.proxy_combo.currentIndex()
         
         return {
             "urls": urls,
             "path": self.path_edit.text().strip(),
             "connections": self.conn_spin.value(),
             "proxy_mode": proxy_mode,
-            "custom_proxy": self._custom_proxy if proxy_mode == 1 else None
+            "custom_proxy": self._custom_proxy if proxy_mode == 1 else None,
+            "queue_name": self.queue_combo.currentData(),  # <-- تغییر به currentData()
+            "start_immediately": self.start_immediately.isChecked(),
         }
-   
+
 class DownloadProgressDialog(QDialog):
     pause_requested = pyqtSignal(str)
     resume_requested = pyqtSignal(str)
@@ -1868,3 +1901,88 @@ class ProxyDialog(QDialog):
             password=self.password_edit.text().strip() or None,
             enabled=self.enable_cb.isChecked()
         )
+        
+class ShutdownCountdownDialog(QDialog):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("🛑 System Shutdown")
+        self.setModal(True)
+        self.setWindowFlags(
+            Qt.WindowType.Window |
+            Qt.WindowType.WindowStaysOnTopHint |
+            Qt.WindowType.FramelessWindowHint
+        )
+        self.setMinimumWidth(400)
+        
+        layout = QVBoxLayout(self)
+        layout.setSpacing(15)
+        layout.setContentsMargins(25, 25, 25, 25)
+        
+        title = QLabel("⚠️ System Shutdown")
+        title.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        title.setStyleSheet("font-size: 18px; font-weight: bold;")
+        layout.addWidget(title)
+        
+        msg = QLabel("All downloads are complete!\nThe system will shut down in:")
+        msg.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        layout.addWidget(msg)
+        
+        self.countdown_lbl = QLabel("20")
+        self.countdown_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.countdown_lbl.setStyleSheet("font-size: 42px; font-weight: bold;")
+        layout.addWidget(self.countdown_lbl)
+        
+        # Progress bar
+        self.progress_bar = QProgressBar()
+        self.progress_bar.setMaximum(20)
+        self.progress_bar.setValue(20)
+        layout.addWidget(self.progress_bar)
+        
+        self.cancel_btn = QPushButton("Cancel Shutdown")
+        self.cancel_btn.clicked.connect(self._on_cancel)
+        layout.addWidget(self.cancel_btn)
+        
+        self._countdown = 20
+        self._timer = None
+        self._cancelled = False
+    
+    def start_countdown(self):
+        self._countdown = 20
+        self.countdown_lbl.setText("20")
+        self.progress_bar.setValue(20)
+        self._cancelled = False
+        
+        self._timer = QTimer(self)
+        self._timer.timeout.connect(self._update_countdown)
+        self._timer.start(1000)
+    
+    def _update_countdown(self):
+        """به‌روزرسانی شمارش معکوس"""
+        self._countdown -= 1
+        
+        self.countdown_lbl.setText(str(self._countdown))
+        self.progress_bar.setValue(self._countdown)
+        
+        if self._countdown <= 0:
+            self._timer.stop()
+            self._timer = None
+            self.accept()
+    
+    def _on_cancel(self):
+        """کنسل کردن خاموشی"""
+        self._cancelled = True
+        if self._timer:
+            self._timer.stop()
+            self._timer = None
+        self.reject()
+    
+    def is_cancelled(self):
+        """بررسی اینکه کاربر کنسل کرده یا نه"""
+        return self._cancelled
+    
+    def closeEvent(self, event):
+        """وقتی دیالوگ بسته میشه"""
+        if self._timer:
+            self._timer.stop()
+            self._timer = None
+        event.accept()
