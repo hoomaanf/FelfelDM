@@ -1,7 +1,7 @@
 # 🌶️ FelfelDM
 
 <div align="center">
-  <img src="logo/icon256.png" alt="FelfelDM Logo" width="180">
+  <img src="logo/icon512.png" alt="FelfelDM Logo" width="180">
   <h2>A Modern Download Manager for Linux</h2>
 
   <p>

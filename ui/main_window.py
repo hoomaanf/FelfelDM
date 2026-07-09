@@ -383,10 +383,7 @@ class MainWindow(QMainWindow):
         
         
         icon_paths = [
-            get_resource_path("logo/icon64.png"),
-            get_resource_path("logo/icon128.png"), 
-            get_resource_path("icons/icon64.png"),
-            get_resource_path("icons/icon128.png"),
+            get_resource_path("logo/icon512.png"),
         ]
         
         icon_set = False

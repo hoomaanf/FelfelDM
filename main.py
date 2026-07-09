@@ -115,8 +115,7 @@ def main():
 
     # Icon
     icon_paths = [
-        os.path.join(base_path, "logo/icon256.png"),
-        os.path.join(base_path, "logo/icon128.png")
+        os.path.join(base_path, "logo/icon512.png"),
     ]
     icon_set = False
     for path in icon_paths:

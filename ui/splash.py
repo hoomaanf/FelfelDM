@@ -27,9 +27,7 @@ class SplashScreen(QSplashScreen):
         icon_pixmap = None
         
         icon_paths = [
-            get_resource_path("logo/icon128.png"),
-            get_resource_path("logo/icon256.png"),
-            "logo/icon128.png",
+            get_resource_path("logo/icon512.png"),
         ]
         
         for path in icon_paths:

@@ -231,14 +231,8 @@ echo -e "${YELLOW}🎨 Installing icons...${NC}"
 
 $SUDO mkdir -p /usr/share/icons/hicolor/{256x256,128x128,64x64,48x48,32x32,16x16}/apps
 
-[ -f "$SOURCE_DIR/logo/icon256.png" ] && $SUDO cp "$SOURCE_DIR/logo/icon256.png" /usr/share/icons/hicolor/256x256/apps/felfeldm.png
-[ -f "$SOURCE_DIR/logo/icon128.png" ] && $SUDO cp "$SOURCE_DIR/logo/icon128.png" /usr/share/icons/hicolor/128x128/apps/felfeldm.png
-[ -f "$SOURCE_DIR/logo/icon64.png" ] && $SUDO cp "$SOURCE_DIR/logo/icon64.png" /usr/share/icons/hicolor/64x64/apps/felfeldm.png
-[ -f "$SOURCE_DIR/logo/icon48.png" ] && $SUDO cp "$SOURCE_DIR/logo/icon48.png" /usr/share/icons/hicolor/48x48/apps/felfeldm.png
-[ -f "$SOURCE_DIR/logo/icon32.png" ] && $SUDO cp "$SOURCE_DIR/logo/icon32.png" /usr/share/icons/hicolor/32x32/apps/felfeldm.png
-[ -f "$SOURCE_DIR/logo/icon16.png" ] && $SUDO cp "$SOURCE_DIR/logo/icon16.png" /usr/share/icons/hicolor/16x16/apps/felfeldm.png
-
-[ -f "$SOURCE_DIR/logo/icon256.png" ] && $SUDO cp "$SOURCE_DIR/logo/icon256.png" /usr/share/pixmaps/felfeldm.png
+[ -f "$SOURCE_DIR/logo/icon512.png" ] && $SUDO cp "$SOURCE_DIR/logo/icon512.png" /usr/share/icons/hicolor/256x256/apps/felfeldm.png
+[ -f "$SOURCE_DIR/logo/icon512.png" ] && $SUDO cp "$SOURCE_DIR/logo/icon512.png" /usr/share/pixmaps/felfeldm.png
 
 # ============================================
 # Create desktop file
