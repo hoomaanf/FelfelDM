@@ -523,10 +523,10 @@ class QuickDownloadDialog(QDialog):
     def __init__(self, queues, parent=None):
         super().__init__(parent)
         self.setWindowTitle("Quick Download")
-        self.setMinimumWidth(550)
+        self.setMinimumWidth(520)
         
         lay = QVBoxLayout(self)
-        lay.setSpacing(10)
+        lay.setSpacing(12)
         
         # === URL Group ===
         url_group = QGroupBox("URLs")
@@ -543,34 +543,22 @@ class QuickDownloadDialog(QDialog):
         self.path_edit = QLineEdit(os.path.expanduser("~/Downloads"))
         path_layout.addWidget(self.path_edit)
         browse = QPushButton(get_icon('folder-open'), "Browse")
-        browse.clicked.connect(self._browse) 
+        browse.clicked.connect(self._browse)
         path_layout.addWidget(browse)
         lay.addWidget(path_group)
         
         # === Queue Selection ===
-        queue_group = QGroupBox("Queue")
-        queue_layout = QFormLayout(queue_group)
+        queue_group = QGroupBox("Add to Queue")
+        queue_layout = QVBoxLayout(queue_group)
         self.queue_combo = QComboBox()
         
-        has_direct = False
+        # Populate queues from parameter
+        self.queue_combo.addItem("Direct Downloads (Quick)", "__direct__")
         for q in queues:
-            if q.name == "__direct__":
-                has_direct = True
-                self.queue_combo.addItem("Direct Downloads", "__direct__")
-            else:
+            if q.name != "__direct__":
                 self.queue_combo.addItem(q.name, q.name)
-
-        if not has_direct:
-            self.queue_combo.addItem("Direct Downloads", "__direct__")
-
-        direct_idx = 0
-        for i in range(self.queue_combo.count()):
-            if self.queue_combo.itemData(i) == "__direct__":
-                direct_idx = i
-                break
-        self.queue_combo.setCurrentIndex(direct_idx)
-
-        queue_layout.addRow("Add to:", self.queue_combo)
+        
+        queue_layout.addWidget(self.queue_combo)
         lay.addWidget(queue_group)
         
         # === Options Group ===
@@ -582,6 +570,7 @@ class QuickDownloadDialog(QDialog):
         self.conn_spin.setValue(8)
         options_layout.addRow("Connections:", self.conn_spin)
         
+        # Start Immediately Checkbox
         self.start_immediately = QCheckBox("Start download immediately")
         self.start_immediately.setChecked(True)
         options_layout.addRow("", self.start_immediately)
@@ -629,9 +618,7 @@ class QuickDownloadDialog(QDialog):
         btn_box.rejected.connect(self.reject)
         lay.addWidget(btn_box)
         
-        # Custom proxy storage
         self._custom_proxy = None
-        self.queues = queues
     
     def _browse(self):
         d = QFileDialog.getExistingDirectory(self, "Select Directory", self.path_edit.text())
@@ -639,7 +626,6 @@ class QuickDownloadDialog(QDialog):
             self.path_edit.setText(d)
     
     def _on_proxy_mode_changed(self, index):
-        """Enable/disable custom proxy config based on selection"""
         is_custom = (index == 1)
         self.proxy_config_btn.setEnabled(is_custom)
         self.proxy_clear_btn.setEnabled(is_custom and self._custom_proxy is not None)
@@ -650,7 +636,6 @@ class QuickDownloadDialog(QDialog):
             self._update_proxy_status()
     
     def _configure_custom_proxy(self):
-        """Open custom proxy configuration dialog"""
         from ui.download_proxy_dialog import DownloadProxyDialog
         
         urls = self._get_urls()
@@ -669,14 +654,12 @@ class QuickDownloadDialog(QDialog):
                 self.proxy_status_label.setText("")
     
     def _clear_custom_proxy(self):
-        """Clear custom proxy"""
         self._custom_proxy = None
         self.proxy_clear_btn.setEnabled(False)
         self.proxy_status_label.setText("")
         self.proxy_status_label.setStyleSheet("color: #95a5a6; font-size: 10px;")
     
     def _update_proxy_status(self):
-        """Update status label with custom proxy info"""
         if self._custom_proxy and self._custom_proxy.is_valid():
             self.proxy_status_label.setText(
                 f"✅ Custom: {self._custom_proxy.get_display_string()}"
@@ -687,12 +670,10 @@ class QuickDownloadDialog(QDialog):
             self.proxy_status_label.setStyleSheet("color: #e74c3c; font-size: 10px;")
     
     def _get_urls(self):
-        """Get list of URLs from text edit"""
         raw_text = self.url_edit.toPlainText()
         return [line.strip() for line in raw_text.split('\n') if line.strip()]
     
     def get_data(self):
-        """Get all dialog data"""
         raw = self.url_edit.toPlainText()
         urls = [l.strip() for l in raw.split('\n') if l.strip()]
         proxy_mode = self.proxy_combo.currentIndex()
@@ -701,10 +682,10 @@ class QuickDownloadDialog(QDialog):
             "urls": urls,
             "path": self.path_edit.text().strip(),
             "connections": self.conn_spin.value(),
-            "proxy_mode": proxy_mode,
-            "custom_proxy": self._custom_proxy if proxy_mode == 1 else None,
-            "queue_name": self.queue_combo.currentData(),  # <-- تغییر به currentData()
+            "queue_name": self.queue_combo.currentData(),
             "start_immediately": self.start_immediately.isChecked(),
+            "proxy_mode": proxy_mode,
+            "custom_proxy": self._custom_proxy if proxy_mode == 1 else None
         }
 
 class DownloadProgressDialog(QDialog):
@@ -800,10 +781,8 @@ class DownloadProgressDialog(QDialog):
         # Pause/Resume
         if self._status == "active":
             self.pause_requested.emit(self.gid)
-        elif self._status == "paused":
+        elif self._status in ["paused", "waiting"]:
             self.resume_requested.emit(self.gid)
-        elif self._status == "waiting":
-            self.pause_requested.emit(self.gid)
 
     def _on_cancel_clicked(self):
         """Handle cancel button click"""
@@ -905,7 +884,7 @@ class DownloadProgressDialog(QDialog):
         
         if status == "complete":
             self.action_btn.setIcon(get_icon('folder'))
-            self.action_btn.setText(" 📂 Open Folder")
+            self.action_btn.setText(" Open Folder")
             self.action_btn.setEnabled(True)
             
             self.cancel_btn.setText(" Close")
@@ -931,53 +910,8 @@ class DownloadProgressDialog(QDialog):
             self.cancel_btn.setEnabled(True)
             
         elif status == "waiting":
-            self.action_btn.setIcon(get_icon('media-playback-pause'))
-            self.action_btn.setText(" Pause")
-            self.action_btn.setEnabled(True)
-            
-            self.cancel_btn.setText(" Cancel")
-            self.cancel_btn.setIcon(get_icon('edit-delete'))
-            self.cancel_btn.setEnabled(True)
-            
-        else:
-            self.action_btn.setEnabled(False)
-            self.cancel_btn.setEnabled(False)
-    def _update_buttons(self, status):
-        """Update button states based on download status"""
-        
-        if status == "complete":
-            self.action_btn.setIcon(get_icon('folder'))
-            self.action_btn.setText("Open Folder")
-            self.action_btn.setEnabled(True)
-            
-            self.cancel_btn.setText(" Close")
-            self.cancel_btn.setIcon(get_icon('window-close'))
-            self.cancel_btn.setEnabled(True)
-            
-            self.status_lbl.setText("✅ Complete")
-            self.status_lbl.setStyleSheet("color: #27ae60; font-weight: bold;")
-            
-        elif status == "active":
-            self.action_btn.setIcon(get_icon('media-playback-pause'))
-            self.action_btn.setText(" Pause")
-            self.action_btn.setEnabled(True)
-            
-            self.cancel_btn.setText(" Cancel")
-            self.cancel_btn.setIcon(get_icon('edit-delete'))
-            self.cancel_btn.setEnabled(True)
-            
-        elif status == "paused":
             self.action_btn.setIcon(get_icon('media-playback-start'))
-            self.action_btn.setText(" Resume")
-            self.action_btn.setEnabled(True)
-            
-            self.cancel_btn.setText(" Cancel")
-            self.cancel_btn.setIcon(get_icon('edit-delete'))
-            self.cancel_btn.setEnabled(True)
-            
-        elif status == "waiting":
-            self.action_btn.setIcon(get_icon('media-playback-pause'))
-            self.action_btn.setText(" Pause")
+            self.action_btn.setText(" Start")
             self.action_btn.setEnabled(True)
             
             self.cancel_btn.setText(" Cancel")
@@ -986,8 +920,8 @@ class DownloadProgressDialog(QDialog):
             
         else:
             self.action_btn.setEnabled(False)
-            self.cancel_btn.setEnabled(False)
-            
+            self.cancel_btn.setEnabled(False)      
+
 class SettingsDialog(QDialog):
     def __init__(self, settings, parent=None):
         super().__init__(parent)
@@ -1741,7 +1675,7 @@ class YouTubeDownloadDialog(QDialog):
             "url": self.url_edit.text().strip(),
             "path": self.path_edit.text().strip(),
             "format": format_type,
-            "format_id": selected_format_id,  # ⭐ فرمت ID برای yt-dlp
+            "format_id": selected_format_id, 
             "format_info": self._format_map.get(selected_format_id, {}),
             "cookie_file": self.cookie_edit.text().strip() or None,
             "video_info": self.video_info,
