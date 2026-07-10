@@ -1066,8 +1066,9 @@ class MainWindow(QMainWindow):
         self.activateWindow()
 
         if len(urls) == 1:
-            dlg = QuickDownloadDialog(self)
-            dlg.url_edit.setText(urls[0])
+            all_queues = self.store.queues
+            dlg = QuickDownloadDialog(all_queues, self)
+            dlg.url_edit.setPlainText(urls[0])
             
             if dlg.exec():
                 d = dlg.get_data()

@@ -12,6 +12,7 @@ class Queue:
         self.schedule_end = schedule_end or dtime(23, 59)
         self.days = days or [0, 1, 2, 3, 4, 5, 6]
         self.downloads = []
+        self.downloads_info = {}
         self.paused = paused
 
     def to_dict(self):
