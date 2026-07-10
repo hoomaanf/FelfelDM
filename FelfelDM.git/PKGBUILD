@@ -19,6 +19,7 @@ depends=(
     python-cryptography
     python-packaging
     yt-dlp
+    papirus-icon-theme 
 )
 
 makedepends=('git')
