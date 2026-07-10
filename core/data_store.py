@@ -1,5 +1,3 @@
-# core/data_store.py
-
 import os
 import json
 import shutil
@@ -16,7 +14,7 @@ KEYRING_KEY = "aria2_secret"
 class Queue:
     def __init__(self, name, max_concurrent=3, save_path="", schedule_enabled=False,
                  schedule_start=None, schedule_end=None, days=None, paused=True,
-                 proxy_config=None):
+                 proxy_config=None, speed_limit=0):
         self.name = name
         self.max_concurrent = max_concurrent
         self.save_path = save_path or os.path.expanduser("~/Downloads")
@@ -28,6 +26,7 @@ class Queue:
         self.downloads_info = {}
         self.paused = paused
         self.proxy_config = proxy_config
+        self.speed_limit = speed_limit
 
     def to_dict(self):
         proxy_dict = None
@@ -55,6 +54,7 @@ class Queue:
             "downloads_info": downloads_info,
             "paused": self.paused,
             "proxy_config": proxy_dict,
+            "speed_limit": self.speed_limit,
         }
 
     @classmethod
@@ -73,6 +73,7 @@ class Queue:
         q.days = d.get("days", [0, 1, 2, 3, 4, 5, 6])
         q.downloads = list(d.get("downloads", []))
         q.downloads_info = d.get("downloads_info", {})
+        q.speed_limit = d.get("speed_limit", 0)
 
         proxy_config = d.get("proxy_config")
         if proxy_config:
@@ -86,6 +87,7 @@ class Queue:
         return q
 
     def is_scheduled_now(self):
+        """Check if current time is within the scheduled window for this queue"""
         if not self.schedule_enabled:
             return True
         now = datetime.now()
@@ -160,7 +162,7 @@ class DataStore:
             self.queues = [Queue("Default", paused=True)]
             self.settings = self._get_default_settings()
             self.download_proxies = {}
-            self.save() 
+            self.save()
 
         except Exception as e:
             print(f"⚠️ Error loading data: {e}")
@@ -192,7 +194,6 @@ class DataStore:
             print(f"⚠️ Could not backup corrupted file: {e}")
 
     def save(self):
-        
         secret = self.settings.pop("aria2_secret", "")
         if secret:
             try:
@@ -216,7 +217,7 @@ class DataStore:
 
         except Exception as e:
             print(f"⚠️ Error saving data: {e}")
-            
+
             try:
                 with open(self.data_file, 'w', encoding='utf-8') as f:
                     json.dump({

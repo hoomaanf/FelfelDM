@@ -391,11 +391,32 @@ class QueueSettingsDialog(QDialog):
             self.day_checks.append(cb)
             days_row.addWidget(cb)
         lay.addRow("Active Days:", days_row)
-
-        btn_box = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
-        btn_box.accepted.connect(self.accept)
-        btn_box.rejected.connect(self.reject)
-        lay.addRow(btn_box)
+        
+        speed_group = QGroupBox("Speed Limit")
+        speed_layout = QVBoxLayout(speed_group)
+        
+        speed_limit_row = QHBoxLayout()
+        self.queue_speed_enabled = QCheckBox("Enable Speed Limit")
+        self.queue_speed_enabled.setChecked(getattr(queue, 'speed_limit', 0) > 0)
+        self.queue_speed_enabled.toggled.connect(self._toggle_queue_speed)
+        
+        self.queue_speed_spin = QSpinBox()
+        self.queue_speed_spin.setRange(0, 999999)
+        self.queue_speed_spin.setSuffix(" KB/s")
+        self.queue_speed_spin.setValue(getattr(queue, 'speed_limit', 0) or 1024)
+        self.queue_speed_spin.setEnabled(self.queue_speed_enabled.isChecked())
+        self.queue_speed_spin.setMinimumWidth(120)
+        
+        speed_limit_row.addWidget(self.queue_speed_enabled)
+        speed_limit_row.addWidget(self.queue_speed_spin)
+        speed_limit_row.addStretch()
+        speed_layout.addLayout(speed_limit_row)
+        
+        speed_info = QLabel("💡 0 = unlimited")
+        speed_info.setStyleSheet("color: #95a5a6; font-size: 10px;")
+        speed_layout.addWidget(speed_info)
+        
+        lay.addRow(speed_group)
         
                 # Proxy Settings for Queue
         proxy_group = QGroupBox("Proxy Settings")
@@ -430,6 +451,12 @@ class QueueSettingsDialog(QDialog):
             self.queue_proxy_status.setText(f"✅ {queue.proxy_config.get_display_string()}")
             self.queue_proxy_status.setStyleSheet("color: #27ae60; font-size: 10px;")
             self.queue_proxy_btn.setEnabled(True)
+            
+            
+        btn_box = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
+        btn_box.accepted.connect(self.accept)
+        btn_box.rejected.connect(self.reject)
+        lay.addRow(btn_box)
 
     def _browse(self):
         d = QFileDialog.getExistingDirectory(self, "Select Directory", self.path_edit.text())
@@ -447,6 +474,7 @@ class QueueSettingsDialog(QDialog):
             "schedule_start": dtime(st.hour(), st.minute()),
             "schedule_end": dtime(en.hour(), en.minute()),
             "days": [i for i, cb in enumerate(self.day_checks) if cb.isChecked()],  
+            "speed_limit": self.queue_speed_spin.value() if self.queue_speed_enabled.isChecked() else 0,
             "proxy_config": None,  
         }
         
@@ -454,6 +482,7 @@ class QueueSettingsDialog(QDialog):
             data["proxy_config"] = self._queue_proxy_config
         
         return data
+    
     def _load_queue_proxy(self):
         """Load proxy config for this queue"""
         from core.proxy_manager import ProxyManager
@@ -498,26 +527,8 @@ class QueueSettingsDialog(QDialog):
             self.queue_proxy_status.setText(f"✅ {new_config.get_display_string()}")
             self.queue_proxy_status.setStyleSheet("color: #27ae60; font-size: 10px;")
     
-    def get_queue_data(self):
-        """Get all queue settings from dialog"""
-        st, en = self.start_time.time(), self.end_time.time()
-        
-        data = {
-            "name": self.name_edit.text().strip(),
-            "save_path": self.path_edit.text().strip(),
-            "max_concurrent": self.conc_spin.value(),
-            "schedule_enabled": self.sched_cb.isChecked(),
-            "schedule_start": dtime(st.hour(), st.minute()),
-            "schedule_end": dtime(en.hour(), en.minute()),
-            "days": [i for i, cb in enumerate(self.day_checks) if cb.isChecked()],
-        }
-        
-        if hasattr(self, '_queue_proxy_config') and self.queue_proxy_cb.isChecked():
-            data["proxy_config"] = self._queue_proxy_config
-        else:
-            data["proxy_config"] = None
-        
-        return data
+    def _toggle_queue_speed(self, checked):
+        self.queue_speed_spin.setEnabled(checked)
   
 class QuickDownloadDialog(QDialog):
     def __init__(self, queues, parent=None):
@@ -976,6 +987,33 @@ class SettingsDialog(QDialog):
         theme_layout.addRow("Theme:", self.theme_combo)
         lay.addWidget(theme_group)
         
+        # === Global Speed Limit ===
+        speed_group = QGroupBox("Global Speed Limit")
+        speed_layout = QVBoxLayout(speed_group)
+
+        speed_limit_row = QHBoxLayout()
+        self.global_speed_enabled = QCheckBox("Enable Global Speed Limit")
+        self.global_speed_enabled.setChecked(settings.get("speed_limit", 0) > 0)
+        self.global_speed_enabled.toggled.connect(self._toggle_global_speed)
+
+        self.global_speed_spin = QSpinBox()
+        self.global_speed_spin.setRange(0, 999999)
+        self.global_speed_spin.setSuffix(" KB/s")
+        self.global_speed_spin.setValue(settings.get("speed_limit", 1024))
+        self.global_speed_spin.setEnabled(self.global_speed_enabled.isChecked())
+        self.global_speed_spin.setMinimumWidth(120)
+
+        speed_limit_row.addWidget(self.global_speed_enabled)
+        speed_limit_row.addWidget(self.global_speed_spin)
+        speed_limit_row.addStretch()
+        speed_layout.addLayout(speed_limit_row)
+
+        speed_info = QLabel("💡 0 = unlimited")
+        speed_info.setStyleSheet("color: #95a5a6; font-size: 10px;")
+        speed_layout.addWidget(speed_info)
+
+        lay.addWidget(speed_group)
+        
         # === Proxy Settings ===
         proxy_group = QGroupBox("Proxy")
         proxy_layout = QVBoxLayout(proxy_group)
@@ -1262,6 +1300,9 @@ WantedBy=default.target
             self.service_status.setStyleSheet("color: #95a5a6; font-size: 11px;")
             self.run_as_service.setChecked(False)
 
+    def _toggle_global_speed(self, checked):
+     self.global_speed_spin.setEnabled(checked)
+
     def _update_proxy_status(self):
         """Update proxy status display"""
         from core.proxy_manager import ProxyManager
@@ -1304,6 +1345,7 @@ WantedBy=default.target
         QTimer.singleShot(100, self._check_service_status)
 
     def get_settings(self):
+        speed_limit = self.global_speed_spin.value() if self.global_speed_enabled.isChecked() else 0
         return {
             "aria2_host": self.host.text().strip(),
             "aria2_port": self.port.value(),
@@ -1314,6 +1356,7 @@ WantedBy=default.target
             "auto_clear_completed": self.auto_clear_completed.isChecked(),
             "theme": self.theme_combo.currentText().lower(),
             "run_as_service": self.run_as_service.isChecked(),
+            "speed_limit": speed_limit,
         }
 
 class YouTubeDownloadDialog(QDialog):

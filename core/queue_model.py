@@ -3,7 +3,8 @@ import os
 
 class Queue:
     def __init__(self, name, max_concurrent=3, save_path="", schedule_enabled=False,
-                 schedule_start=None, schedule_end=None, days=None, paused=True):
+                 schedule_start=None, schedule_end=None, days=None, paused=True,
+                 speed_limit=0):
         self.name = name
         self.max_concurrent = max_concurrent
         self.save_path = save_path or os.path.expanduser("~/Downloads")
@@ -14,6 +15,7 @@ class Queue:
         self.downloads = []
         self.downloads_info = {}
         self.paused = paused
+        self.speed_limit = speed_limit
 
     def to_dict(self):
         return {
@@ -25,22 +27,31 @@ class Queue:
             "schedule_end": self.schedule_end.strftime("%H:%M"),
             "days": self.days,
             "downloads": self.downloads,
+            "downloads_info": self.downloads_info,
             "paused": self.paused,
+            "speed_limit": self.speed_limit,
         }
 
     @classmethod
-    def from_dict(cls, d):
-        q = cls(d["name"])
-        q.max_concurrent = d.get("max_concurrent", 3)
-        q.save_path = d.get("save_path", os.path.expanduser("~/Downloads"))
-        q.schedule_enabled = d.get("schedule_enabled", False)
-        st = d.get("schedule_start", "00:00").split(":")
-        en = d.get("schedule_end", "23:59").split(":")
+    def from_dict(cls, data):
+        name = data.get("name", "Default")
+        q = cls(
+            name=name,
+            max_concurrent=data.get("max_concurrent", 3),
+            save_path=data.get("save_path", os.path.expanduser("~/Downloads")),
+            schedule_enabled=data.get("schedule_enabled", False),
+            paused=data.get("paused", True),
+            speed_limit=data.get("speed_limit", 0)
+        )
+        
+        st = data.get("schedule_start", "00:00").split(":")
+        en = data.get("schedule_end", "23:59").split(":")
         q.schedule_start = dtime(int(st[0]), int(st[1]))
         q.schedule_end = dtime(int(en[0]), int(en[1]))
-        q.days = d.get("days", [0, 1, 2, 3, 4, 5, 6])
-        q.downloads = d.get("downloads", [])
-        q.paused = d.get("paused", True)
+        q.days = data.get("days", [0, 1, 2, 3, 4, 5, 6])
+        q.downloads = list(data.get("downloads", []))
+        q.downloads_info = data.get("downloads_info", {})
+        q.proxy_config = data.get("proxy_config", None)
         return q
 
     def is_scheduled_now(self):

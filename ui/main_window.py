@@ -203,6 +203,10 @@ class MainWindow(QMainWindow):
         self.queue_status_lbl.setStyleSheet("color: #f39c12; font-weight: bold;")
         status_lay.addWidget(self.queue_status_lbl)
 
+        self.speed_limit_lbl = QLabel("")
+        self.speed_limit_lbl.setStyleSheet("color: #f39c12; font-size: 11px;")
+        status_lay.addWidget(self.speed_limit_lbl)
+        
         self.status_lbl = QLabel("● Disconnected")
         self.status_lbl.setStyleSheet("color: #e74c3c; font-weight: bold;")
         status_lay.addWidget(self.status_lbl)
@@ -320,7 +324,9 @@ class MainWindow(QMainWindow):
         self.progress_bar = QProgressBar()
         self.progress_bar.setMaximum(100)
         self.progress_bar.setValue(0)
-        self.progress_bar.setFixedWidth(200)
+        # self.progress_bar.setFixedWidth(500)
+        self.progress_bar.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        self.statusBar().addPermanentWidget(self.progress_bar, 1)
         self.progress_bar.setTextVisible(True)
         self.statusBar().addPermanentWidget(self.progress_bar)
 
@@ -756,6 +762,14 @@ class MainWindow(QMainWindow):
             self.status_label.setText("Direct Downloads")
             return
         
+        # ⭐ بررسی محدودیت سرعت صف
+        speed_limit_text = ""
+        if getattr(q, 'speed_limit', 0) > 0:
+            self.speed_limit_lbl.setText(f"⚡ Speed Limit: {q.speed_limit} KB/s")
+            self.speed_limit_lbl.setStyleSheet("color: #f39c12; font-size: 11px;")
+        else:
+            self.speed_limit_lbl.setText("")
+            
         all_complete = True
         has_any_download = False
         for gid in q.downloads:
@@ -770,7 +784,7 @@ class MainWindow(QMainWindow):
                 break
 
         if all_complete and has_any_download:
-            self.queue_status_lbl.setText("✅ Complete")
+            self.queue_status_lbl.setText(f"✅ Complete")
             self.queue_status_lbl.setStyleSheet("color: #27ae60; font-weight: bold;")
             self.schedule_status_lbl.setText("")
             self.status_label.setText("✅ All downloads complete")
@@ -786,12 +800,12 @@ class MainWindow(QMainWindow):
                         break
             
             if has_resumable:
-                self.queue_status_lbl.setText("⏸ Paused")
+                self.queue_status_lbl.setText(f"⏸ Paused{speed_limit_text}")
                 self.queue_status_lbl.setStyleSheet("color: #f39c12; font-weight: bold;")
                 self.schedule_status_lbl.setText("Click 'Start' to resume downloads")
                 self.status_label.setText("⏸ Paused")
             else:
-                self.queue_status_lbl.setText("⏸ Paused")
+                self.queue_status_lbl.setText(f"⏸ Paused{speed_limit_text}")
                 self.queue_status_lbl.setStyleSheet("color: #95a5a6; font-weight: bold;")
                 self.schedule_status_lbl.setText("")
                 self.status_label.setText("⏸ Paused")
@@ -808,31 +822,31 @@ class MainWindow(QMainWindow):
         if q.schedule_enabled:
             if q.is_scheduled_now():
                 if has_active:
-                    self.queue_status_lbl.setText("▶ Running (🕐 Scheduled)")
+                    self.queue_status_lbl.setText(f"▶ Running (🕐 Scheduled){speed_limit_text}")
                     self.queue_status_lbl.setStyleSheet("color: #27ae60; font-weight: bold;")
                 else:
-                    self.queue_status_lbl.setText("⏳ Waiting (🕐 Scheduled)")
+                    self.queue_status_lbl.setText(f"⏳ Waiting (🕐 Scheduled){speed_limit_text}")
                     self.queue_status_lbl.setStyleSheet("color: #3498db; font-weight: bold;")
                 self.schedule_status_lbl.setText("🕐 Schedule time is active ✓")
                 self.schedule_status_lbl.setStyleSheet("color: #27ae60; font-weight: bold;")
                 self.status_label.setText("🕐 Scheduled time is active")
             else:
                 days_text = ", ".join(["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"][i] for i in q.days)
-                self.queue_status_lbl.setText(f"⏰ Waiting for Schedule")
+                self.queue_status_lbl.setText(f"⏰ Waiting for Schedule{speed_limit_text}")
                 self.queue_status_lbl.setStyleSheet("color: #3498db; font-weight: bold;")
                 self.schedule_status_lbl.setText(f"⏰ Next: {q.schedule_start.strftime('%H:%M')}-{q.schedule_end.strftime('%H:%M')} {days_text}")
                 self.schedule_status_lbl.setStyleSheet("color: #3498db; font-size: 11px;")
                 self.status_label.setText(f"⏰ Waiting: {q.schedule_start.strftime('%H:%M')}")
         else:
             if has_active:
-                self.queue_status_lbl.setText("▶ Running")
+                self.queue_status_lbl.setText(f"▶ Running{speed_limit_text}")
                 self.queue_status_lbl.setStyleSheet("color: #27ae60; font-weight: bold;")
             else:
-                self.queue_status_lbl.setText("⏳ Idle")
+                self.queue_status_lbl.setText(f"⏳ Idle{speed_limit_text}")
                 self.queue_status_lbl.setStyleSheet("color: #95a5a6; font-weight: bold;")
             self.schedule_status_lbl.setText("")
             self.status_label.setText("▶ Running")
-
+    
     def _start_current_queue(self):
         q = self._current_queue()
         if not q:
@@ -852,6 +866,12 @@ class MainWindow(QMainWindow):
         for gid in q.downloads:
             real_status = self.aria2.get_status(gid)
             if real_status == "paused":
+                # ⭐ اعمال محدودیت قبل از resume
+                if q and getattr(q, 'speed_limit', 0) > 0:
+                    time.sleep(0.3)
+                    self.aria2.set_download_speed_limit(gid, q.speed_limit)
+                    print(f"⚡ Queue speed limit {q.speed_limit}KB/s applied to {gid} (before resume)")
+                
                 result = self.aria2.resume(gid)
                 if result is not None:
                     resumed += 1
@@ -869,7 +889,10 @@ class MainWindow(QMainWindow):
         self._refresh_table()
         self._update_queue_status()
         self._update_queue_buttons()
-        self._update_shutdown_button_state() 
+        self._update_shutdown_button_state()
+        
+        # ⭐ اعمال محدودیت روی همه دانلودهای active
+        self._apply_queue_speed_limit(q)
 
         if resumed > 0:
             self.tray.showMessage("FelfelDM", f"▶️ Resumed {resumed} download(s)",
@@ -879,7 +902,6 @@ class MainWindow(QMainWindow):
             self.tray.showMessage("FelfelDM", 
                 f"⏰ Queue started. Waiting for schedule: {q.schedule_start.strftime('%H:%M')}-{q.schedule_end.strftime('%H:%M')} {days_text}",
                 QSystemTrayIcon.MessageIcon.Information, 4000)
-    
     def _pause_current_queue(self):
         q = self._current_queue()
         if not q:
@@ -976,6 +998,7 @@ class MainWindow(QMainWindow):
         q = self._current_queue()
         total_size = 0
         completed_size = 0
+        
         if not q or q.name == "__direct__":
             self.progress_bar.setValue(0)
             self.progress_bar.setFormat("Direct Downloads — no queue")
@@ -988,13 +1011,32 @@ class MainWindow(QMainWindow):
                     total_size += int(row.get("totalLength", 0))
                     completed_size += int(row.get("completedLength", 0))
         
+        speed_texts = []
+        
+        global_limit = self.store.settings.get("speed_limit", 0)
+        if global_limit > 0:
+            if global_limit >= 1024:
+                speed_texts.append(f"Global: {global_limit//1024} MB/s")
+            else:
+                speed_texts.append(f"Global: {global_limit} KB/s")
+        
+        # محدودیت صف
+        if q and getattr(q, 'speed_limit', 0) > 0:
+            q_limit = q.speed_limit
+            if q_limit >= 1024:
+                speed_texts.append(f"Queue: {q_limit//1024} MB/s")
+            else:
+                speed_texts.append(f"Queue: {q_limit} KB/s")
+        
+        speed_part = " | " + " | ".join(speed_texts) if speed_texts else ""
+        
         if total_size > 0:
             progress = int((completed_size / total_size) * 100)
             self.progress_bar.setValue(min(progress, 100))
-            self.progress_bar.setFormat(f"{format_size(completed_size)} / {format_size(total_size)} ({progress}%)")
+            self.progress_bar.setFormat(f"{format_size(completed_size)} / {format_size(total_size)} ({progress}%){speed_part}")
         else:
             self.progress_bar.setValue(0)
-            self.progress_bar.setFormat("No active downloads")
+            self.progress_bar.setFormat(f"No active downloads{speed_part}")
 
     def _add_queue(self):
         name, ok = QInputDialog.getText(self, "New Queue", "Queue name:")
@@ -1018,6 +1060,8 @@ class MainWindow(QMainWindow):
         dlg = QueueSettingsDialog(q, self)
         if dlg.exec():
             d = dlg.get_queue_data()
+            print(f"📊 Dialog returned: {d}")
+            print(f"📊 speed_limit in dialog: {d.get('speed_limit', 'NOT FOUND')}")
             q.name = d["name"]
             q.save_path = d["save_path"]
             q.max_concurrent = d["max_concurrent"]
@@ -1026,6 +1070,10 @@ class MainWindow(QMainWindow):
             q.schedule_start = d["schedule_start"]
             q.schedule_end = d["schedule_end"]
             q.days = d["days"]
+            
+            # ⭐ ذخیره speed_limit
+            q.speed_limit = d.get("speed_limit", 0)
+            print(f"📊 speed_limit saved: {q.speed_limit}")
             
             q.proxy_config = d.get("proxy_config")
         
@@ -1038,7 +1086,8 @@ class MainWindow(QMainWindow):
             self._refresh_queue_list()
             self._update_queue_buttons()
             self._apply_settings_to_aria2()
-
+            self._apply_queue_speed_limit(q)      
+    
     def _delete_queue(self):
         q = self._current_queue()
         if not q:
@@ -1318,6 +1367,12 @@ class MainWindow(QMainWindow):
                         "errorMessage": "",
                         "category": "📁 Other"
                     }
+                    
+                    # ⭐ اعمال محدودیت سرعت صف قبل از هر کاری
+                    if q and getattr(q, 'speed_limit', 0) > 0:
+                        time.sleep(0.3)
+                        self.aria2.set_download_speed_limit(gid, q.speed_limit)
+                        print(f"⚡ Queue speed limit {q.speed_limit}KB/s applied to {gid} (on add)")
             
             self._refresh_table()
             self.store.save()
@@ -1479,6 +1534,10 @@ class MainWindow(QMainWindow):
             if q and gid in q.downloads_info:
                 q.downloads_info[gid]["status"] = "active"
                 self.store.save()
+                
+            if q and q.speed_limit > 0:
+                self.aria2.set_download_speed_limit(gid, q.speed_limit)
+                print(f"⚡ Queue speed limit {q.speed_limit}KB/s applied to {gid}")
             
             self._refresh_table()
             self._refresh_queue_list()
@@ -2436,6 +2495,11 @@ class MainWindow(QMainWindow):
                             break
                     
                     self.store.save()
+                    
+                    if q and q.speed_limit > 0:
+                        self.aria2.set_download_speed_limit(gid, q.speed_limit)
+                        print(f"⚡ Queue speed limit {q.speed_limit}KB/s applied to {gid}")
+                    
                     self.tray.showMessage("FelfelDM", "▶️ Download resumed", 
                                         QSystemTrayIcon.MessageIcon.Information, 2000)
                     
@@ -2628,6 +2692,12 @@ class MainWindow(QMainWindow):
                     
                     start_now = d.get("start_immediately", True) and not target_queue.paused
                     
+                    # ⭐ اعمال محدودیت قبل از شروع
+                    if target_queue and getattr(target_queue, 'speed_limit', 0) > 0:
+                        time.sleep(0.3)
+                        self.aria2.set_download_speed_limit(gid, target_queue.speed_limit)
+                        print(f"⚡ Queue speed limit {target_queue.speed_limit}KB/s applied to {gid} (before start)")
+                    
                     if start_now:
                         self.aria2.resume(gid)
                         self._all_downloads[gid]["status"] = "active"
@@ -2641,10 +2711,6 @@ class MainWindow(QMainWindow):
                             target_queue.downloads_info[gid]["status"] = "paused"
                         self._pending_pause.add(gid)
                     
-                    if target_queue and hasattr(target_queue, 'speed_limit') and target_queue.speed_limit > 0:
-                        self.aria2.set_download_speed_limit(gid, target_queue.speed_limit)
-                        print(f"🐢 Applied queue speed limit {target_queue.speed_limit}KB/s to {gid}")
-                    
                     added_gids.append(gid)
 
             self.store.save()
@@ -2654,6 +2720,7 @@ class MainWindow(QMainWindow):
 
             if len(added_gids) == 1 and d.get("start_immediately", True) and not target_queue.paused:
                 QTimer.singleShot(500, lambda: self._open_progress_dialog(added_gids[0]))
+    
     def _on_table_double_click(self, index):
         gid = self.model.get_gid(index.row())
         if gid:
@@ -3032,3 +3099,22 @@ class MainWindow(QMainWindow):
                 if status in ["paused", "waiting"]:
                     return True
         return False
+
+    def _apply_queue_speed_limit(self, q):
+        """Apply speed limit for a specific queue to all its downloads"""
+        if not q or not self.aria2:
+            return
+        
+        for gid in q.downloads:
+            if gid in self._all_downloads:
+                status = self._all_downloads[gid].get("status", "")
+                if status in ["active", "waiting"]:
+                    if q.speed_limit > 0:
+                        self.aria2.set_download_speed_limit(gid, q.speed_limit)
+                        print(f"⚡ Queue speed limit {q.speed_limit}KB/s applied to {gid}")
+                    else:
+                        global_limit = self.store.settings.get("speed_limit", 0)
+                        if global_limit > 0:
+                            self.aria2.set_download_speed_limit(gid, global_limit)
+                        else:
+                            self.aria2.set_download_speed_limit(gid, 0)

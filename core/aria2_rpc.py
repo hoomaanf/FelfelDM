@@ -166,5 +166,12 @@ class Aria2RPC:
         proxy_url = proxy_config._build_proxy_url()
         return self.change_global_option({"all-proxy": proxy_url})
     
-    def set_queue_proxy(self, queue_name: str, proxy_config):
-        pass
+    def set_download_speed_limit(self, gid, speed_limit_kb):
+        """
+        Set speed limit for a specific download in KB/s
+        speed_limit_kb: 0 = no limit
+        """
+        if speed_limit_kb > 0:
+            return self._call("aria2.changeOption", [gid, {"max-download-limit": f"{speed_limit_kb}K"}])
+        else:
+            return self._call("aria2.changeOption", [gid, {"max-download-limit": "0"}])
