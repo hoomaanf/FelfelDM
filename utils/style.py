@@ -406,7 +406,7 @@ def setup_style(app, theme="auto"):
             /* ===== Progress Bar ===== */
             QProgressBar {
                 border: 1px solid #3d4045;
-                border-radius: 4px;
+                border-radius: 8px;
                 text-align: center;
                 color: #efeff1;
             }
@@ -716,7 +716,7 @@ def setup_style(app, theme="auto"):
             /* ===== Progress Bar ===== */
             QProgressBar {
                 border: 1px solid #d0d0d5;
-                border-radius: 4px;
+                border-radius: 8px;
                 text-align: center;
                 color: #1e1e21;
             }

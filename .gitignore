@@ -1,47 +1,141 @@
+# ============================================
 # Python
+# ============================================
 __pycache__/
 *.py[cod]
 *.pyc
 *.pyo
 *.pyd
+*.pyz
+*.pyi
 .Python
 *.so
 *.egg
 *.egg-info
+*.egg-info/
 dist/
 build/
+*.whl
+*.wheel
 venv/
 env/
 .venv/
+virtualenv/
+*.cover
+*.log
+*.pot
+*.mo
+*.pof
 
+# ============================================
 # IDE
+# ============================================
 .vscode/
 .idea/
 *.swp
 *.swo
 *~
+*.iml
+.project
+.pydevproject
+.settings/
+*.code-workspace
 
+# ============================================
 # OS
+# ============================================
 .DS_Store
 Thumbs.db
 *.bak
 *.tmp
+*.temp
+desktop.ini
+*.lnk
 
+# ============================================
 # Project
+# ============================================
 !manifest.json
 *.db
 *.sqlite
+*.sqlite3
 *.log
 *.backup
+*.pid
+*.pidfile
 
-
+# ============================================
 # Extension
+# ============================================
 *.xpi
 *.crx
 *.zip
 FelfelDM-extension.zip
+*.pem
+*.key
+*.crt
+*.csr
 
-# Data
+# ============================================
+# Data & Config
+# ============================================
 data.json
 *.secret
 *.key
+*.token
+.env
+.env.local
+.env.*.local
+
+# ============================================
+# Test & Coverage
+# ============================================
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+*.cover
+*.coverage
+
+# ============================================
+# Build & Release
+# ============================================
+*.pkg
+*.deb
+*.rpm
+*.tar.gz
+*.tar.bz2
+*.tgz
+*.dmg
+*.exe
+*.msi
+*.app
+*.jar
+*.war
+
+# ============================================
+# Python Type Checking
+# ============================================
+.mypy_cache/
+.dmypy.json
+dmypy.json
+.pytype/
+*.mypy_cache
+
+# ============================================
+# Documentation
+# ============================================
+_*
+site/
+docs/_build/
+*.rst.txt
+*.md.tmp
+
+# ============================================
+# Temp folders
+# ============================================
+tmp/
+temp/
+*.swp
+*.swo
+*.swn
