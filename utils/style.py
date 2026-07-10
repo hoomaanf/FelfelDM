@@ -670,19 +670,33 @@ def setup_style(app, theme="auto"):
             QPushButton:pressed { background-color: #b8b8bd; }
             QPushButton:disabled { opacity: 0.4; }
             QPushButton#start_btn {
-                background-color: #27ae60;
-                color: white;
+                background-color: #2ecc71;
+                color: #1a1a1a;
                 font-weight: bold;
             }
-            QPushButton#start_btn:hover { background-color: #2ecc71; }
-            QPushButton#start_btn:disabled { background-color: #1a6e3a; opacity: 0.5; }
+            QPushButton#start_btn:hover { 
+                background-color: #27ae60; 
+                color: white;
+            }
+            QPushButton#start_btn:disabled { 
+                background-color: #a8d5ba; 
+                color: #6c8a7a; 
+                opacity: 0.6; 
+            }
             QPushButton#pause_btn {
-                background-color: #f39c12;
-                color: white;
+                background-color: #f1c40f;
+                color: #1a1a1a;
                 font-weight: bold;
             }
-            QPushButton#pause_btn:hover { background-color: #f1c40f; }
-            QPushButton#pause_btn:disabled { background-color: #9e6200; opacity: 0.5; }
+            QPushButton#pause_btn:hover { 
+                background-color: #f39c12; 
+                color: white;
+            }
+            QPushButton#pause_btn:disabled { 
+                background-color: #f5d78a; 
+                color: #a5874a; 
+                opacity: 0.6; 
+            }
             
             /* ===== Input Fields ===== */
             QLineEdit, QTextEdit, QComboBox, QTimeEdit {

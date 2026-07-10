@@ -2294,7 +2294,7 @@ class MainWindow(QMainWindow):
             return
         if "is not found" in message:
             return
-        self.tray.showMessage("FelfelDM ⚠", message,
+        self.tray.showMessage("FelfelDM", message,
                             QSystemTrayIcon.MessageIcon.Warning, 3000)
         self.status_label.setText(f"⚠ {message}")
         
