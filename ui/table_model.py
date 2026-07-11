@@ -1,3 +1,5 @@
+# ui/table_model.py
+
 from PyQt6.QtCore import QAbstractTableModel, QModelIndex, Qt
 from PyQt6.QtGui import QColor
 from utils.helpers import (
@@ -34,24 +36,42 @@ class DownloadTableModel(QAbstractTableModel):
 
         row = self.rows[index.row()]
         col = index.column()
+        
+        # ===== تشخیص نوع دانلود =====
+        download_type = row.get("download_type", "normal")
+        status = row.get("status", "—")
 
         if role == Qt.ItemDataRole.DisplayRole:
-            if col == 0:
-                return row.get("name", "—")
+            if col == 0:  # Name
+                name = row.get("name", "—")
+                # اگر یوتیوب باشه و عنوان داشته باشه، نمایش بده
+                if download_type == "youtube":
+                    yt_title = row.get("yt_options", {}).get("title", "")
+                    if yt_title:
+                        return yt_title
+                return name
 
             if col == 1:  # Size
-                t = int(row.get("totalLength", 0))
-                if t == 0:
-                    status = row.get("status", "")
+                total = int(row.get("totalLength", 0))
+                if total == 0:
+                    # برای دانلود یوتیوب که حجمش مشخص نیست
+                    if download_type == "youtube" and status in ["downloading", "pending", "paused"]:
+                        return "⏳ Getting size..."
                     if status in ["waiting", "active", "paused"]:
                         return "⏳ Getting size..."
-                return format_size(t) if t > 0 else "—"
+                return format_size(total) if total > 0 else "—"
 
             if col == 2:  # Progress
-                t = int(row.get("totalLength", 0))
-                c = int(row.get("completedLength", 0))
-                if t > 0:
-                    pct = int((c / t) * 100)
+                total = int(row.get("totalLength", 0))
+                completed = int(row.get("completedLength", 0))
+                
+                # برای یوتیوب از progress استفاده کن
+                if download_type == "youtube":
+                    progress = row.get("progress", 0)
+                    return f"{progress}%"
+                
+                if total > 0:
+                    pct = int((completed / total) * 100)
                     return f"{pct}%"
                 return "0%"
 
@@ -61,9 +81,22 @@ class DownloadTableModel(QAbstractTableModel):
                     speed = int(speed)
                 except (ValueError, TypeError):
                     speed = 0
+                
+                # برای یوتیوب از speed استفاده کن
+                if download_type == "youtube":
+                    speed_str = row.get("speed", "")
+                    if speed_str:
+                        return speed_str
+                
                 return format_speed(speed) if speed > 0 else "0 B/s"
 
             if col == 4:  # ETA
+                # برای یوتیوب از eta استفاده کن
+                if download_type == "youtube":
+                    eta = row.get("eta", "")
+                    if eta:
+                        return eta
+                
                 return format_eta(
                     int(row.get("totalLength", 0)),
                     int(row.get("completedLength", 0)),
@@ -71,19 +104,41 @@ class DownloadTableModel(QAbstractTableModel):
                 )
 
             if col == 5:  # Status
-                status = row.get("status", "—")
                 status_map = {
                     "active": "⬇ Downloading",
                     "waiting": "⏳ Waiting",
                     "paused": "⏸ Paused",
                     "complete": "✅ Complete",
+                    "completed": "✅ Complete",
                     "error": "❌ Error",
                     "removed": "🗑 Removed",
+                    "pending": "⏳ Pending",
+                    "downloading": "⬇ Downloading",
+                    "cancelled": "🗑 Cancelled",
                 }
+                
+                # وضعیت‌های ویژه برای یوتیوب
+                if download_type == "youtube":
+                    if status == "downloading":
+                        return "⬇ Downloading (yt-dlp)"
+                    elif status == "pending":
+                        return "⏳ Pending"
+                    elif status == "paused":
+                        return "⏸ Paused"
+                    elif status == "completed":
+                        return "✅ Complete"
+                    elif status == "error":
+                        return "❌ Error"
+                
                 return status_map.get(status, status.capitalize())
 
             if col == 6:  # Category
                 category = row.get("category", "📁 Other")
+                
+                # برای یوتیوب کتگوری مخصوص
+                if download_type == "youtube":
+                    return "🎬 YouTube"
+                
                 if category == "📁 Other" or category == "" or category is None:
                     name = row.get("name", "")
                     if name:
@@ -91,26 +146,63 @@ class DownloadTableModel(QAbstractTableModel):
                 return category
 
         if role == Qt.ItemDataRole.ToolTipRole and col == 2:
-            t = int(row.get("totalLength", 0))
-            c = int(row.get("completedLength", 0))
-            if t > 0:
-                pct = int((c / t) * 100)
-                return f"Downloaded: {format_size(c)}\nTotal: {format_size(t)}\n{pct}% completed"
+            total = int(row.get("totalLength", 0))
+            completed = int(row.get("completedLength", 0))
+            
+            # برای یوتیوب
+            if download_type == "youtube":
+                progress = row.get("progress", 0)
+                speed = row.get("speed", "")
+                eta = row.get("eta", "")
+                status = row.get("status", "")
+                
+                if status == "completed":
+                    return "✅ Download completed!"
+                elif status == "downloading":
+                    return f"Downloading...\nProgress: {progress}%\nSpeed: {speed}\nETA: {eta}"
+                elif status == "paused":
+                    return f"⏸ Paused at {progress}%"
+                else:
+                    return f"Status: {status}\nProgress: {progress}%"
+            
+            if total > 0:
+                pct = int((completed / total) * 100)
+                return f"Downloaded: {format_size(completed)}\nTotal: {format_size(total)}\n{pct}% completed"
             else:
                 return "Getting size from server..."
 
         if role == Qt.ItemDataRole.ForegroundRole and col == 5:
             status = row.get("status", "")
-            if status == "complete":
+            
+            # رنگ‌های مخصوص برای یوتیوب
+            if download_type == "youtube":
+                if status == "completed":
+                    return QColor("#27ae60")
+                if status == "error":
+                    return QColor("#e74c3c")
+                if status == "downloading":
+                    return QColor("#9b59b6")  # رنگ بنفش برای yt-dlp
+                if status == "paused":
+                    return QColor("#f39c12")
+                if status == "pending":
+                    return QColor("#3498db")
+            
+            if status == "complete" or status == "completed":
                 return QColor("#27ae60")
             if status == "error":
                 return QColor("#e74c3c")
-            if status == "active":
+            if status == "active" or status == "downloading":
                 return QColor("#3daee9")
             if status == "paused":
                 return QColor("#f39c12")
-            if status == "waiting":
+            if status == "waiting" or status == "pending":
                 return QColor("#95a5a6")
+
+        # ===== نقش BackgroundRole برای تمایز دانلودهای یوتیوب =====
+        if role == Qt.ItemDataRole.BackgroundRole:
+            if download_type == "youtube":
+                # یک رنگ بسیار ملایم برای تشخیص
+                return QColor(155, 89, 182, 20)  # بنفش با آلفای کم
 
         return None
 
@@ -137,6 +229,12 @@ class DownloadTableModel(QAbstractTableModel):
 
     def get_gid(self, row_idx):
         return self.rows[row_idx].get("gid") if 0 <= row_idx < len(self.rows) else None
+    
+    def get_download_type(self, row_idx):
+        """دریافت نوع دانلود (normal یا youtube)"""
+        if 0 <= row_idx < len(self.rows):
+            return self.rows[row_idx].get("download_type", "normal")
+        return "normal"
 
     def sort(self, column, order=Qt.SortOrder.AscendingOrder):
         if column < 0 or column >= len(self.COLS):
@@ -166,6 +264,11 @@ class DownloadTableModel(QAbstractTableModel):
     def _get_progress_value(self, row):
         total = int(row.get("totalLength", 0))
         completed = int(row.get("completedLength", 0))
+        
+        # برای یوتیوب
+        if row.get("download_type") == "youtube":
+            return row.get("progress", 0)
+        
         if total > 0:
             return (completed / total) * 100
         return 0
@@ -174,6 +277,23 @@ class DownloadTableModel(QAbstractTableModel):
         total = int(row.get("totalLength", 0))
         completed = int(row.get("completedLength", 0))
         speed = int(row.get("downloadSpeed", 0))
+        
+        # برای یوتیوب
+        if row.get("download_type") == "youtube":
+            eta = row.get("eta", "")
+            if eta:
+                # تبدیل string به عدد (تخمینی)
+                try:
+                    if ":" in eta:
+                        parts = eta.split(":")
+                        if len(parts) == 2:
+                            return int(parts[0]) * 60 + int(parts[1])
+                        elif len(parts) == 3:
+                            return int(parts[0]) * 3600 + int(parts[1]) * 60 + int(parts[2])
+                except:
+                    pass
+            return 999999999
+        
         if speed > 0:
             remaining = total - completed
             return remaining // speed

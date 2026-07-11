@@ -1482,10 +1482,15 @@ WantedBy=default.target
 
 
 class YouTubeDownloadDialog(QDialog):
-    def __init__(self, parent=None):
+    youtube_download_requested = pyqtSignal(dict)
+    
+    def __init__(self, parent=None, queues=None, default_queue=0):
         super().__init__(parent)
         self.setWindowTitle("YouTube Download")
         self.setMinimumWidth(550)
+        
+        self.queues = queues or []
+        self.default_queue = default_queue
 
         lay = QVBoxLayout(self)
         lay.setSpacing(10)
@@ -1543,6 +1548,22 @@ class YouTubeDownloadDialog(QDialog):
         cookie_row.addWidget(cookie_browse)
         options_layout.addRow("Cookies:", cookie_row)
 
+        # ===== بخش جدید: انتخاب صف =====
+        queue_row = QHBoxLayout()
+        self.queue_combo = QComboBox()
+        
+        # پر کردن صف‌ها
+        for i, q in enumerate(self.queues):
+            if q.name != "__direct__":
+                self.queue_combo.addItem(q.name, i)
+        
+        # انتخاب صف پیش‌فرض
+        if self.default_queue < self.queue_combo.count():
+            self.queue_combo.setCurrentIndex(self.default_queue)
+        
+        queue_row.addWidget(self.queue_combo)
+        options_layout.addRow("Add to Queue:", queue_row)
+
         lay.addWidget(options_group)
 
         # === Proxy Settings Group ===
@@ -1589,11 +1610,11 @@ class YouTubeDownloadDialog(QDialog):
         # Buttons
         btn_box = QDialogButtonBox()
         self.download_btn = btn_box.addButton(
-            "Download", QDialogButtonBox.ButtonRole.AcceptRole
+            "Add to Queue", QDialogButtonBox.ButtonRole.AcceptRole
         )
         self.download_btn.setIcon(get_icon("download"))
         self.download_btn.setEnabled(False)
-        self.download_btn.clicked.connect(self.accept)
+        self.download_btn.clicked.connect(self._on_add_to_queue)
 
         cancel_btn = btn_box.addButton("Cancel", QDialogButtonBox.ButtonRole.RejectRole)
         cancel_btn.setIcon(get_icon("dialog-cancel"))
@@ -1604,6 +1625,7 @@ class YouTubeDownloadDialog(QDialog):
         self.video_info = None
         self._custom_proxy = None
         self._format_map = {}
+        self.worker = None
 
     def _browse(self):
         d = QFileDialog.getExistingDirectory(
@@ -1662,9 +1684,29 @@ class YouTubeDownloadDialog(QDialog):
             self.proxy_status_label.setText("⚠️ Invalid proxy configuration")
             self.proxy_status_label.setStyleSheet("color: #e74c3c; font-size: 10px;")
 
+    def _get_proxy_url(self):
+        """Get proxy URL based on selection"""
+        proxy_mode = self.proxy_combo.currentIndex()
+
+        if proxy_mode == 0:  # Use Global Proxy
+            if hasattr(self.parent(), "proxy_manager"):
+                proxy = self.parent().proxy_manager.get_proxy_for_queue(None)
+                if proxy and proxy.is_valid():
+                    return proxy._build_proxy_url()
+        elif proxy_mode == 1:  # Custom Proxy
+            if self._custom_proxy and self._custom_proxy.is_valid():
+                return self._custom_proxy._build_proxy_url()
+        return None
+
+    def clear_info_layout(self):
+        """Clear all widgets from info layout"""
+        while self.info_layout.rowCount() > 0:
+            self.info_layout.removeRow(self.info_layout.rowCount() - 1)
+
     def _fetch_info(self):
         url = self.url_edit.text().strip()
         if not url:
+            QMessageBox.warning(self, "Error", "Please enter a YouTube URL")
             return
 
         self.fetch_btn.setEnabled(False)
@@ -1695,25 +1737,6 @@ class YouTubeDownloadDialog(QDialog):
             self.info_layout.addRow(self.info_placeholder)
             self.fetch_btn.setEnabled(True)
             self.fetch_btn.setText("Get Video Info")
-
-    def _get_proxy_url(self):
-        """Get proxy URL based on selection"""
-        proxy_mode = self.proxy_combo.currentIndex()
-
-        if proxy_mode == 0:  # Use Global Proxy
-            if hasattr(self.parent(), "proxy_manager"):
-                proxy = self.parent().proxy_manager.get_proxy_for_queue(None)
-                if proxy and proxy.is_valid():
-                    return proxy._build_proxy_url()
-        elif proxy_mode == 1:  # Custom Proxy
-            if self._custom_proxy and self._custom_proxy.is_valid():
-                return self._custom_proxy._build_proxy_url()
-        return None
-
-    def clear_info_layout(self):
-        """Clear all widgets from info layout"""
-        while self.info_layout.rowCount() > 0:
-            self.info_layout.removeRow(self.info_layout.rowCount() - 1)
 
     def _on_info_fetched(self, info):
         """When video info is fetched"""
@@ -1761,7 +1784,6 @@ class YouTubeDownloadDialog(QDialog):
                     label += f" - {resolution}"
                 if filesize:
                     from utils.helpers import format_size
-
                     label += f" ({format_size(filesize)})"
                 video_formats.append((format_id, label, f))
 
@@ -1772,7 +1794,6 @@ class YouTubeDownloadDialog(QDialog):
                     label += f" - {bitrate}kbps"
                 if filesize:
                     from utils.helpers import format_size
-
                     label += f" ({format_size(filesize)})"
                 audio_formats.append((format_id, label, f))
 
@@ -1809,11 +1830,11 @@ class YouTubeDownloadDialog(QDialog):
         filesize = info.get("filesize")
         if filesize:
             from utils.helpers import format_size
-
             self.info_layout.addRow("Size:", QLabel(format_size(filesize)))
 
         self.format_combo.setEnabled(True)
         self.download_btn.setEnabled(True)
+        self.download_btn.setText("Add to Queue")
         self.fetch_btn.setEnabled(True)
         self.fetch_btn.setText("Get Video Info")
 
@@ -1829,31 +1850,69 @@ class YouTubeDownloadDialog(QDialog):
         self.fetch_btn.setEnabled(True)
         self.fetch_btn.setText("Get Video Info")
 
+    def _on_add_to_queue(self):
+        """افزودن دانلود به صف"""
+        data = self.get_data()
+        
+        if not data['url']:
+            QMessageBox.warning(self, "Error", "Please enter a valid YouTube URL")
+            return
+        
+        # انتخاب صف
+        queue_index = self.queue_combo.currentData()
+        queue_name = self.queue_combo.currentText()
+        
+        # آماده‌سازی داده برای ارسال
+        download_data = {
+            'url': data['url'],
+            'save_path': data['path'],
+            'queue_id': queue_name,
+            'download_type': 'youtube',
+            'yt_options': {
+                'quality': data.get('quality', 'best'),
+                'format': data.get('format', 'video'),
+                'cookies_path': data.get('cookie_file'),
+                'title': data.get('video_info', {}).get('title', ''),
+                'format_id': data.get('format_id'),
+                'format_info': data.get('format_info', {})
+            },
+            'proxy': data.get('proxy_url'),
+            'video_info': data.get('video_info')
+        }
+        
+        # ارسال سیگنال به parent
+        self.youtube_download_requested.emit(download_data)
+        self.accept()
+
     def get_data(self):
         """Get all dialog data"""
         proxy_mode = self.proxy_combo.currentIndex()
 
         selected_format_id = self.format_combo.currentData()
-        format_type = "mp4"
+        format_type = "video"
+        quality = "best"
 
         if selected_format_id == "best":
-            format_type = "best"
+            quality = "best"
+            format_type = "video"
         else:
             format_info = self._format_map.get(selected_format_id, {})
             ext = format_info.get("ext", "mp4")
-            if ext == "m4a":
-                format_type = "m4a"
-            elif ext == "mp3":
-                format_type = "mp3"
-            elif ext == "webm":
-                format_type = "webm"
+            resolution = format_info.get("resolution", "")
+            
+            # تشخیص نوع (ویدیو یا صدا)
+            if format_info.get("vcodec") and format_info.get("vcodec") != "none":
+                format_type = "video"
+                quality = resolution or "best"
             else:
-                format_type = "mp4"
+                format_type = "audio"
+                quality = format_info.get("abr", "best")
 
         return {
             "url": self.url_edit.text().strip(),
             "path": self.path_edit.text().strip(),
             "format": format_type,
+            "quality": quality,
             "format_id": selected_format_id,
             "format_info": self._format_map.get(selected_format_id, {}),
             "cookie_file": self.cookie_edit.text().strip() or None,
@@ -1861,8 +1920,9 @@ class YouTubeDownloadDialog(QDialog):
             "proxy_mode": proxy_mode,
             "custom_proxy": self._custom_proxy if proxy_mode == 1 else None,
             "proxy_url": self._get_proxy_url(),
+            "queue_index": self.queue_combo.currentData(),
+            "queue_name": self.queue_combo.currentText()
         }
-
 
 class ProxyDialog(QDialog):
     def __init__(

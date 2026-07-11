@@ -1914,53 +1914,33 @@ class MainWindow(QMainWindow):
 
         dl_data = self._all_downloads.get(gid, {})
         download_name = dl_data.get("name", "Unknown")
-
-        # Get real status from aria2
-        real_status = self.aria2.get_status(gid)
-        if not real_status:
-            real_status = dl_data.get("status", "")
-
-        menu = QMenu(self)
-
-        # Single Pause/Resume option based on real status
-        if real_status in ["active", "waiting"]:
-            menu.addAction(
-                get_icon("media-playback-pause"), "Pause", self._pause_selected
-            )
-        elif real_status == "paused":
-            menu.addAction(
-                get_icon("media-playback-start"), "Resume", self._resume_selected
-            )
-
-        menu.addSeparator()
-
-        # ===== Proxy Settings =====
-        proxy_menu = menu.addMenu(get_icon("network"), "Proxy Settings")
-
-        current_proxy = self.proxy_manager.get_proxy_for_download(gid)
-        if current_proxy:
-            proxy_menu.addAction(f"✅ Current: {current_proxy.get_display_string()}")
+        download_type = dl_data.get("download_type", "normal")
+        
+        # Get real status from aria2 or youtube
+        if download_type == 'youtube':
+            # برای دانلود یوتیوب، وضعیت رو از worker بگیر
+            real_status = dl_data.get('status', '')
         else:
-            q = self._current_queue()
-            if q:
-                queue_proxy = self.proxy_manager.get_proxy_for_queue(q.name)
-                if queue_proxy:
-                    proxy_menu.addAction(
-                        f"📦 Queue: {queue_proxy.get_display_string()}"
-                    )
-                else:
-                    proxy_menu.addAction("🌐 Global/No Proxy")
-
-        proxy_menu.addSeparator()
-        proxy_menu.addAction(
-            "Set Custom Proxy", lambda: self._set_download_proxy(gid, download_name)
-        )
-        proxy_menu.addAction(
-            "Clear Custom Proxy", lambda: self._clear_download_proxy(gid)
-        )
-
+            real_status = self.aria2.get_status(gid)
+            if not real_status:
+                real_status = dl_data.get("status", "")
+        
+        menu = QMenu(self)
+        
+        # Single Pause/Resume option based on real status
+        if real_status in ["active", "waiting", "downloading"]:
+            menu.addAction(
+                get_icon("media-playback-pause"), "Pause", 
+                lambda: self._pause_youtube_download(gid) if download_type == 'youtube' else self._pause_selected()
+            )
+        elif real_status in ["paused"]:
+            menu.addAction(
+                get_icon("media-playback-start"), "Resume", 
+                lambda: self._resume_youtube_download(gid) if download_type == 'youtube' else self._resume_selected()
+            )
+        
         menu.addSeparator()
-
+        
         # ===== Open Folder =====
         def _open_folder():
             files = dl_data.get("files", [])
@@ -1969,23 +1949,66 @@ class MainWindow(QMainWindow):
                 folder = os.path.dirname(path)
                 if os.path.exists(folder):
                     QDesktopServices.openUrl(QUrl.fromLocalFile(folder))
-
+                else:
+                    # اگر فایل وجود نداشت، مسیر ذخیره رو باز کن
+                    saved_data = self.store.get_youtube_download(gid)
+                    if saved_data:
+                        folder = saved_data.get('save_path', '')
+                        if os.path.exists(folder):
+                            QDesktopServices.openUrl(QUrl.fromLocalFile(folder))
+        
         menu.addAction(get_icon("folder"), "Open Folder", _open_folder)
-
+        
         # ===== Copy URL =====
         def _copy_link():
-            files = dl_data.get("files", [])
-            if files and files[0].get("uris"):
-                QApplication.clipboard().setText(files[0]["uris"][0]["uri"])
-
+            saved_data = self.store.get_youtube_download(gid)
+            if saved_data:
+                QApplication.clipboard().setText(saved_data.get('url', ''))
+            else:
+                files = dl_data.get("files", [])
+                if files and files[0].get("uris"):
+                    QApplication.clipboard().setText(files[0]["uris"][0]["uri"])
+        
         menu.addAction(get_icon("edit-copy"), "Copy URL", _copy_link)
-
+        
         menu.addSeparator()
-
+        
         # ===== Remove =====
-        menu.addAction(get_icon("edit-delete"), "Remove", self._remove_selected)
-
+        menu.addAction(get_icon("edit-delete"), "Remove", 
+                       lambda: self._remove_youtube_download(gid) if download_type == 'youtube' else self._remove_selected())
+        
         menu.exec(self.table.viewport().mapToGlobal(pos))
+    
+    def _remove_youtube_download(self, download_id: str):
+        """حذف دانلود یوتیوب"""
+        # لغو دانلود اگر در حال اجراست
+        self._cancel_youtube_download(download_id)
+        
+        # حذف از دیتاستور
+        self.store.delete_youtube_download(download_id)
+        
+        # حذف از صف
+        for q in self.store.queues:
+            if download_id in q.downloads:
+                q.downloads.remove(download_id)
+            if download_id in q.downloads_info:
+                del q.downloads_info[download_id]
+        
+        # حذف از _all_downloads
+        if download_id in self._all_downloads:
+            del self._all_downloads[download_id]
+        
+        self.store.save()
+        self._refresh_table()
+        self._refresh_queue_list()
+        self._update_queue_buttons()
+        
+        self.tray.showMessage(
+            "FelfelDM",
+            "🗑 YouTube download removed",
+            QSystemTrayIcon.MessageIcon.Information,
+            2000
+        )
 
     def _filter_downloads(self, text):
         q = self._current_queue()
@@ -2513,6 +2536,37 @@ class MainWindow(QMainWindow):
         except Exception:
             self._youtube_dialog = None
 
+        youtube_downloads = result.get('youtube_downloads', [])
+        for yt_data in youtube_downloads:
+            yt_id = yt_data.get('id')
+            if yt_id:
+                # به‌روزرسانی _all_downloads با اطلاعات یوتیوب
+                if yt_id in self._all_downloads:
+                    self._all_downloads[yt_id].update({
+                        'status': yt_data.get('status', 'pending'),
+                        'progress': yt_data.get('progress', 0),
+                        'downloadSpeed': self._parse_speed(yt_data.get('speed', '')),
+                        'totalLength': yt_data.get('total_size', 0),
+                        'completedLength': int(yt_data.get('total_size', 0) * yt_data.get('progress', 0) / 100)
+                    })
+                else:
+                    # اگر در _all_downloads نبود، از دیتاستور بخون
+                    saved_data = self.store.get_youtube_download(yt_id)
+                    if saved_data:
+                        self._all_downloads[yt_id] = {
+                            'gid': yt_id,
+                            'name': saved_data.get('yt_options', {}).get('title', 'Unknown'),
+                            'status': yt_data.get('status', 'pending'),
+                            'totalLength': 0,
+                            'completedLength': 0,
+                            'downloadSpeed': 0,
+                            'connections': 0,
+                            'files': [{'path': saved_data.get('full_path', '')}],
+                            'errorMessage': '',
+                            'category': '🎬 YouTube',
+                            'download_type': 'youtube'
+                        }
+
         # ===== Refresh UI =====
         self._refresh_table()
         self._update_queue_status()
@@ -2995,42 +3049,194 @@ class MainWindow(QMainWindow):
             self.splash.close()
             self.splash = None
 
-    def _youtube_download(self):
-        from ui.dialogs import YouTubeDownloadDialog
-
-        dlg = YouTubeDownloadDialog(self)
-
+    def _youtube_download(self):        
+        # گرفتن لیست صف‌ها (به جز direct)
+        queues = [q for q in self.store.queues if q.name != "__direct__"]
+        
+        # پیدا کردن صف فعلی
+        current_q = self._current_queue()
+        default_idx = 0
+        if current_q and current_q.name != "__direct__":
+            for i, q in enumerate(queues):
+                if q.name == current_q.name:
+                    default_idx = i
+                    break
+        
+        dlg = YouTubeDownloadDialog(
+            parent=self,
+            queues=queues,
+            default_queue=default_idx
+        )
+        
+        # اتصال سیگنال برای اضافه کردن دانلود به صف
+        dlg.youtube_download_requested.connect(self._add_youtube_to_queue)
+        
+        # چسبوندن URL از کلیپ‌بورد
         clip = QApplication.clipboard().text().strip()
         if clip and ("youtube.com" in clip or "youtu.be" in clip):
             dlg.url_edit.setText(clip)
-
-        if dlg.exec():
-            data = dlg.get_data()
-            if not data["url"]:
-                QMessageBox.warning(self, "Error", "Please enter a YouTube URL.")
-                return
-
-            os.makedirs(data["path"], exist_ok=True)
-
-            proxy_url = data.get("proxy_url")
-
-            from ui.youtube_progress import YouTubeProgressDialog
-
-            self._youtube_dialog = YouTubeProgressDialog(
-                url=data["url"],
-                output_path=data["path"],
-                format_type=data["format"],
-                cookie_file=data["cookie_file"],
-                video_info=data.get("video_info"),
-                parent=None,
-                proxy_url=proxy_url,
-            )
-            self._youtube_dialog.show()
-
-            self._youtube_dialog.worker.finished.connect(
-                lambda success, msg: self._on_youtube_finished(success, msg)
-            )
-
+        
+        dlg.exec()
+    
+    def _add_youtube_to_queue(self, download_data: dict):
+        # پیدا کردن صف مورد نظر
+        queue_name = download_data.get('queue_id', 'Default')
+        target_queue = None
+        
+        for q in self.store.queues:
+            if q.name == queue_name:
+                target_queue = q
+                break
+        
+        if not target_queue:
+            # اگر صف وجود نداشت، ایجاد کن
+            target_queue = Queue(queue_name, paused=True)
+            self.store.queues.append(target_queue)
+            self.store.save()
+        
+        # ایجاد شناسه یکتا برای دانلود
+        import uuid
+        download_id = str(uuid.uuid4())
+        
+        # ذخیره اطلاعات دانلود در دیتاستور
+        yt_options = download_data.get('yt_options', {})
+        
+        # استخراج عنوان از video_info
+        video_info = download_data.get('video_info', {})
+        title = video_info.get('title', 'Unknown Video')
+        
+        # ساخت نام فایل
+        format_type = yt_options.get('format', 'video')
+        ext = 'mp4' if format_type == 'video' else 'mp3'
+        filename = f"{title}.{ext}"
+        
+        # حذف کاراکترهای غیرمجاز از نام فایل
+        import re
+        filename = re.sub(r'[<>:"/\\|?*]', '_', filename)
+        
+        # مسیر کامل فایل
+        full_path = os.path.join(download_data['save_path'], filename)
+        
+        # ذخیره در دیتاستور (برای بازیابی بعد از restart)
+        youtube_data = {
+            'id': download_id,
+            'url': download_data['url'],
+            'save_path': download_data['save_path'],
+            'queue_id': queue_name,
+            'download_type': 'youtube',
+            'status': 'pending',
+            'progress': 0,
+            'speed': '',
+            'eta': '',
+            'yt_options': {
+                'title': title,
+                'quality': yt_options.get('quality', 'best'),
+                'format': format_type,
+                'cookies_path': yt_options.get('cookies_path'),
+                'format_id': yt_options.get('format_id'),
+                'format_info': yt_options.get('format_info', {})
+            },
+            'proxy': download_data.get('proxy'),
+            'video_info': video_info,
+            'created_at': datetime.now().isoformat(),
+            'completed_at': None,
+            'error_message': '',
+            'filename': filename,
+            'full_path': full_path
+        }
+        
+        # ذخیره در دیتاستور
+        self.store.add_youtube_download(youtube_data)
+        
+        # همچنین به صف aria2 اضافه نمی‌کنیم (چون با yt-dlp دانلود میشه)
+        # فقط اطلاعات رو به _all_downloads اضافه می‌کنیم برای نمایش در جدول
+        
+        self._all_downloads[download_id] = {
+            'gid': download_id,
+            'name': title,
+            'status': 'pending',
+            'totalLength': 0,
+            'completedLength': 0,
+            'downloadSpeed': 0,
+            'connections': 0,
+            'files': [{'path': full_path}],
+            'errorMessage': '',
+            'category': '🎬 YouTube',
+            'download_type': 'youtube',
+            'yt_options': youtube_data['yt_options']
+        }
+        
+        # اضافه به صف (برای نمایش در جدول)
+        if download_id not in target_queue.downloads:
+            target_queue.downloads.append(download_id)
+        
+        # ذخیره اطلاعات در queue
+        target_queue.downloads_info[download_id] = {
+            'url': download_data['url'],
+            'name': title,
+            'totalLength': 0,
+            'completedLength': 0,
+            'status': 'pending',
+            'category': '🎬 YouTube',
+            'download_type': 'youtube'
+        }
+        
+        self.store.save()
+        
+        # شروع دانلود اگر صف فعال باشه
+        if not target_queue.paused and target_queue.is_scheduled_now():
+            self._start_youtube_download(download_id)
+        
+        # به‌روزرسانی UI
+        self._refresh_queue_list()
+        self._refresh_table()
+        self._update_queue_buttons()
+        self._update_shutdown_button_state()
+        
+        # نمایش پیام
+        self.tray.showMessage(
+            "FelfelDM",
+            f"✅ Added YouTube download to '{queue_name}': {title[:50]}...",
+            QSystemTrayIcon.MessageIcon.Information,
+            3000
+        )
+    
+    def _start_youtube_download(self, download_id: str):
+        if not hasattr(self, 'worker') or not self.worker:
+            return
+        
+        # دریافت اطلاعات از دیتاستور
+        data = self.store.get_youtube_download(download_id)
+        if not data:
+            return
+        
+        # ارسال به worker برای شروع
+        self.worker.add_youtube_download({
+            'id': download_id,
+            'url': data['url'],
+            'save_path': data['save_path'],
+            'yt_options': data.get('yt_options', {}),
+            'proxy': data.get('proxy')
+        })
+    
+    def _pause_youtube_download(self, download_id: str):
+        """توقف موقت دانلود یوتیوب"""
+        if not hasattr(self, 'worker'):
+            return
+        self.worker.pause_youtube_download(download_id)
+    
+    def _resume_youtube_download(self, download_id: str):
+        """ادامه دانلود یوتیوب"""
+        if not hasattr(self, 'worker'):
+            return
+        self.worker.resume_youtube_download(download_id)
+    
+    def _cancel_youtube_download(self, download_id: str):
+        """لغو دانلود یوتیوب"""
+        if not hasattr(self, 'worker'):
+            return
+        self.worker.cancel_youtube_download(download_id)
+    
     def _on_youtube_finished(self, success, message):
         """Handle YouTube download finished"""
         if success:
@@ -3400,3 +3606,24 @@ class MainWindow(QMainWindow):
                             self.aria2.set_download_speed_limit(gid, global_limit)
                         else:
                             self.aria2.set_download_speed_limit(gid, 0)
+                            
+    def _parse_speed(self, speed_str: str) -> int:
+        """تبدیل سرعت به عدد (bytes/sec)"""
+        if not speed_str:
+            return 0
+        try:
+            # حذف فاصله و تبدیل
+            speed_str = speed_str.strip()
+            if 'KiB/s' in speed_str:
+                return int(float(speed_str.replace('KiB/s', '').strip()) * 1024)
+            elif 'MiB/s' in speed_str:
+                return int(float(speed_str.replace('MiB/s', '').strip()) * 1024 * 1024)
+            elif 'KB/s' in speed_str:
+                return int(float(speed_str.replace('KB/s', '').strip()) * 1000)
+            elif 'MB/s' in speed_str:
+                return int(float(speed_str.replace('MB/s', '').strip()) * 1000 * 1000)
+            elif speed_str.isdigit():
+                return int(speed_str)
+            return 0
+        except:
+            return 0
