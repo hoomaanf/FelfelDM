@@ -1,10 +1,20 @@
 from datetime import datetime, time as dtime
 import os
 
+
 class Queue:
-    def __init__(self, name, max_concurrent=3, save_path="", schedule_enabled=False,
-                 schedule_start=None, schedule_end=None, days=None, paused=True,
-                 speed_limit=0):
+    def __init__(
+        self,
+        name,
+        max_concurrent=3,
+        save_path="",
+        schedule_enabled=False,
+        schedule_start=None,
+        schedule_end=None,
+        days=None,
+        paused=True,
+        speed_limit=0,
+    ):
         self.name = name
         self.max_concurrent = max_concurrent
         self.save_path = save_path or os.path.expanduser("~/Downloads")
@@ -41,9 +51,9 @@ class Queue:
             save_path=data.get("save_path", os.path.expanduser("~/Downloads")),
             schedule_enabled=data.get("schedule_enabled", False),
             paused=data.get("paused", True),
-            speed_limit=data.get("speed_limit", 0)
+            speed_limit=data.get("speed_limit", 0),
         )
-        
+
         st = data.get("schedule_start", "00:00").split(":")
         en = data.get("schedule_end", "23:59").split(":")
         q.schedule_start = dtime(int(st[0]), int(st[1]))
