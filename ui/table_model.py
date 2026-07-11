@@ -1,6 +1,12 @@
 from PyQt6.QtCore import QAbstractTableModel, QModelIndex, Qt
 from PyQt6.QtGui import QColor
-from utils.helpers import format_size, format_speed, format_eta, get_category_from_filename
+from utils.helpers import (
+    format_size,
+    format_speed,
+    format_eta,
+    get_category_from_filename,
+)
+
 
 class DownloadTableModel(QAbstractTableModel):
     COLS = ["Name", "Size", "Progress", "Speed", "ETA", "Status", "Category"]
@@ -32,7 +38,7 @@ class DownloadTableModel(QAbstractTableModel):
         if role == Qt.ItemDataRole.DisplayRole:
             if col == 0:
                 return row.get("name", "—")
-            
+
             if col == 1:  # Size
                 t = int(row.get("totalLength", 0))
                 if t == 0:
@@ -40,7 +46,7 @@ class DownloadTableModel(QAbstractTableModel):
                     if status in ["waiting", "active", "paused"]:
                         return "⏳ Getting size..."
                 return format_size(t) if t > 0 else "—"
-            
+
             if col == 2:  # Progress
                 t = int(row.get("totalLength", 0))
                 c = int(row.get("completedLength", 0))
@@ -48,7 +54,7 @@ class DownloadTableModel(QAbstractTableModel):
                     pct = int((c / t) * 100)
                     return f"{pct}%"
                 return "0%"
-            
+
             if col == 3:  # Speed
                 speed = row.get("downloadSpeed", 0)
                 try:
@@ -56,14 +62,14 @@ class DownloadTableModel(QAbstractTableModel):
                 except (ValueError, TypeError):
                     speed = 0
                 return format_speed(speed) if speed > 0 else "0 B/s"
-            
+
             if col == 4:  # ETA
                 return format_eta(
                     int(row.get("totalLength", 0)),
                     int(row.get("completedLength", 0)),
-                    int(row.get("downloadSpeed", 0))
+                    int(row.get("downloadSpeed", 0)),
                 )
-            
+
             if col == 5:  # Status
                 status = row.get("status", "—")
                 status_map = {
@@ -72,10 +78,10 @@ class DownloadTableModel(QAbstractTableModel):
                     "paused": "⏸ Paused",
                     "complete": "✅ Complete",
                     "error": "❌ Error",
-                    "removed": "🗑 Removed"
+                    "removed": "🗑 Removed",
                 }
                 return status_map.get(status, status.capitalize())
-            
+
             if col == 6:  # Category
                 category = row.get("category", "📁 Other")
                 if category == "📁 Other" or category == "" or category is None:
@@ -140,19 +146,21 @@ class DownloadTableModel(QAbstractTableModel):
         self.sort_order = order
 
         sort_keys = {
-            0: lambda x: x.get("name", "").lower(),           # Name
-            1: lambda x: int(x.get("totalLength", 0)),        # Size
-            2: lambda x: self._get_progress_value(x),         # Progress
-            3: lambda x: int(x.get("downloadSpeed", 0)),      # Speed
-            4: lambda x: self._get_eta_value(x),              # ETA
-            5: lambda x: x.get("status", ""),                 # Status
-            6: lambda x: x.get("category", ""),               # Category
+            0: lambda x: x.get("name", "").lower(),  # Name
+            1: lambda x: int(x.get("totalLength", 0)),  # Size
+            2: lambda x: self._get_progress_value(x),  # Progress
+            3: lambda x: int(x.get("downloadSpeed", 0)),  # Speed
+            4: lambda x: self._get_eta_value(x),  # ETA
+            5: lambda x: x.get("status", ""),  # Status
+            6: lambda x: x.get("category", ""),  # Category
         }
 
         key_func = sort_keys.get(column, lambda x: x.get("name", "").lower())
         self.rows.sort(key=key_func, reverse=(order == Qt.SortOrder.DescendingOrder))
 
-        self.dataChanged.emit(self.index(0, 0), self.index(max(0, len(self.rows) - 1), len(self.COLS) - 1))
+        self.dataChanged.emit(
+            self.index(0, 0), self.index(max(0, len(self.rows) - 1), len(self.COLS) - 1)
+        )
         self.layoutChanged.emit()
 
     def _get_progress_value(self, row):

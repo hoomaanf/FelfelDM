@@ -12,9 +12,19 @@ KEYRING_KEY = "aria2_secret"
 
 
 class Queue:
-    def __init__(self, name, max_concurrent=3, save_path="", schedule_enabled=False,
-                 schedule_start=None, schedule_end=None, days=None, paused=True,
-                 proxy_config=None, speed_limit=0):
+    def __init__(
+        self,
+        name,
+        max_concurrent=3,
+        save_path="",
+        schedule_enabled=False,
+        schedule_start=None,
+        schedule_end=None,
+        days=None,
+        paused=True,
+        proxy_config=None,
+        speed_limit=0,
+    ):
         self.name = name
         self.max_concurrent = max_concurrent
         self.save_path = save_path or os.path.expanduser("~/Downloads")
@@ -32,6 +42,7 @@ class Queue:
         proxy_dict = None
         if self.proxy_config:
             from core.proxy_manager import ProxyConfig
+
             if isinstance(self.proxy_config, ProxyConfig):
                 proxy_dict = self.proxy_config.to_dict()
             else:
@@ -131,10 +142,7 @@ class DataStore:
             "auto_clear_completed": False,
             "theme": "auto",
             "run_as_service": False,
-            "proxy_settings": {
-                "global": None,
-                "queues": {}
-            }
+            "proxy_settings": {"global": None, "queues": {}},
         }
 
     def load(self):
@@ -145,7 +153,7 @@ class DataStore:
             return
 
         try:
-            with open(self.data_file, 'r', encoding='utf-8') as f:
+            with open(self.data_file, "r", encoding="utf-8") as f:
                 data = json.load(f)
 
             self.queues = [Queue.from_dict(q) for q in data.get("queues", [])]
@@ -202,14 +210,23 @@ class DataStore:
                 pass
 
         try:
-            temp_file = self.data_file.with_suffix('.json.tmp')
+            temp_file = self.data_file.with_suffix(".json.tmp")
 
-            with open(temp_file, 'w', encoding='utf-8') as f:
-                json.dump({
-                    "queues": [q.to_dict() for q in self.queues],
-                    "settings": self.settings,
-                    "download_proxies": self.download_proxies if hasattr(self, 'download_proxies') else {},
-                }, f, indent=2, ensure_ascii=False)
+            with open(temp_file, "w", encoding="utf-8") as f:
+                json.dump(
+                    {
+                        "queues": [q.to_dict() for q in self.queues],
+                        "settings": self.settings,
+                        "download_proxies": (
+                            self.download_proxies
+                            if hasattr(self, "download_proxies")
+                            else {}
+                        ),
+                    },
+                    f,
+                    indent=2,
+                    ensure_ascii=False,
+                )
                 f.flush()
                 os.fsync(f.fileno())
 
@@ -219,12 +236,21 @@ class DataStore:
             print(f"⚠️ Error saving data: {e}")
 
             try:
-                with open(self.data_file, 'w', encoding='utf-8') as f:
-                    json.dump({
-                        "queues": [q.to_dict() for q in self.queues],
-                        "settings": self.settings,
-                        "download_proxies": self.download_proxies if hasattr(self, 'download_proxies') else {},
-                    }, f, indent=2, ensure_ascii=False)
+                with open(self.data_file, "w", encoding="utf-8") as f:
+                    json.dump(
+                        {
+                            "queues": [q.to_dict() for q in self.queues],
+                            "settings": self.settings,
+                            "download_proxies": (
+                                self.download_proxies
+                                if hasattr(self, "download_proxies")
+                                else {}
+                            ),
+                        },
+                        f,
+                        indent=2,
+                        ensure_ascii=False,
+                    )
             except:
                 print("❌ Failed to save data!")
 
