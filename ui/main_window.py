@@ -804,10 +804,9 @@ class MainWindow(QMainWindow):
             self.status_label.setText("Direct Downloads")
             return
 
-        # ⭐ بررسی محدودیت سرعت صف
         speed_limit_text = ""
         if getattr(q, "speed_limit", 0) > 0:
-            self.speed_limit_lbl.setText(f"⚡ Speed Limit: {q.speed_limit} KB/s")
+            self.speed_limit_lbl.setText(f"Speed Limit: {q.speed_limit} KB/s")
             self.speed_limit_lbl.setStyleSheet("color: #f39c12; font-size: 11px;")
         else:
             self.speed_limit_lbl.setText("")
@@ -938,7 +937,6 @@ class MainWindow(QMainWindow):
         for gid in q.downloads:
             real_status = self.aria2.get_status(gid)
             if real_status == "paused":
-                # ⭐ اعمال محدودیت قبل از resume
                 if q and getattr(q, "speed_limit", 0) > 0:
                     time.sleep(0.3)
                     self.aria2.set_download_speed_limit(gid, q.speed_limit)
@@ -965,7 +963,6 @@ class MainWindow(QMainWindow):
         self._update_queue_buttons()
         self._update_shutdown_button_state()
 
-        # ⭐ اعمال محدودیت روی همه دانلودهای active
         self._apply_queue_speed_limit(q)
 
         if resumed > 0:
@@ -1172,7 +1169,6 @@ class MainWindow(QMainWindow):
             q.schedule_end = d["schedule_end"]
             q.days = d["days"]
 
-            # ⭐ ذخیره speed_limit
             q.speed_limit = d.get("speed_limit", 0)
             print(f"📊 speed_limit saved: {q.speed_limit}")
 
@@ -1235,6 +1231,8 @@ class MainWindow(QMainWindow):
                 if not direct_queue:
                     direct_queue = Queue("__direct__", paused=False, max_concurrent=99)
                     self.store.queues.insert(0, direct_queue)
+                else:
+                    direct_queue.paused = False
 
                 options = {
                     "dir": d["path"],
@@ -1499,7 +1497,6 @@ class MainWindow(QMainWindow):
                         "category": "📁 Other",
                     }
 
-                    # ⭐ اعمال محدودیت سرعت صف قبل از هر کاری
                     if q and getattr(q, "speed_limit", 0) > 0:
                         time.sleep(0.3)
                         self.aria2.set_download_speed_limit(gid, q.speed_limit)
@@ -2875,6 +2872,8 @@ class MainWindow(QMainWindow):
                     target_queue.max_concurrent = 99
                 self.store.queues.append(target_queue)
                 self.store.save()
+            elif queue_name == "__direct__":
+                target_queue.paused = False
 
             if not hasattr(target_queue, "downloads_info"):
                 target_queue.downloads_info = {}
@@ -2950,7 +2949,6 @@ class MainWindow(QMainWindow):
                         d.get("start_immediately", True) and not target_queue.paused
                     )
 
-                    # ⭐ اعمال محدودیت قبل از شروع
                     if target_queue and getattr(target_queue, "speed_limit", 0) > 0:
                         time.sleep(0.3)
                         self.aria2.set_download_speed_limit(
