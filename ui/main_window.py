@@ -1209,14 +1209,12 @@ class MainWindow(QMainWindow):
         if not urls:
             return
 
-        self.show()
-        self.raise_()
-        self.activateWindow()
-
         if len(urls) == 1:
             all_queues = self.store.queues
             dlg = QuickDownloadDialog(all_queues, self)
             dlg.url_edit.setPlainText(urls[0])
+
+            dlg.setWindowModality(Qt.WindowModality.WindowModal)
 
             if dlg.exec():
                 d = dlg.get_data()
