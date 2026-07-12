@@ -587,6 +587,15 @@ class MainWindow(QMainWindow):
                 )
                 QApplication.processEvents()
 
+                # ===== SKIP برای دانلودهای یوتیوب =====
+                if gid in self._all_downloads:
+                    download_type = self._all_downloads[gid].get(
+                        "download_type", "normal"
+                    )
+                    if download_type == "youtube":
+                        print(f"⏭️ Skipping YouTube download restore: {gid}")
+                        continue
+
                 try:
                     status = self.aria2.get_status(gid)
                 except:
@@ -698,57 +707,44 @@ class MainWindow(QMainWindow):
             self.pause_queue_btn.setEnabled(False)
             return
 
-        has_active = False
-        has_paused_or_waiting = False
+        has_downloading = False  # active, waiting, downloading
+        has_pending = False  # pending (گرفتن حجم)
+        has_paused = False  # paused
 
         for gid in q.downloads:
             if gid in self._all_downloads:
                 status = self._all_downloads[gid].get("status", "")
-                if status in ["active", "waiting"]:
-                    has_active = True
+                if status in ["active", "waiting", "downloading"]:
+                    has_downloading = True
+                elif status == "pending":
+                    has_pending = True
+                elif status == "paused":
+                    has_paused = True
+
+        all_done = True
+        for gid in q.downloads:
+            if gid in self._all_downloads:
+                status = self._all_downloads[gid].get("status", "")
+                if status not in ["complete", "completed", "error", "removed"]:
+                    all_done = False
                     break
-                elif status in ["paused"]:
-                    has_paused_or_waiting = True
+            else:
+                all_done = False
+                break
 
-        if not has_active and not has_paused_or_waiting:
-            all_complete = True
-            for gid in q.downloads:
-                if gid in self._all_downloads:
-                    status = self._all_downloads[gid].get("status", "")
-                    if status not in ["complete", "error", "removed"]:
-                        all_complete = False
-                        break
-                else:
-                    all_complete = False
-                    break
+        if all_done and len(q.downloads) > 0:
+            self.start_queue_btn.setEnabled(False)
+            self.pause_queue_btn.setEnabled(False)
+            return
 
-            if all_complete and len(q.downloads) > 0:
-                self.start_queue_btn.setEnabled(False)
-                self.pause_queue_btn.setEnabled(False)
-                return
+        if has_downloading:
+            self.start_queue_btn.setEnabled(False)
+            self.pause_queue_btn.setEnabled(True)
+        else:
 
-        if q.paused:
-            has_resumable = False
-            for gid in q.downloads:
-                if gid in self._all_downloads:
-                    status = self._all_downloads[gid].get("status", "")
-                    if status in ["paused", "waiting"]:
-                        has_resumable = True
-                        break
-
+            has_resumable = has_pending or has_paused
             self.start_queue_btn.setEnabled(has_resumable)
             self.pause_queue_btn.setEnabled(False)
-        else:
-            has_active_download = False
-            for gid in q.downloads:
-                if gid in self._all_downloads:
-                    status = self._all_downloads[gid].get("status", "")
-                    if status in ["active", "waiting"]:
-                        has_active_download = True
-                        break
-
-            self.start_queue_btn.setEnabled(False)
-            self.pause_queue_btn.setEnabled(has_active_download)
 
     def _refresh_queue_list(self):
         self.queue_list.blockSignals(True)
@@ -935,27 +931,44 @@ class MainWindow(QMainWindow):
 
         resumed = 0
         for gid in q.downloads:
-            real_status = self.aria2.get_status(gid)
-            if real_status == "paused":
-                if q and getattr(q, "speed_limit", 0) > 0:
-                    time.sleep(0.3)
-                    self.aria2.set_download_speed_limit(gid, q.speed_limit)
-                    print(
-                        f"⚡ Queue speed limit {q.speed_limit}KB/s applied to {gid} (before resume)"
-                    )
+            # ===== تشخیص نوع دانلود =====
+            download_type = "normal"
+            if gid in self._all_downloads:
+                download_type = self._all_downloads[gid].get("download_type", "normal")
 
-                result = self.aria2.resume(gid)
-                if result is not None:
-                    resumed += 1
+            if download_type == "youtube":
+                # ===== شروع دانلود یوتیوب =====
+                real_status = self._all_downloads[gid].get("status", "")
+                if real_status in ["paused"]:  # ===== فقط paused =====
+                    self._start_youtube_download(gid)
                     if gid in self._all_downloads:
-                        self._all_downloads[gid]["status"] = "active"
+                        self._all_downloads[gid]["status"] = "downloading"
                     if gid in q.downloads_info:
-                        q.downloads_info[gid]["status"] = "active"
-            elif real_status in ["active", "waiting"]:
-                if gid in self._all_downloads:
-                    self._all_downloads[gid]["status"] = real_status
-                if gid in q.downloads_info:
-                    q.downloads_info[gid]["status"] = real_status
+                        q.downloads_info[gid]["status"] = "downloading"
+                    resumed += 1
+            else:
+                # ===== دانلود معمولی با aria2 =====
+                real_status = self.aria2.get_status(gid)
+                if real_status == "paused":
+                    if q and getattr(q, "speed_limit", 0) > 0:
+                        time.sleep(0.3)
+                        self.aria2.set_download_speed_limit(gid, q.speed_limit)
+                        print(
+                            f"⚡ Queue speed limit {q.speed_limit}KB/s applied to {gid}"
+                        )
+
+                    result = self.aria2.resume(gid)
+                    if result is not None:
+                        resumed += 1
+                        if gid in self._all_downloads:
+                            self._all_downloads[gid]["status"] = "active"
+                        if gid in q.downloads_info:
+                            q.downloads_info[gid]["status"] = "active"
+                elif real_status in ["active", "waiting"]:
+                    if gid in self._all_downloads:
+                        self._all_downloads[gid]["status"] = real_status
+                    if gid in q.downloads_info:
+                        q.downloads_info[gid]["status"] = real_status
 
         self.store.save()
         self._refresh_table()
@@ -972,16 +985,8 @@ class MainWindow(QMainWindow):
                 QSystemTrayIcon.MessageIcon.Information,
                 2000,
             )
-        elif is_scheduled:
-            days_text = ", ".join(
-                ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"][i] for i in q.days
-            )
-            self.tray.showMessage(
-                "FelfelDM",
-                f"⏰ Queue started. Waiting for schedule: {q.schedule_start.strftime('%H:%M')}-{q.schedule_end.strftime('%H:%M')} {days_text}",
-                QSystemTrayIcon.MessageIcon.Information,
-                4000,
-            )
+
+    # ui/main_window.py - جایگزین _pause_current_queue
 
     def _pause_current_queue(self):
         q = self._current_queue()
@@ -996,24 +1001,38 @@ class MainWindow(QMainWindow):
 
         paused = 0
         for gid in q.downloads:
-            real_status = self.aria2.get_status(gid)
-
-            if real_status in ["active", "waiting"]:
-                self.aria2.pause(gid)
-                paused += 1
-
+            # ===== تشخیص نوع دانلود =====
+            download_type = "normal"
             if gid in self._all_downloads:
-                self._all_downloads[gid]["status"] = "paused"
-                self._all_downloads[gid]["downloadSpeed"] = 0
+                download_type = self._all_downloads[gid].get("download_type", "normal")
 
-            if gid in q.downloads_info:
-                q.downloads_info[gid]["status"] = "paused"
+            if download_type == "youtube":
+                # ===== توقف دانلود یوتیوب =====
+                if gid in self._all_downloads:
+                    status = self._all_downloads[gid].get("status", "")
+                    if status in ["downloading", "pending"]:
+                        self._pause_youtube_download(gid)
+                        paused += 1
+                        self._all_downloads[gid]["status"] = "paused"
+            else:
+                # ===== توقف دانلود معمولی با aria2 =====
+                real_status = self.aria2.get_status(gid)
+                if real_status in ["active", "waiting"]:
+                    self.aria2.pause(gid)
+                    paused += 1
+
+                if gid in self._all_downloads:
+                    self._all_downloads[gid]["status"] = "paused"
+                    self._all_downloads[gid]["downloadSpeed"] = 0
+
+                if gid in q.downloads_info:
+                    q.downloads_info[gid]["status"] = "paused"
 
         self.store.save()
         self._refresh_table()
         self._refresh_queue_list()
         self._update_queue_status()
-        self._update_queue_buttons()
+        self._update_queue_buttons()  # ===== مهم =====
         self._update_shutdown_button_state()
 
         if paused > 0:
@@ -1836,30 +1855,107 @@ class MainWindow(QMainWindow):
                 del self._all_downloads[gid]
 
             if delete_files:
-                for path in file_paths:
+                file_paths = []
+                save_path = None
+                base_name = None
+
+                print(f"🔍 [REMOVE START] GID: {gid}")
+
+                # 1. جستجو در downloads_info
+                print("🔎 Searching in downloads_info...")
+                for q in self.store.queues:
+                    if gid in q.downloads_info:
+                        info = q.downloads_info[gid]
+                        save_path = q.save_path
+                        name = info.get("name", "").strip()
+                        print(
+                            f"✅ Found in downloads_info → save_path: {save_path} | name: {name}"
+                        )
+                        if name:
+                            base_name = os.path.splitext(name)[0]
+                        break
+
+                # 2. جستجو در _all_downloads
+                if not save_path and gid in self._all_downloads:
+                    print("🔎 Searching in _all_downloads...")
+                    for q in self.store.queues:
+                        if gid in q.downloads:
+                            save_path = q.save_path
+                            print(f"✅ Found save_path from queue: {save_path}")
+                            break
+
+                # 3. fallback به Downloads
+                if not save_path or not os.path.exists(save_path):
+                    save_path = os.path.expanduser("~/Downloads")
+                    print(f"📁 Using default Downloads folder: {save_path}")
+
+                # 4. جستجوی فایل‌ها
+                if save_path and os.path.exists(save_path):
+                    print(f"🔎 Listing files in: {save_path}")
+                    try:
+                        files_list = os.listdir(save_path)
+                        print(f"📋 Total files in folder: {len(files_list)}")
+                        for file in files_list:
+                            full_path = os.path.join(save_path, file)
+                            lower = file.lower()
+
+                            if base_name and base_name.lower() in lower:
+                                file_paths.append(full_path)
+                                print(f"✅ MATCH base_name: {file}")
+                            elif gid in file:
+                                file_paths.append(full_path)
+                                print(f"✅ MATCH GID: {file}")
+                            elif any(
+                                x in lower
+                                for x in [
+                                    ".part",
+                                    ".f",
+                                    ".webm",
+                                    ".mp4",
+                                    ".mkv",
+                                    ".m4a",
+                                    ".opus",
+                                ]
+                            ):
+                                file_paths.append(full_path)
+                                print(f"✅ MATCH yt-dlp pattern: {file}")
+                    except Exception as e:
+                        print(f"⚠ Dir list error: {e}")
+                else:
+                    print(f"⚠ Save path not found or not accessible: {save_path}")
+
+                print(f"📊 Total candidate files: {len(set(file_paths))}")
+
+                # 5. حذف فایل‌ها
+                for path in set(file_paths):
                     try:
                         if os.path.exists(path):
                             if os.path.isfile(path):
                                 os.remove(path)
-                                print(f"🗑 Deleted file: {path}")
+                                print(f"🗑 DELETED SUCCESS: {os.path.basename(path)}")
                             elif os.path.isdir(path):
                                 import shutil
 
                                 shutil.rmtree(path)
-                                print(f"🗑 Deleted folder: {path}")
-                        else:
-                            print(f"⚠ File not found: {path}")
+                                print(f"🗑 DELETED folder: {path}")
                     except Exception as e:
-                        print(f"⚠ Could not delete {path}: {e}")
+                        print(f"⚠ Delete failed {path}: {e}")
 
-                for path in file_paths:
-                    aria2_path = path + ".aria2"
+                # 6. حذف فایل‌های موقتی
+                if save_path and os.path.exists(save_path):
+                    print("🧹 Cleaning temp files...")
                     try:
-                        if os.path.exists(aria2_path):
-                            os.remove(aria2_path)
-                            print(f"🗑 Deleted aria2 file: {aria2_path}")
+                        for file in os.listdir(save_path):
+                            if any(
+                                x in file
+                                for x in [".part", ".aria2", ".ytdl", ".temp", ".f"]
+                            ):
+                                full = os.path.join(save_path, file)
+                                if os.path.exists(full):
+                                    os.remove(full)
+                                    print(f"🗑 DELETED temp: {file}")
                     except Exception as e:
-                        print(f"⚠ Could not delete {aria2_path}: {e}")
+                        print(f"⚠ Temp cleanup error: {e}")
 
             removed += 1
 
@@ -1915,32 +2011,42 @@ class MainWindow(QMainWindow):
         dl_data = self._all_downloads.get(gid, {})
         download_name = dl_data.get("name", "Unknown")
         download_type = dl_data.get("download_type", "normal")
-        
+
         # Get real status from aria2 or youtube
-        if download_type == 'youtube':
+        if download_type == "youtube":
             # برای دانلود یوتیوب، وضعیت رو از worker بگیر
-            real_status = dl_data.get('status', '')
+            real_status = dl_data.get("status", "")
         else:
             real_status = self.aria2.get_status(gid)
             if not real_status:
                 real_status = dl_data.get("status", "")
-        
+
         menu = QMenu(self)
-        
+
         # Single Pause/Resume option based on real status
         if real_status in ["active", "waiting", "downloading"]:
             menu.addAction(
-                get_icon("media-playback-pause"), "Pause", 
-                lambda: self._pause_youtube_download(gid) if download_type == 'youtube' else self._pause_selected()
+                get_icon("media-playback-pause"),
+                "Pause",
+                lambda: (
+                    self._pause_youtube_download(gid)
+                    if download_type == "youtube"
+                    else self._pause_selected()
+                ),
             )
         elif real_status in ["paused"]:
             menu.addAction(
-                get_icon("media-playback-start"), "Resume", 
-                lambda: self._resume_youtube_download(gid) if download_type == 'youtube' else self._resume_selected()
+                get_icon("media-playback-start"),
+                "Resume",
+                lambda: (
+                    self._resume_youtube_download(gid)
+                    if download_type == "youtube"
+                    else self._resume_selected()
+                ),
             )
-        
+
         menu.addSeparator()
-        
+
         # ===== Open Folder =====
         def _open_folder():
             files = dl_data.get("files", [])
@@ -1953,62 +2059,34 @@ class MainWindow(QMainWindow):
                     # اگر فایل وجود نداشت، مسیر ذخیره رو باز کن
                     saved_data = self.store.get_youtube_download(gid)
                     if saved_data:
-                        folder = saved_data.get('save_path', '')
+                        folder = saved_data.get("save_path", "")
                         if os.path.exists(folder):
                             QDesktopServices.openUrl(QUrl.fromLocalFile(folder))
-        
+
         menu.addAction(get_icon("folder"), "Open Folder", _open_folder)
-        
+
         # ===== Copy URL =====
         def _copy_link():
             saved_data = self.store.get_youtube_download(gid)
             if saved_data:
-                QApplication.clipboard().setText(saved_data.get('url', ''))
+                QApplication.clipboard().setText(saved_data.get("url", ""))
             else:
                 files = dl_data.get("files", [])
                 if files and files[0].get("uris"):
                     QApplication.clipboard().setText(files[0]["uris"][0]["uri"])
-        
+
         menu.addAction(get_icon("edit-copy"), "Copy URL", _copy_link)
-        
+
         menu.addSeparator()
-        
+
         # ===== Remove =====
-        menu.addAction(get_icon("edit-delete"), "Remove", 
-                       lambda: self._remove_youtube_download(gid) if download_type == 'youtube' else self._remove_selected())
-        
-        menu.exec(self.table.viewport().mapToGlobal(pos))
-    
-    def _remove_youtube_download(self, download_id: str):
-        """حذف دانلود یوتیوب"""
-        # لغو دانلود اگر در حال اجراست
-        self._cancel_youtube_download(download_id)
-        
-        # حذف از دیتاستور
-        self.store.delete_youtube_download(download_id)
-        
-        # حذف از صف
-        for q in self.store.queues:
-            if download_id in q.downloads:
-                q.downloads.remove(download_id)
-            if download_id in q.downloads_info:
-                del q.downloads_info[download_id]
-        
-        # حذف از _all_downloads
-        if download_id in self._all_downloads:
-            del self._all_downloads[download_id]
-        
-        self.store.save()
-        self._refresh_table()
-        self._refresh_queue_list()
-        self._update_queue_buttons()
-        
-        self.tray.showMessage(
-            "FelfelDM",
-            "🗑 YouTube download removed",
-            QSystemTrayIcon.MessageIcon.Information,
-            2000
+        menu.addAction(
+            get_icon("edit-delete"),
+            "Remove",
+            lambda: (self._remove_selected()),
         )
+
+        menu.exec(self.table.viewport().mapToGlobal(pos))
 
     def _filter_downloads(self, text):
         q = self._current_queue()
@@ -2123,20 +2201,32 @@ class MainWindow(QMainWindow):
             self.btn_toggle.setIcon(get_icon("media-playback-pause"))
             return
 
-        # Get real status from aria2
-        real_status = self.aria2.get_status(gid)
+        # ===== تشخیص نوع دانلود =====
+        download_type = "normal"
+        if gid in self._all_downloads:
+            download_type = self._all_downloads[gid].get("download_type", "normal")
 
-        # If aria2 fails, fallback to _all_downloads
-        if not real_status:
+        # ===== دریافت وضعیت بر اساس نوع =====
+        if download_type == "youtube":
+            # ===== برای یوتیوب از _all_downloads بگیر =====
             if gid in self._all_downloads:
-                real_status = self._all_downloads[gid].get("status")
+                real_status = self._all_downloads[gid].get("status", "")
             else:
-                self.btn_toggle.setEnabled(False)
-                self.btn_toggle.setText("Pause")
-                self.btn_toggle.setIcon(get_icon("media-playback-pause"))
-                return
+                real_status = ""
+        else:
+            # ===== برای aria2 از aria2 بگیر =====
+            real_status = self.aria2.get_status(gid)
+            if not real_status and gid in self._all_downloads:
+                real_status = self._all_downloads[gid].get("status", "")
 
-        if real_status in ["active", "waiting"]:
+        if not real_status:
+            self.btn_toggle.setEnabled(False)
+            self.btn_toggle.setText("Pause")
+            self.btn_toggle.setIcon(get_icon("media-playback-pause"))
+            return
+
+        # ===== تنظیم دکمه بر اساس وضعیت =====
+        if real_status in ["active", "waiting", "downloading"]:
             self.btn_toggle.setEnabled(True)
             self.btn_toggle.setText("Pause")
             self.btn_toggle.setIcon(get_icon("media-playback-pause"))
@@ -2144,7 +2234,7 @@ class MainWindow(QMainWindow):
             self.btn_toggle.setEnabled(True)
             self.btn_toggle.setText("Resume")
             self.btn_toggle.setIcon(get_icon("media-playback-start"))
-        else:  # complete, error, removed
+        else:  # complete, completed, error, removed
             self.btn_toggle.setEnabled(False)
             self.btn_toggle.setText("Pause")
             self.btn_toggle.setIcon(get_icon("media-playback-pause"))
@@ -2219,12 +2309,23 @@ class MainWindow(QMainWindow):
             self._refresh_table()
 
     def _start_backend(self):
+        """شروع BackendWorker برای مدیریت دانلودها"""
         print("🚀🚀🚀 _start_backend CALLED")
         self.worker = BackendWorker(self.aria2, self.store)
         print("🚀🚀🚀 worker created")
+
+        # ===== اتصال سیگنال‌های اصلی =====
         self.worker.stats_updated.connect(self._on_stats_received)
         self.worker.aria2_error.connect(self._on_aria2_error)
         self.worker.size_fetched.connect(self._on_size_fetched)
+
+        # ===== اتصال سیگنال‌های دانلود یوتیوب =====
+        self.worker.youtube_progress.connect(self._on_youtube_progress)
+        self.worker.youtube_status.connect(self._on_youtube_status)
+        self.worker.youtube_speed.connect(self._on_youtube_speed)
+        self.worker.youtube_finished.connect(self._on_youtube_finished)
+        self.worker.youtube_size_fetched.connect(self._on_youtube_size_fetched)  # جدید
+
         print("🚀🚀🚀 signals connected")
         self.worker.start()
         print("🚀🚀🚀 worker.start() called")
@@ -2536,41 +2637,91 @@ class MainWindow(QMainWindow):
         except Exception:
             self._youtube_dialog = None
 
-        youtube_downloads = result.get('youtube_downloads', [])
+        # ===== پردازش دانلودهای یوتیوب =====
+        youtube_downloads = result.get("youtube_downloads", [])
         for yt_data in youtube_downloads:
-            yt_id = yt_data.get('id')
-            if yt_id:
-                # به‌روزرسانی _all_downloads با اطلاعات یوتیوب
-                if yt_id in self._all_downloads:
-                    self._all_downloads[yt_id].update({
-                        'status': yt_data.get('status', 'pending'),
-                        'progress': yt_data.get('progress', 0),
-                        'downloadSpeed': self._parse_speed(yt_data.get('speed', '')),
-                        'totalLength': yt_data.get('total_size', 0),
-                        'completedLength': int(yt_data.get('total_size', 0) * yt_data.get('progress', 0) / 100)
-                    })
-                else:
-                    # اگر در _all_downloads نبود، از دیتاستور بخون
-                    saved_data = self.store.get_youtube_download(yt_id)
-                    if saved_data:
-                        self._all_downloads[yt_id] = {
-                            'gid': yt_id,
-                            'name': saved_data.get('yt_options', {}).get('title', 'Unknown'),
-                            'status': yt_data.get('status', 'pending'),
-                            'totalLength': 0,
-                            'completedLength': 0,
-                            'downloadSpeed': 0,
-                            'connections': 0,
-                            'files': [{'path': saved_data.get('full_path', '')}],
-                            'errorMessage': '',
-                            'category': '🎬 YouTube',
-                            'download_type': 'youtube'
-                        }
+            yt_id = yt_data.get("id")
+            if not yt_id:
+                continue
+
+            # دریافت اطلاعات از دیتاستور
+            saved_data = self.store.get_youtube_download(yt_id)
+
+            # استخراج داده‌ها
+            status = yt_data.get("status", "pending")
+            progress = yt_data.get("progress", 0)
+            speed = yt_data.get("speed", "")
+            eta = yt_data.get("eta", "")
+            total_size = yt_data.get("total_size", 0)
+            title = yt_data.get("title", "Unknown")
+
+            # اگر از دیتاستور عنوان داریم، از اون استفاده کن
+            if saved_data:
+                title = saved_data.get("yt_options", {}).get("title", title)
+
+            # محاسبه completedLength بر اساس progress
+            completed = int(total_size * progress / 100) if total_size > 0 else 0
+
+            # ===== به‌روزرسانی یا ایجاد در _all_downloads =====
+            if yt_id in self._all_downloads:
+                # به‌روزرسانی
+                self._all_downloads[yt_id].update(
+                    {
+                        "name": title,
+                        "status": status,
+                        "progress": progress,
+                        "speed": speed,
+                        "eta": eta,
+                        "totalLength": total_size,
+                        "completedLength": completed,
+                        "downloadSpeed": self._parse_speed(speed),
+                        "download_type": "youtube",  # ===== مهم =====
+                        "category": "🎬 YouTube",
+                        "files": (
+                            [{"path": saved_data.get("full_path", "")}]
+                            if saved_data
+                            else []
+                        ),
+                        "yt_options": (
+                            saved_data.get("yt_options", {}) if saved_data else {}
+                        ),
+                    }
+                )
+            else:
+                # ایجاد جدید
+                self._all_downloads[yt_id] = {
+                    "gid": yt_id,
+                    "name": title,
+                    "status": status,
+                    "progress": progress,
+                    "speed": speed,
+                    "eta": eta,
+                    "totalLength": total_size,
+                    "completedLength": completed,
+                    "downloadSpeed": self._parse_speed(speed),
+                    "connections": 0,
+                    "files": (
+                        [{"path": saved_data.get("full_path", "")}]
+                        if saved_data
+                        else []
+                    ),
+                    "errorMessage": "",
+                    "category": "🎬 YouTube",
+                    "download_type": "youtube",  # ===== مهم =====
+                    "yt_options": (
+                        saved_data.get("yt_options", {}) if saved_data else {}
+                    ),
+                }
+
+            # به‌روزرسانی در دیتاستور اگر نیاز باشه
+            if saved_data and saved_data.get("status") != status:
+                self.store.update_youtube_status(yt_id, status)
 
         # ===== Refresh UI =====
         self._refresh_table()
         self._update_queue_status()
         self._refresh_queue_list()
+        self._update_queue_buttons()
         self._update_shutdown_button_state()
         self._update_toggle_button()
 
@@ -3040,8 +3191,21 @@ class MainWindow(QMainWindow):
                 )
 
     def _on_table_double_click(self, index):
+        """دابل کلیک روی جدول"""
         gid = self.model.get_gid(index.row())
-        if gid:
+        if not gid:
+            return
+
+        # ===== تشخیص نوع دانلود =====
+        download_type = "normal"
+        if gid in self._all_downloads:
+            download_type = self._all_downloads[gid].get("download_type", "normal")
+
+        if download_type == "youtube":
+            # ===== باز کردن دیالوگ مخصوص یوتیوب =====
+            self._open_youtube_progress_dialog(gid)
+        else:
+            # ===== باز کردن دیالوگ معمولی aria2 =====
             self._open_progress_dialog(gid)
 
     def _close_splash(self):
@@ -3049,10 +3213,10 @@ class MainWindow(QMainWindow):
             self.splash.close()
             self.splash = None
 
-    def _youtube_download(self):        
+    def _youtube_download(self):
         # گرفتن لیست صف‌ها (به جز direct)
         queues = [q for q in self.store.queues if q.name != "__direct__"]
-        
+
         # پیدا کردن صف فعلی
         current_q = self._current_queue()
         default_idx = 0
@@ -3061,184 +3225,326 @@ class MainWindow(QMainWindow):
                 if q.name == current_q.name:
                     default_idx = i
                     break
-        
+
         dlg = YouTubeDownloadDialog(
-            parent=self,
-            queues=queues,
-            default_queue=default_idx
+            parent=self, queues=queues, default_queue=default_idx
         )
-        
+
         # اتصال سیگنال برای اضافه کردن دانلود به صف
         dlg.youtube_download_requested.connect(self._add_youtube_to_queue)
-        
+
         # چسبوندن URL از کلیپ‌بورد
         clip = QApplication.clipboard().text().strip()
         if clip and ("youtube.com" in clip or "youtu.be" in clip):
             dlg.url_edit.setText(clip)
-        
+
         dlg.exec()
-    
+
     def _add_youtube_to_queue(self, download_data: dict):
+        print("🎯🎯🎯 _add_youtube_to_queue CALLED")
+        print(f"🎯🎯🎯 download_data: {download_data}")
+
         # پیدا کردن صف مورد نظر
-        queue_name = download_data.get('queue_id', 'Default')
+        queue_name = download_data.get("queue_id", "Default")
         target_queue = None
-        
+
         for q in self.store.queues:
             if q.name == queue_name:
                 target_queue = q
                 break
-        
+
         if not target_queue:
-            # اگر صف وجود نداشت، ایجاد کن
             target_queue = Queue(queue_name, paused=True)
             self.store.queues.append(target_queue)
             self.store.save()
-        
-        # ایجاد شناسه یکتا برای دانلود
+
         import uuid
+
         download_id = str(uuid.uuid4())
-        
-        # ذخیره اطلاعات دانلود در دیتاستور
-        yt_options = download_data.get('yt_options', {})
-        
-        # استخراج عنوان از video_info
-        video_info = download_data.get('video_info', {})
-        title = video_info.get('title', 'Unknown Video')
-        
-        # ساخت نام فایل
-        format_type = yt_options.get('format', 'video')
-        ext = 'mp4' if format_type == 'video' else 'mp3'
+
+        yt_options = download_data.get("yt_options", {})
+        video_info = download_data.get("video_info", {})
+        title = video_info.get("title", "Unknown Video")
+
+        format_type = yt_options.get("format", "video")
+        ext = "mp4" if format_type == "video" else "mp3"
         filename = f"{title}.{ext}"
-        
-        # حذف کاراکترهای غیرمجاز از نام فایل
+
         import re
-        filename = re.sub(r'[<>:"/\\|?*]', '_', filename)
-        
-        # مسیر کامل فایل
-        full_path = os.path.join(download_data['save_path'], filename)
-        
-        # ذخیره در دیتاستور (برای بازیابی بعد از restart)
+
+        filename = re.sub(r'[<>:"/\\|?*]', "_", filename)
+        full_path = os.path.join(download_data["save_path"], filename)
+
         youtube_data = {
-            'id': download_id,
-            'url': download_data['url'],
-            'save_path': download_data['save_path'],
-            'queue_id': queue_name,
-            'download_type': 'youtube',
-            'status': 'pending',
-            'progress': 0,
-            'speed': '',
-            'eta': '',
-            'yt_options': {
-                'title': title,
-                'quality': yt_options.get('quality', 'best'),
-                'format': format_type,
-                'cookies_path': yt_options.get('cookies_path'),
-                'format_id': yt_options.get('format_id'),
-                'format_info': yt_options.get('format_info', {})
+            "id": download_id,
+            "url": download_data["url"],
+            "save_path": download_data["save_path"],
+            "queue_id": queue_name,
+            "download_type": "youtube",
+            "status": "paused",
+            "progress": 0,
+            "speed": "",
+            "eta": "",
+            "yt_options": {
+                "title": title,
+                "quality": yt_options.get("quality", "best"),
+                "format": format_type,
+                "cookies_path": yt_options.get("cookies_path"),
+                "format_id": yt_options.get("format_id"),
+                "format_info": yt_options.get("format_info", {}),
             },
-            'proxy': download_data.get('proxy'),
-            'video_info': video_info,
-            'created_at': datetime.now().isoformat(),
-            'completed_at': None,
-            'error_message': '',
-            'filename': filename,
-            'full_path': full_path
+            "proxy": download_data.get("proxy"),
+            "video_info": video_info,
+            "created_at": datetime.now().isoformat(),
+            "completed_at": None,
+            "error_message": "",
+            "filename": filename,
+            "full_path": full_path,
         }
-        
-        # ذخیره در دیتاستور
+
         self.store.add_youtube_download(youtube_data)
-        
-        # همچنین به صف aria2 اضافه نمی‌کنیم (چون با yt-dlp دانلود میشه)
-        # فقط اطلاعات رو به _all_downloads اضافه می‌کنیم برای نمایش در جدول
-        
+
         self._all_downloads[download_id] = {
-            'gid': download_id,
-            'name': title,
-            'status': 'pending',
-            'totalLength': 0,
-            'completedLength': 0,
-            'downloadSpeed': 0,
-            'connections': 0,
-            'files': [{'path': full_path}],
-            'errorMessage': '',
-            'category': '🎬 YouTube',
-            'download_type': 'youtube',
-            'yt_options': youtube_data['yt_options']
+            "gid": download_id,
+            "name": title,
+            "status": "paused",
+            "totalLength": 0,
+            "completedLength": 0,
+            "downloadSpeed": 0,
+            "connections": 0,
+            "files": [{"path": full_path}],
+            "errorMessage": "",
+            "category": "🎬 YouTube",
+            "download_type": "youtube",
+            "real_path": full_path,
+            "yt_options": youtube_data["yt_options"],
         }
-        
-        # اضافه به صف (برای نمایش در جدول)
+
         if download_id not in target_queue.downloads:
             target_queue.downloads.append(download_id)
-        
-        # ذخیره اطلاعات در queue
+
         target_queue.downloads_info[download_id] = {
-            'url': download_data['url'],
-            'name': title,
-            'totalLength': 0,
-            'completedLength': 0,
-            'status': 'pending',
-            'category': '🎬 YouTube',
-            'download_type': 'youtube'
+            "url": download_data["url"],
+            "name": title,
+            "totalLength": 0,
+            "completedLength": 0,
+            "status": "paused",
+            "category": "🎬 YouTube",
+            "download_type": "youtube",
+            "files": [{"path": full_path}],
+            "real_path": full_path,
         }
-        
+
         self.store.save()
-        
-        # شروع دانلود اگر صف فعال باشه
-        if not target_queue.paused and target_queue.is_scheduled_now():
-            self._start_youtube_download(download_id)
-        
-        # به‌روزرسانی UI
+
+        # ===== اینجا مستقیم worker رو صدا بزن =====
+        print(f"🎯🎯🎯 Calling worker.add_youtube_download for {download_id}")
+        if self.worker:
+            self.worker.add_youtube_download(
+                {
+                    "id": download_id,
+                    "url": download_data["url"],
+                    "save_path": download_data["save_path"],
+                    "yt_options": youtube_data["yt_options"],
+                    "proxy": download_data.get("proxy"),
+                    "queue_id": queue_name,
+                }
+            )
+        else:
+            print("❌❌❌ worker is None!")
+
         self._refresh_queue_list()
         self._refresh_table()
         self._update_queue_buttons()
         self._update_shutdown_button_state()
-        
-        # نمایش پیام
+
         self.tray.showMessage(
             "FelfelDM",
             f"✅ Added YouTube download to '{queue_name}': {title[:50]}...",
             QSystemTrayIcon.MessageIcon.Information,
-            3000
+            3000,
         )
-    
+
     def _start_youtube_download(self, download_id: str):
-        if not hasattr(self, 'worker') or not self.worker:
+        """شروع دانلود یوتیوب (دستی توسط کاربر)"""
+        if not hasattr(self, "worker") or not self.worker:
+            print("❌ Worker not available")
             return
-        
+
         # دریافت اطلاعات از دیتاستور
         data = self.store.get_youtube_download(download_id)
         if not data:
+            print(f"❌ Download {download_id} not found")
             return
-        
-        # ارسال به worker برای شروع
-        self.worker.add_youtube_download({
-            'id': download_id,
-            'url': data['url'],
-            'save_path': data['save_path'],
-            'yt_options': data.get('yt_options', {}),
-            'proxy': data.get('proxy')
-        })
-    
+
+        # ===== چک کن که حجم گرفته شده یا نه =====
+        total_size = data.get("total_size", 0)
+        print(f"📏 [START] total_size for {download_id}: {total_size}")
+
+        print(f"▶️ Starting YouTube download: {download_id}")
+
+        # ===== ارسال به worker برای شروع =====
+        # worker خودش چک میکنه که اگه حجم گرفته شده، دوباره نگیره
+        self.worker.add_youtube_download(
+            {
+                "id": download_id,
+                "url": data["url"],
+                "save_path": data["save_path"],
+                "yt_options": data.get("yt_options", {}),
+                "proxy": data.get("proxy"),
+                "queue_id": data.get("queue_id"),
+            }
+        )
+
     def _pause_youtube_download(self, download_id: str):
-        """توقف موقت دانلود یوتیوب"""
-        if not hasattr(self, 'worker'):
+        """توقف موقت دانلود یوتیوب (از دیالوگ یا منو)"""
+        if not hasattr(self, "worker"):
             return
+
+        print(f"⏸️ [UI] Pausing YouTube: {download_id}")
         self.worker.pause_youtube_download(download_id)
-    
+
+        if download_id in self._all_downloads:
+            self._all_downloads[download_id]["status"] = "paused"
+
+        q = self._current_queue()
+        if q and q.name != "__direct__":
+            has_active = False
+            for gid in q.downloads:
+                if gid in self._all_downloads:
+                    status = self._all_downloads[gid].get("status", "")
+                    if status in ["active", "waiting", "downloading"]:
+                        has_active = True
+                        break
+
+            if not has_active:
+                q.paused = True
+                self.store.save()
+                print(f"⏸️ [UI] Queue '{q.name}' auto-paused (no active downloads)")
+
+        self._update_queue_buttons()
+        self._refresh_table()
+
     def _resume_youtube_download(self, download_id: str):
-        """ادامه دانلود یوتیوب"""
-        if not hasattr(self, 'worker'):
+        if not hasattr(self, "worker"):
             return
+
+        q = self._current_queue()
+        if q and q.paused and q.name != "__direct__":
+            QMessageBox.warning(
+                self,
+                "Queue is Paused",
+                f"The queue '{q.name}' is currently paused.\n\n"
+                "Please click the 'Start' button for this queue in the sidebar first.",
+                QMessageBox.StandardButton.Ok,
+            )
+            return
+
+        print(f"▶️ [UI] Resuming YouTube: {download_id}")
         self.worker.resume_youtube_download(download_id)
-    
-    def _cancel_youtube_download(self, download_id: str):
-        """لغو دانلود یوتیوب"""
-        if not hasattr(self, 'worker'):
+
+        if download_id in self._all_downloads:
+            self._all_downloads[download_id]["status"] = "downloading"
+
+        self._update_queue_buttons()
+        self._refresh_table()
+
+    def _do_resume_youtube_download(self, download_id: str):
+        """اجرای واقعی Resume دانلود یوتیوب"""
+        if not hasattr(self, "worker"):
             return
+
+        print(f"▶️ [UI] Resuming YouTube: {download_id}")
+        self.worker.resume_youtube_download(download_id)
+
+        if download_id in self._all_downloads:
+            self._all_downloads[download_id]["status"] = "downloading"
+
+        self._update_queue_buttons()
+        self._refresh_table()
+
+        print(f"▶️ [UI] Resuming YouTube: {download_id}")
+        self.worker.resume_youtube_download(download_id)
+
+        if download_id in self._all_downloads:
+            self._all_downloads[download_id]["status"] = "downloading"
+
+        self._update_queue_buttons()
+        self._refresh_table()
+
+    def _resume_youtube_download_after_queue_start(self, download_id: str):
+        """بعد از Start شدن صف، دانلود رو Resume کن"""
+        if not hasattr(self, "worker"):
+            return
+
+        q = self._current_queue()
+        if q and q.paused:
+            # اگه هنوز Pause هست، پیام بده
+            QMessageBox.warning(
+                self,
+                "صف متوقف شده",
+                f"صف '{q.name}' هنوز در حالت توقف است.\n\n"
+                "لطفاً ابتدا دکمه 'Start' را برای این صف در نوار کناری بزنید.",
+                QMessageBox.StandardButton.Ok,
+            )
+            return
+
+        print(f"▶️ [UI] Resuming YouTube after queue start: {download_id}")
+        self.worker.resume_youtube_download(download_id)
+
+        if download_id in self._all_downloads:
+            self._all_downloads[download_id]["status"] = "downloading"
+
+        self._update_queue_buttons()
+        self._refresh_table()
+
+    def _cancel_youtube_download(self, download_id: str):
+        """لغو دانلود یوتیوب (از مودال) - همیشه فایل‌ها رو پاک کن"""
+        if not hasattr(self, "worker"):
+            print("❌ Worker not available")
+            return
+
+        print(f"🗑️ Cancelling YouTube download from UI: {download_id}")
+
+        # ===== اول دیالوگ رو ببند =====
+        if hasattr(self, "_youtube_dialog") and self._youtube_dialog is not None:
+            try:
+                self._youtube_dialog.close()
+            except:
+                pass
+            self._youtube_dialog = None
+
+        # ===== کنسل کردن در worker (فایل‌ها رو پاک میکنه) =====
         self.worker.cancel_youtube_download(download_id)
-    
-    def _on_youtube_finished(self, success, message):
-        """Handle YouTube download finished"""
+
+        # ===== حذف از _all_downloads =====
+        if download_id in self._all_downloads:
+            del self._all_downloads[download_id]
+
+        # ===== حذف از صف =====
+        for q in self.store.queues:
+            if download_id in q.downloads:
+                q.downloads.remove(download_id)
+            if download_id in q.downloads_info:
+                del q.downloads_info[download_id]
+
+        # ===== حذف از دیتاستور =====
+        self.store.delete_youtube_download(download_id)
+        self.store.save()
+
+        self._refresh_table()
+        self._refresh_queue_list()
+        self._update_queue_buttons()
+
+        self.tray.showMessage(
+            "FelfelDM",
+            "🗑 YouTube download cancelled and files deleted",
+            QSystemTrayIcon.MessageIcon.Information,
+            2000,
+        )
+
+    def _on_youtube_finished(self, success: bool, message: str):
+        """Handle YouTube download finished از BackendWorker"""
         if success:
             self.tray.showMessage(
                 "FelfelDM",
@@ -3247,12 +3553,13 @@ class MainWindow(QMainWindow):
                 3000,
             )
         else:
-            self.tray.showMessage(
-                "FelfelDM",
-                f"❌ YouTube download failed: {message}",
-                QSystemTrayIcon.MessageIcon.Warning,
-                3000,
-            )
+            if "cancelled" not in message.lower():
+                self.tray.showMessage(
+                    "FelfelDM",
+                    f"❌ YouTube download failed: {message}",
+                    QSystemTrayIcon.MessageIcon.Warning,
+                    3000,
+                )
 
     def _apply_proxy_to_aria2(self):
         proxy = self.proxy_manager.get_proxy_for_queue(None)
@@ -3273,20 +3580,33 @@ class MainWindow(QMainWindow):
         if not gid:
             return
 
-        # Get real status from aria2
-        real_status = self.aria2.get_status(gid)
+        download_type = "normal"
+        if gid in self._all_downloads:
+            download_type = self._all_downloads[gid].get("download_type", "normal")
 
-        # If aria2 fails, fallback to _all_downloads
-        if not real_status:
+        if download_type == "youtube":
             if gid in self._all_downloads:
-                real_status = self._all_downloads[gid].get("status")
+                real_status = self._all_downloads[gid].get("status", "")
             else:
                 return
+        else:
+            real_status = self.aria2.get_status(gid)
+            if not real_status and gid in self._all_downloads:
+                real_status = self._all_downloads[gid].get("status", "")
 
-        if real_status in ["active", "waiting"]:
-            self._pause_selected()
+        if not real_status:
+            return
+
+        if real_status in ["active", "waiting", "downloading"]:
+            if download_type == "youtube":
+                self._pause_youtube_download(gid)
+            else:
+                self._pause_selected()
         elif real_status == "paused":
-            self._resume_selected()
+            if download_type == "youtube":
+                self._resume_youtube_download(gid)
+            else:
+                self._resume_selected()
 
     def _set_download_proxy(self, gid, download_name):
         """Set custom proxy for a specific download"""
@@ -3606,7 +3926,7 @@ class MainWindow(QMainWindow):
                             self.aria2.set_download_speed_limit(gid, global_limit)
                         else:
                             self.aria2.set_download_speed_limit(gid, 0)
-                            
+
     def _parse_speed(self, speed_str: str) -> int:
         """تبدیل سرعت به عدد (bytes/sec)"""
         if not speed_str:
@@ -3614,16 +3934,385 @@ class MainWindow(QMainWindow):
         try:
             # حذف فاصله و تبدیل
             speed_str = speed_str.strip()
-            if 'KiB/s' in speed_str:
-                return int(float(speed_str.replace('KiB/s', '').strip()) * 1024)
-            elif 'MiB/s' in speed_str:
-                return int(float(speed_str.replace('MiB/s', '').strip()) * 1024 * 1024)
-            elif 'KB/s' in speed_str:
-                return int(float(speed_str.replace('KB/s', '').strip()) * 1000)
-            elif 'MB/s' in speed_str:
-                return int(float(speed_str.replace('MB/s', '').strip()) * 1000 * 1000)
+            if "KiB/s" in speed_str:
+                return int(float(speed_str.replace("KiB/s", "").strip()) * 1024)
+            elif "MiB/s" in speed_str:
+                return int(float(speed_str.replace("MiB/s", "").strip()) * 1024 * 1024)
+            elif "KB/s" in speed_str:
+                return int(float(speed_str.replace("KB/s", "").strip()) * 1000)
+            elif "MB/s" in speed_str:
+                return int(float(speed_str.replace("MB/s", "").strip()) * 1000 * 1000)
             elif speed_str.isdigit():
                 return int(speed_str)
             return 0
         except:
             return 0
+
+    def _on_youtube_progress(self, download_id: str, progress: int):
+        if download_id in self._all_downloads:
+            old_progress = self._all_downloads[download_id].get("progress", 0)
+            if progress < old_progress:
+                print(
+                    f"⏭️ [Progress] Skipping backwards progress: {old_progress} -> {progress}"
+                )
+                return
+
+            self._all_downloads[download_id]["progress"] = progress
+            self._all_downloads[download_id]["status"] = "downloading"
+
+            self._update_youtube_dialog(download_id, progress=progress)
+
+            self._refresh_table()
+
+    def _on_youtube_status(self, download_id: str, status: str):
+        """به‌روزرسانی وضعیت دانلود یوتیوب از BackendWorker"""
+        print(f"📢 [UI] _on_youtube_status: {download_id} -> {status}")
+
+        if download_id in self._all_downloads:
+            self._all_downloads[download_id]["status"] = status
+            self._all_downloads[download_id]["status_text"] = status
+
+            # ===== به‌روزرسانی دیالوگ =====
+            if status == "paused":
+                self._update_youtube_dialog(download_id, status="⏸ Paused")
+                self._update_youtube_dialog_pause_state(download_id, is_paused=True)
+            elif status == "downloading":
+                self._update_youtube_dialog(download_id, status="⬇ Downloading...")
+                self._update_youtube_dialog_pause_state(download_id, is_paused=False)
+            elif status == "completed":
+                self._update_youtube_dialog(download_id, status="✅ Complete")
+                # ===== اینجا رو اضافه کن =====
+                self._update_youtube_dialog_finished(
+                    download_id, True, "Download completed!"
+                )
+            elif status == "error":
+                self._update_youtube_dialog(download_id, status="❌ Error")
+                self._update_youtube_dialog_finished(
+                    download_id, False, "Download failed"
+                )
+
+            self._update_queue_buttons()
+            self._refresh_table()
+
+    def _on_youtube_speed(self, download_id: str, speed: str, eta: str):
+        """به‌روزرسانی سرعت و زمان باقیمانده یوتیوب"""
+        if download_id in self._all_downloads:
+            self._all_downloads[download_id]["speed"] = speed
+            self._all_downloads[download_id]["eta"] = eta
+            self._all_downloads[download_id]["downloadSpeed"] = self._parse_speed(speed)
+            self._refresh_table()
+
+    def _on_youtube_size_fetched(self, download_id: str, size: int):
+        """دریافت حجم دانلود یوتیوب"""
+        if download_id in self._all_downloads:
+            self._all_downloads[download_id]["totalLength"] = size
+            self._all_downloads[download_id]["total_size"] = size
+            print(f"📏 YouTube size updated for {download_id}: {size} bytes")
+            self._refresh_table()
+
+    def _on_youtube_progress(self, download_id: str, progress: int):
+        """به‌روزرسانی پیشرفت دانلود یوتیوب"""
+        if download_id in self._all_downloads:
+            self._all_downloads[download_id]["progress"] = progress
+            self._all_downloads[download_id]["status"] = "downloading"
+
+            # ===== به‌روزرسانی دیالوگ =====
+            self._update_youtube_dialog(download_id, progress=progress)
+
+            self._refresh_table()
+
+    def _on_youtube_status(self, download_id: str, status: str):
+        """به‌روزرسانی وضعیت دانلود یوتیوب از BackendWorker"""
+        print(f"📢 [UI] _on_youtube_status: {download_id} -> {status}")
+
+        if download_id in self._all_downloads:
+            self._all_downloads[download_id]["status"] = status
+            self._all_downloads[download_id]["status_text"] = status
+
+            # ===== به‌روزرسانی دیالوگ =====
+            if status == "paused":
+                self._update_youtube_dialog(download_id, status="⏸ Paused")
+                self._update_youtube_dialog_pause_state(download_id, is_paused=True)
+            elif status == "downloading":
+                self._update_youtube_dialog(download_id, status="⬇ Downloading...")
+                self._update_youtube_dialog_pause_state(download_id, is_paused=False)
+            elif status in [
+                "completed",
+                "✅ Download completed!",
+            ]:  # ===== اینجا رو اصلاح کن =====
+                print(f"🔴🔴🔴 [UI] COMPLETED BRANCH REACHED for {download_id}")
+                self._update_youtube_dialog(download_id, status="✅ Complete")
+                self._update_youtube_dialog_finished(
+                    download_id, True, "Download completed successfully!"
+                )
+            elif status == "error":
+                self._update_youtube_dialog(download_id, status="❌ Error")
+                self._update_youtube_dialog_finished(
+                    download_id, False, "Download failed"
+                )
+
+            self._update_queue_buttons()
+            self._refresh_table()
+
+    def _on_youtube_speed(self, download_id: str, speed: str, eta: str):
+        """به‌روزرسانی سرعت و زمان باقیمانده یوتیوب"""
+        if download_id in self._all_downloads:
+            self._all_downloads[download_id]["speed"] = speed
+            self._all_downloads[download_id]["eta"] = eta
+            self._all_downloads[download_id]["downloadSpeed"] = self._parse_speed(speed)
+
+            # ===== به‌روزرسانی دیالوگ =====
+            progress = self._all_downloads[download_id].get("progress", 0)
+            self._update_youtube_dialog(
+                download_id, progress=progress, speed=speed, eta=eta
+            )
+
+            self._refresh_table()
+
+    def _on_youtube_size_fetched(self, download_id: str, size: int):
+        """دریافت حجم دانلود یوتیوب"""
+        if download_id in self._all_downloads:
+            self._all_downloads[download_id]["totalLength"] = size
+            self._all_downloads[download_id]["total_size"] = size
+            print(f"📏 YouTube size updated for {download_id}: {size} bytes")
+            self._refresh_table()
+
+    def _open_youtube_progress_dialog(self, download_id: str):
+        """باز کردن دیالوگ پیشرفت برای دانلود یوتیوب"""
+        try:
+            from ui.youtube_progress import YouTubeProgressDialog
+
+            if not download_id:
+                return
+
+            if hasattr(self, "_youtube_dialog") and self._youtube_dialog is not None:
+                try:
+                    self._youtube_dialog.close()
+                except:
+                    pass
+                self._youtube_dialog = None
+
+            data = self.store.get_youtube_download(download_id)
+            if not data:
+                QMessageBox.warning(self, "Error", "Download not found")
+                return
+
+            # ===== دیالوگ رو با parent=self بساز =====
+            self._youtube_dialog = YouTubeProgressDialog(
+                url=data["url"],
+                output_path=data["save_path"],
+                format_type=data.get("yt_options", {}).get("format", "mp4"),
+                cookie_file=data.get("yt_options", {}).get("cookies_path"),
+                video_info=data.get("video_info", {}),
+                parent=self,  # ===== مهم =====
+                proxy_url=data.get("proxy"),
+                download_id=download_id,
+            )
+
+            # ===== اتصال سیگنال‌ها =====
+            self._youtube_dialog.pause_requested.connect(self._pause_youtube_download)
+            self._youtube_dialog.resume_requested.connect(self._resume_youtube_download)
+            self._youtube_dialog.cancel_requested.connect(self._cancel_youtube_download)
+
+            # ===== نمایش دیالوگ =====
+            self._youtube_dialog.show()
+            self._center_dialog_on_screen(self._youtube_dialog)
+
+        except Exception as e:
+            print(f"❌ Error opening YouTube dialog: {e}")
+            import traceback
+
+            traceback.print_exc()
+            QMessageBox.warning(self, "Error", f"Failed to open dialog: {e}")
+
+    def _update_youtube_dialog(
+        self, download_id: str, progress=None, speed=None, eta=None, status=None
+    ):
+        """به‌روزرسانی دیالوگ یوتیوب اگر باز باشه"""
+        if not hasattr(self, "_youtube_dialog") or self._youtube_dialog is None:
+            return
+
+        try:
+            if not self._youtube_dialog.isVisible():
+                return
+
+            if (
+                hasattr(self._youtube_dialog, "download_id")
+                and self._youtube_dialog.download_id != download_id
+            ):
+                return
+
+            if progress is not None:
+                current_speed = speed or getattr(
+                    self._youtube_dialog, "_speed_text", ""
+                )
+                current_eta = eta or getattr(self._youtube_dialog, "_eta_text", "")
+                if hasattr(self._youtube_dialog, "update_progress"):
+                    self._youtube_dialog.update_progress(
+                        progress, current_speed, current_eta
+                    )
+
+            if status is not None:
+                if hasattr(self._youtube_dialog, "update_status"):
+                    self._youtube_dialog.update_status(status)
+
+        except Exception as e:
+            print(f"⚠️ Error updating YouTube dialog: {e}")
+
+    def _update_youtube_dialog_pause_state(self, download_id: str, is_paused: bool):
+        """به‌روزرسانی وضعیت Pause/Resume در دیالوگ"""
+        if not hasattr(self, "_youtube_dialog") or self._youtube_dialog is None:
+            return
+
+        try:
+            if not self._youtube_dialog.isVisible():
+                return
+
+            if (
+                hasattr(self._youtube_dialog, "download_id")
+                and self._youtube_dialog.download_id != download_id
+            ):
+                return
+
+            if hasattr(self._youtube_dialog, "update_pause_state"):
+                self._youtube_dialog.update_pause_state(is_paused)
+
+        except Exception as e:
+            print(f"⚠️ Error updating YouTube dialog pause state: {e}")
+
+    def _update_youtube_dialog_finished(
+        self, download_id: str, success: bool, message: str
+    ):
+        """به‌روزرسانی پایان دانلود در دیالوگ"""
+        if not hasattr(self, "_youtube_dialog") or self._youtube_dialog is None:
+            return
+
+        try:
+            if not self._youtube_dialog.isVisible():
+                return
+
+            if (
+                hasattr(self._youtube_dialog, "download_id")
+                and self._youtube_dialog.download_id != download_id
+            ):
+                return
+
+            if hasattr(self._youtube_dialog, "update_finished"):
+                self._youtube_dialog.update_finished(success, message)
+
+        except Exception as e:
+            print(f"⚠️ Error updating YouTube dialog finished: {e}")
+
+    # ui/main_window.py - جایگزین _update_youtube_dialog_to_completed
+
+    def _update_youtube_dialog_to_completed(self, download_id: str):
+        """تغییر دکمه دیالوگ به Open Folder بعد از اتمام دانلود"""
+        if not hasattr(self, "_youtube_dialog") or self._youtube_dialog is None:
+            print(f"⚠️ [UI] No dialog found for {download_id}")
+            return
+
+        try:
+            dialog = self._youtube_dialog
+            if not dialog.isVisible():
+                print(f"⚠️ [UI] Dialog not visible for {download_id}")
+                return
+
+            if hasattr(dialog, "download_id") and dialog.download_id != download_id:
+                print(
+                    f"⚠️ [UI] Dialog download_id mismatch: {dialog.download_id} != {download_id}"
+                )
+                return
+
+            from utils.helpers import get_icon
+
+            # ===== تغییر وضعیت =====
+            dialog._is_complete = True
+            dialog.title_label.setText("✅ Download completed!")
+            dialog.title_label.setStyleSheet(
+                "font-size: 15px; font-weight: bold; color: #27ae60;"
+            )
+            dialog.status_label.setText("Download completed successfully!")
+            dialog.status_label.setStyleSheet("color: #27ae60;")
+            dialog.speed_eta_label.setText("")
+            dialog.progress_bar.setValue(100)
+            dialog.progress_bar.setFormat("100%")
+
+            # ===== تغییر دکمه اکشن =====
+            dialog.action_btn.setIcon(get_icon("folder"))
+            dialog.action_btn.setText(" Open Folder")
+            dialog.action_btn.setEnabled(True)
+            # ===== disconnect قبلی و connect جدید =====
+            try:
+                dialog.action_btn.clicked.disconnect()
+            except:
+                pass
+            dialog.action_btn.clicked.connect(dialog._open_folder)
+
+            # ===== تغییر دکمه Cancel به Close =====
+            dialog.cancel_btn.setText(" Close")
+            dialog.cancel_btn.setIcon(get_icon("window-close"))
+            try:
+                dialog.cancel_btn.clicked.disconnect()
+            except:
+                pass
+            dialog.cancel_btn.clicked.connect(dialog.accept)
+
+            print(f"✅ [UI] YouTube dialog updated to completed: {download_id}")
+
+        except Exception as e:
+            print(f"⚠️ Error updating YouTube dialog to completed: {e}")
+            import traceback
+
+            traceback.print_exc()
+
+    def _delete_youtube_files(self, file_path: str, save_path: str, title: str):
+        """پاک کردن فایل‌های دانلود یوتیوب (کامل و ناقص)"""
+        try:
+            import glob
+            import re
+
+            # ===== پاک کردن فایل اصلی =====
+            if os.path.exists(file_path):
+                os.remove(file_path)
+                print(f"🗑️ Deleted: {file_path}")
+
+            # ===== پاک کردن فایل‌های ناقص (پسوندهای مختلف) =====
+            base_name = os.path.splitext(os.path.basename(file_path))[0]
+            patterns = [
+                f"{base_name}.*.part",
+                f"{base_name}.*.ytdl",
+                f"{base_name}.*.f*",
+                f"{base_name}.*.temp",
+                f"{base_name}.*.download",
+            ]
+
+            for pattern in patterns:
+                full_pattern = os.path.join(save_path, pattern)
+                for f in glob.glob(full_pattern):
+                    try:
+                        os.remove(f)
+                        print(f"🗑️ Deleted partial: {f}")
+                    except:
+                        pass
+
+            # ===== پاک کردن با استفاده از title (برای اطمینان) =====
+            safe_title = re.sub(r'[<>:"/\\|?*]', "_", title)
+            partial_patterns = [
+                f"{safe_title}.*.part",
+                f"{safe_title}.*.ytdl",
+                f"{safe_title}.*.f*",
+                f"{safe_title}.*.temp",
+                f"{safe_title}.*.download",
+            ]
+
+            for pattern in partial_patterns:
+                full_pattern = os.path.join(save_path, pattern)
+                for f in glob.glob(full_pattern):
+                    try:
+                        os.remove(f)
+                        print(f"🗑️ Deleted partial (title): {f}")
+                    except:
+                        pass
+
+        except Exception as e:
+            print(f"⚠️ Error deleting files: {e}")

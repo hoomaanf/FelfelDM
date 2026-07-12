@@ -1,187 +1,300 @@
-import requests
+# core/aria2_rpc.py
+
+import json
 import subprocess
 import time
+import re
+import socket
 import os
+from typing import Optional, Dict, Any, List
+import urllib.request
+import urllib.error
 
 
 class Aria2RPC:
     def __init__(self, host="http://localhost", port=6800, secret=""):
-        self.url = f"{host}:{port}/jsonrpc"
+        self.host = host
+        self.port = port
         self.secret = secret
-        self._id = 0
         self.on_error = None
+        self._connected = False
+        self._aria2_process = None
 
-    def _call(self, method, params=None):
-        self._id += 1
-        token = f"token:{self.secret}" if self.secret else None
-        p = [token] + (params or []) if token else (params or [])
-        payload = {"jsonrpc": "2.0", "id": str(self._id), "method": method, "params": p}
-        try:
-            r = requests.post(self.url, json=payload, timeout=5)
-            result = r.json()
-            if "error" in result:
-                err = result["error"]
-                msg = f"aria2 error: {err.get('message', err)}"
-                print(f"⚠ [{method}]: {msg}")
-                if self.on_error:
-                    self.on_error(msg)
-                return None
-            return result.get("result")
-        except requests.exceptions.ConnectionError:
-            msg = "aria2 disconnected"
-            if self.on_error:
-                self.on_error(msg)
-            return None
-        except requests.exceptions.Timeout:
-            msg = f"aria2 timeout [{method}]"
-            print(f"⚠ {msg}")
-            if self.on_error:
-                self.on_error(msg)
-            return None
-        except Exception as e:
-            msg = f"aria2 error: {e}"
-            print(f"⚠ [{method}]: {msg}")
-            if self.on_error:
-                self.on_error(msg)
-            return None
+        # تنظیمات aria2 برای زمان‌های مختلف
+        self._timeout = 10
+        self._retry_count = 3
 
-    def add_url(self, url, options=None):
-        if options is None:
-            options = {}
-        return self._call("aria2.addUri", [[url], options])
-
-    def pause(self, gid):
-        return self._call("aria2.pause", [gid])
-
-    def resume(self, gid):
-        return self._call("aria2.unpause", [gid])
-
-    def remove(self, gid):
-        self._call("aria2.remove", [gid])
-        self._call("aria2.removeDownloadResult", [gid])
-
-    def change_global_option(self, options):
-        return self._call("aria2.changeGlobalOption", [options])
-
-    def get_global_stat(self):
-        return self._call("aria2.getGlobalStat")
-
-    def tell_status(self, gid, keys=None):
-        if keys is None:
-            keys = [
-                "gid",
-                "status",
-                "totalLength",
-                "completedLength",
-                "downloadSpeed",
-                "connections",
-                "files",
-                "errorMessage",
-            ]
-        return self._call("aria2.tellStatus", [gid, keys])
-
-    def tell_active(self):
-        return self._call("aria2.tellActive") or []
-
-    def tell_waiting(self, offset=0, num=1000):
-        return self._call("aria2.tellWaiting", [offset, num]) or []
-
-    def tell_stopped(self, offset=0, num=1000):
-        return self._call("aria2.tellStopped", [offset, num]) or []
-
-    def is_connected(self):
-        """Check if aria2 is running and responding"""
-        try:
-            result = self._call("aria2.getGlobalStat")
-            return result is not None
-        except:
+    def _is_youtube_gid(self, gid: str) -> bool:
+        """بررسی اینکه GID مربوط به دانلود یوتیوب هست یا نه (فرمت UUID)"""
+        if not gid:
             return False
+        return bool(
+            re.match(
+                r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+                gid,
+                re.IGNORECASE,
+            )
+        )
 
-    def get_status(self, gid):
-        result = self.tell_status(gid, ["gid", "status"])
-        if result:
-            return result.get("status")
+    def _get_url(self):
+        """ساخت URL برای RPC"""
+        return f"{self.host}:{self.port}/jsonrpc"
+
+    def _call(self, method: str, params: List = None) -> Optional[Dict]:
+        """فراخوانی متد RPC"""
+        if params is None:
+            params = []
+
+        # اگر secret وجود دارد، به params اضافه کن
+        if self.secret:
+            params = [f"token:{self.secret}"] + params
+
+        payload = {
+            "jsonrpc": "2.0",
+            "id": "felfeldm",
+            "method": method,
+            "params": params,
+        }
+
+        data = json.dumps(payload).encode("utf-8")
+        req = urllib.request.Request(
+            self._get_url(), data=data, headers={"Content-Type": "application/json"}
+        )
+
+        for attempt in range(self._retry_count):
+            try:
+                with urllib.request.urlopen(req, timeout=self._timeout) as response:
+                    result = json.loads(response.read().decode("utf-8"))
+                    if "error" in result:
+                        error_msg = result["error"].get("message", str(result["error"]))
+                        if "Invalid GID" in error_msg:
+                            return None
+                        if self.on_error:
+                            self.on_error(f"aria2 error: {error_msg}")
+                        return None
+                    return result.get("result")
+            except urllib.error.URLError as e:
+                if attempt < self._retry_count - 1:
+                    time.sleep(0.5)
+                    continue
+                if self.on_error:
+                    self.on_error(f"Connection error: {e}")
+                return None
+            except Exception as e:
+                if attempt < self._retry_count - 1:
+                    time.sleep(0.5)
+                    continue
+                if self.on_error:
+                    self.on_error(f"Error: {e}")
+                return None
+
         return None
 
-    def force_pause(self, gid):
-        return self._call("aria2.forcePause", [gid])
-
-    def start_aria2(self):
-        """Start aria2 daemon if not running"""
-        if self.is_connected():
-            print("✅ aria2 already running")
-            return True
-
-        print("Starting aria2 daemon...")
-
-        # Kill existing aria2 processes first
+    def is_connected(self) -> bool:
+        """بررسی اتصال به aria2"""
         try:
-            subprocess.run(["pkill", "-f", "aria2c"], capture_output=True)
-            time.sleep(1)
-        except:
-            pass
-
-        # Build command WITHOUT secret (use default config)
-        aria2_cmd = [
-            "aria2c",
-            "--enable-rpc",
-            "--rpc-listen-all",
-            "--rpc-allow-origin-all",
-            "--rpc-listen-port=6800",
-            "--daemon",
-            "--max-concurrent-downloads=5",
-            "--max-connection-per-server=16",
-            "--split=16",
-            "--continue=true",
-            "--always-resume=true",
-        ]
-
-        # Add secret only if set
-        if self.secret:
-            aria2_cmd.append(f"--rpc-secret={self.secret}")
-
-        try:
-            subprocess.Popen(
-                aria2_cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
-            )
-            time.sleep(2)
-
-            # Try to connect
-            for i in range(10):
-                if self.is_connected():
-                    print("✅ aria2 started successfully")
-                    return True
-                time.sleep(1)
-
-            print("⚠️ aria2 failed to start after 10 seconds")
+            result = self._call("aria2.getVersion")
+            if result:
+                self._connected = True
+                return True
+            self._connected = False
             return False
+        except:
+            self._connected = False
+            return False
+
+    def start_aria2(self) -> bool:
+        """شروع aria2 به عنوان دیمن"""
+        try:
+            port = self.port
+            cmd = [
+                "aria2c",
+                "--enable-rpc",
+                "--rpc-listen-all",
+                "--rpc-allow-origin-all",
+                "--daemon",
+                f"--rpc-listen-port={port}",
+                "--max-concurrent-downloads=5",
+                "--max-connection-per-server=16",
+                "--split=16",
+                "--continue=true",
+                "--always-resume=true",
+                "--retry-wait=2",
+                "--max-tries=5",
+                "--min-split-size=1M",
+            ]
+
+            if self.secret:
+                cmd.append(f"--rpc-secret={self.secret}")
+
+            subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+            # منتظر بمان تا aria2 راه‌اندازی شود
+            for _ in range(30):
+                time.sleep(0.5)
+                if self.is_connected():
+                    print(f"✅ aria2 started on port {port}")
+                    return True
+
+            print(f"❌ aria2 failed to start on port {port}")
+            return False
+
         except FileNotFoundError:
-            print("❌ aria2 command not found. Please install aria2.")
+            if self.on_error:
+                self.on_error("aria2 not found! Please install: sudo apt install aria2")
             return False
         except Exception as e:
-            print(f"Error starting aria2: {e}")
+            if self.on_error:
+                self.on_error(f"Failed to start aria2: {e}")
             return False
 
-    def set_global_proxy(self, proxy_config):
-        """تنظیم پروکسی سراسری در aria2"""
-        if not proxy_config or not proxy_config.enabled:
-            return self.change_global_option({"all-proxy": ""})
+    # ===== متدهای اصلی =====
 
-        if not proxy_config.is_valid():
+    def get_version(self) -> Optional[Dict]:
+        """دریافت نسخه aria2"""
+        return self._call("aria2.getVersion")
+
+    def get_global_stat(self) -> Optional[Dict]:
+        """دریافت آمار کلی"""
+        return self._call("aria2.getGlobalStat")
+
+    def tell_active(self) -> List[Dict]:
+        """دریافت دانلودهای فعال"""
+        result = self._call("aria2.tellActive")
+        return result if result else []
+
+    def tell_waiting(self, offset: int = 0, num: int = 100) -> List[Dict]:
+        """دریافت دانلودهای در انتظار"""
+        result = self._call("aria2.tellWaiting", [offset, num])
+        return result if result else []
+
+    def tell_stopped(self, offset: int = 0, num: int = 100) -> List[Dict]:
+        """دریافت دانلودهای متوقف شده"""
+        result = self._call("aria2.tellStopped", [offset, num])
+        return result if result else []
+
+    def get_status(self, gid: str) -> Optional[Dict]:
+        """دریافت وضعیت یک دانلود"""
+        if not gid:
+            return None
+
+        # ===== SKIP برای GIDهای یوتیوب =====
+        if self._is_youtube_gid(gid):
+            return None
+
+        return self._call("aria2.tellStatus", [gid])
+
+    def tell_status(self, gid: str) -> Optional[Dict]:
+        """همان get_status (برای سازگاری)"""
+        return self.get_status(gid)
+
+    def add_url(self, url: str, options: Dict = None) -> Optional[str]:
+        """افزودن دانلود جدید با URL"""
+        if not url:
+            return None
+
+        if options is None:
+            options = {}
+
+        # تبدیل options به فرمت aria2
+        aria2_options = []
+        for key, value in options.items():
+            if value is not None and value != "":
+                aria2_options.append(f"{key}={value}")
+
+        params = [[url], aria2_options]
+
+        result = self._call("aria2.addUri", params)
+        return result
+
+    def add_uris(self, urls: List[str], options: Dict = None) -> List[Optional[str]]:
+        """افزودن چندین دانلود"""
+        gids = []
+        for url in urls:
+            gid = self.add_url(url, options)
+            gids.append(gid)
+        return gids
+
+    def pause(self, gid: str) -> bool:
+        """توقف موقت دانلود"""
+        if not gid:
             return False
 
-        proxy_url = proxy_config._build_proxy_url()
-        return self.change_global_option({"all-proxy": proxy_url})
+        # ===== SKIP برای GIDهای یوتیوب =====
+        if self._is_youtube_gid(gid):
+            return False
 
-    def set_download_speed_limit(self, gid, speed_limit_kb):
-        """
-        Set speed limit for a specific download in KB/s
-        speed_limit_kb: 0 = no limit
-        """
-        if speed_limit_kb > 0:
-            return self._call(
-                "aria2.changeOption",
-                [gid, {"max-download-limit": f"{speed_limit_kb}K"}],
-            )
+        result = self._call("aria2.pause", [gid])
+        return result is not None
+
+    def force_pause(self, gid: str) -> bool:
+        """توقف اجباری دانلود"""
+        if not gid:
+            return False
+
+        # ===== SKIP برای GIDهای یوتیوب =====
+        if self._is_youtube_gid(gid):
+            return False
+
+        result = self._call("aria2.forcePause", [gid])
+        return result is not None
+
+    def resume(self, gid: str) -> bool:
+        """ادامه دانلود"""
+        if not gid:
+            return False
+
+        # ===== SKIP برای GIDهای یوتیوب =====
+        if self._is_youtube_gid(gid):
+            return False
+
+        result = self._call("aria2.unpause", [gid])
+        return result is not None
+
+    def remove(self, gid: str) -> bool:
+        """حذف دانلود"""
+        if not gid:
+            return False
+
+        # ===== SKIP برای GIDهای یوتیوب =====
+        if self._is_youtube_gid(gid):
+            return False
+
+        result = self._call("aria2.remove", [gid])
+        return result is not None
+
+    def change_global_option(self, options: Dict) -> bool:
+        """تغییر تنظیمات کلی"""
+        if not options:
+            return False
+
+        result = self._call("aria2.changeGlobalOption", [options])
+        return result is not None
+
+    def set_download_speed_limit(self, gid: str, speed_kb: int) -> bool:
+        """تنظیم محدودیت سرعت برای یک دانلود"""
+        if not gid:
+            return False
+
+        # ===== SKIP برای GIDهای یوتیوب =====
+        if self._is_youtube_gid(gid):
+            return False
+
+        if speed_kb <= 0:
+            options = {"max-download-limit": "0"}
         else:
-            return self._call("aria2.changeOption", [gid, {"max-download-limit": "0"}])
+            options = {"max-download-limit": f"{speed_kb}K"}
+
+        result = self._call("aria2.changeOption", [gid, options])
+        return result is not None
+
+    def set_global_proxy(self, proxy_config) -> bool:
+        """تنظیم پروکسی کلی"""
+        if proxy_config and proxy_config.is_valid():
+            proxy_url = proxy_config._build_proxy_url()
+            options = {"all-proxy": proxy_url}
+        else:
+            options = {"all-proxy": ""}
+
+        result = self._call("aria2.changeGlobalOption", [options])
+        return result is not None

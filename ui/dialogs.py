@@ -1483,12 +1483,12 @@ WantedBy=default.target
 
 class YouTubeDownloadDialog(QDialog):
     youtube_download_requested = pyqtSignal(dict)
-    
+
     def __init__(self, parent=None, queues=None, default_queue=0):
         super().__init__(parent)
         self.setWindowTitle("YouTube Download")
         self.setMinimumWidth(550)
-        
+
         self.queues = queues or []
         self.default_queue = default_queue
 
@@ -1551,16 +1551,16 @@ class YouTubeDownloadDialog(QDialog):
         # ===== بخش جدید: انتخاب صف =====
         queue_row = QHBoxLayout()
         self.queue_combo = QComboBox()
-        
+
         # پر کردن صف‌ها
         for i, q in enumerate(self.queues):
             if q.name != "__direct__":
                 self.queue_combo.addItem(q.name, i)
-        
+
         # انتخاب صف پیش‌فرض
         if self.default_queue < self.queue_combo.count():
             self.queue_combo.setCurrentIndex(self.default_queue)
-        
+
         queue_row.addWidget(self.queue_combo)
         options_layout.addRow("Add to Queue:", queue_row)
 
@@ -1784,6 +1784,7 @@ class YouTubeDownloadDialog(QDialog):
                     label += f" - {resolution}"
                 if filesize:
                     from utils.helpers import format_size
+
                     label += f" ({format_size(filesize)})"
                 video_formats.append((format_id, label, f))
 
@@ -1794,6 +1795,7 @@ class YouTubeDownloadDialog(QDialog):
                     label += f" - {bitrate}kbps"
                 if filesize:
                     from utils.helpers import format_size
+
                     label += f" ({format_size(filesize)})"
                 audio_formats.append((format_id, label, f))
 
@@ -1830,6 +1832,7 @@ class YouTubeDownloadDialog(QDialog):
         filesize = info.get("filesize")
         if filesize:
             from utils.helpers import format_size
+
             self.info_layout.addRow("Size:", QLabel(format_size(filesize)))
 
         self.format_combo.setEnabled(True)
@@ -1853,33 +1856,33 @@ class YouTubeDownloadDialog(QDialog):
     def _on_add_to_queue(self):
         """افزودن دانلود به صف"""
         data = self.get_data()
-        
-        if not data['url']:
+
+        if not data["url"]:
             QMessageBox.warning(self, "Error", "Please enter a valid YouTube URL")
             return
-        
+
         # انتخاب صف
         queue_index = self.queue_combo.currentData()
         queue_name = self.queue_combo.currentText()
-        
+
         # آماده‌سازی داده برای ارسال
         download_data = {
-            'url': data['url'],
-            'save_path': data['path'],
-            'queue_id': queue_name,
-            'download_type': 'youtube',
-            'yt_options': {
-                'quality': data.get('quality', 'best'),
-                'format': data.get('format', 'video'),
-                'cookies_path': data.get('cookie_file'),
-                'title': data.get('video_info', {}).get('title', ''),
-                'format_id': data.get('format_id'),
-                'format_info': data.get('format_info', {})
+            "url": data["url"],
+            "save_path": data["path"],
+            "queue_id": queue_name,
+            "download_type": "youtube",
+            "yt_options": {
+                "quality": data.get("quality", "best"),
+                "format": data.get("format", "video"),
+                "cookies_path": data.get("cookie_file"),
+                "title": data.get("video_info", {}).get("title", ""),
+                "format_id": data.get("format_id"),
+                "format_info": data.get("format_info", {}),
             },
-            'proxy': data.get('proxy_url'),
-            'video_info': data.get('video_info')
+            "proxy": data.get("proxy_url"),
+            "video_info": data.get("video_info"),
         }
-        
+
         # ارسال سیگنال به parent
         self.youtube_download_requested.emit(download_data)
         self.accept()
@@ -1899,7 +1902,7 @@ class YouTubeDownloadDialog(QDialog):
             format_info = self._format_map.get(selected_format_id, {})
             ext = format_info.get("ext", "mp4")
             resolution = format_info.get("resolution", "")
-            
+
             # تشخیص نوع (ویدیو یا صدا)
             if format_info.get("vcodec") and format_info.get("vcodec") != "none":
                 format_type = "video"
@@ -1921,8 +1924,9 @@ class YouTubeDownloadDialog(QDialog):
             "custom_proxy": self._custom_proxy if proxy_mode == 1 else None,
             "proxy_url": self._get_proxy_url(),
             "queue_index": self.queue_combo.currentData(),
-            "queue_name": self.queue_combo.currentText()
+            "queue_name": self.queue_combo.currentText(),
         }
+
 
 class ProxyDialog(QDialog):
     def __init__(

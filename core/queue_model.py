@@ -14,6 +14,7 @@ class Queue:
         days=None,
         paused=True,
         speed_limit=0,
+        proxy_config=None,
     ):
         self.name = name
         self.max_concurrent = max_concurrent
@@ -25,6 +26,7 @@ class Queue:
         self.downloads = []
         self.downloads_info = {}
         self.paused = paused
+        self.proxy_config = proxy_config
         self.speed_limit = speed_limit
 
     def to_dict(self):
