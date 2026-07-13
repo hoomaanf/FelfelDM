@@ -116,15 +116,26 @@ case "$DISTRO" in
         
     fedora)
         echo -e "${GREEN}Installing with dnf...${NC}"
+        
+        echo -e "${YELLOW}Enabling RPM Fusion for extra packages...${NC}"
+        $SUDO dnf install -y \
+            https://download1.rpmfusion.org/free/fedora/rpmfusion-free-release-$(rpm -E %fedora).noarch.rpm \
+            https://download1.rpmfusion.org/nonfree/fedora/rpmfusion-nonfree-release-$(rpm -E %fedora).noarch.rpm 2>/dev/null || true
+        
         $SUDO dnf install -y \
             python3 \
             python3-pip \
-            python3-qt6 \
+            python3-pyqt6 \
+            python3-pyqt6-devel \
             aria2 \
             git \
-            papirus-icon-theme 2>/dev/null || echo "⚠ papirus-icon-theme not available"
-        # yt-dlp on fedora
-        $SUDO dnf install -y yt-dlp 2>/dev/null || echo "⚠ yt-dlp not available, installing via pip"
+            yt-dlp \
+            papirus-icon-theme
+        
+        if ! rpm -q papirus-icon-theme &> /dev/null; then
+            echo -e "${YELLOW}⚠ papirus-icon-theme not found, installing from pip...${NC}"
+            pip3 install --user papirus-icon-theme 2>/dev/null || echo -e "${YELLOW}⚠ Could not install papirus-icon-theme${NC}"
+        fi
         ;;
         
     rhel)
@@ -145,9 +156,8 @@ case "$DISTRO" in
             python3-pip \
             python3-qt6 \
             aria2 \
-            git
-        # yt-dlp on opensuse
-        $SUDO zypper install -y yt-dlp 2>/dev/null || echo "⚠ yt-dlp not available, installing via pip"
+            git \
+            yt-dlp
         ;;
         
     alpine)
@@ -157,9 +167,8 @@ case "$DISTRO" in
             py3-pip \
             py3-pyqt6 \
             aria2 \
-            git
-        # yt-dlp on alpine
-        $SUDO apk add yt-dlp 2>/dev/null || echo "⚠ yt-dlp not available, installing via pip"
+            git \
+            yt-dlp
         ;;
         
     *)
@@ -179,7 +188,7 @@ esac
 # ============================================
 echo -e "${YELLOW}📦 Installing pip packages...${NC}"
 
-PIP_PACKAGES="requests keyring appdirs yt-dlp"
+PIP_PACKAGES="requests keyring appdirs"
 
 for pkg in $PIP_PACKAGES; do
     if ! python3 -c "import $pkg" >/dev/null 2>&1; then
@@ -205,7 +214,6 @@ $SUDO cp -r \
     "$SOURCE_DIR"/core \
     "$SOURCE_DIR"/ui \
     "$SOURCE_DIR"/utils \
-    "$SOURCE_DIR"/icons \
     "$SOURCE_DIR"/logo \
     "$SOURCE_DIR"/FelfelDM-extension \
     "$INSTALL_DIR" 2>/dev/null || true
