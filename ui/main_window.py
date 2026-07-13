@@ -948,6 +948,28 @@ class MainWindow(QMainWindow):
         if q.name == "__direct__":
             return
         
+        if q.schedule_enabled and not q.is_scheduled_now():
+            next_time = q.get_next_schedule_time()
+            if next_time:
+                time_str = next_time.strftime("%H:%M on %A")
+                
+                QMessageBox.information(
+                    self,
+                    "Queue Scheduled",
+                    f"This queue is scheduled to start at {time_str}.\n\n"
+                    f"It will start automatically at that time.\n"
+                    f"You don't need to start it manually.",
+                    QMessageBox.StandardButton.Ok
+                )
+            else:
+                QMessageBox.information(
+                    self,
+                    "Queue Scheduled",
+                    "This queue is scheduled but no upcoming time found.",
+                    QMessageBox.StandardButton.Ok
+                )
+            return
+        
         for gid in q.downloads:
             if gid in self._all_downloads:
                 total = self._all_downloads[gid].get("totalLength", 0)

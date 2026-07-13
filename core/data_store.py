@@ -3,7 +3,7 @@
 import os
 import json
 import shutil
-from datetime import datetime, time as dtime
+from datetime import datetime, time as dtime,timedelta
 from pathlib import Path
 from appdirs import user_config_dir
 import keyring
