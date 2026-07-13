@@ -849,11 +849,17 @@ class DownloadProgressDialog(QDialog):
                 QMessageBox.warning(self, "Folder Not Found", "Folder not found.")
             return
 
-        # Pause/Resume
-        if self._status == "active":
+        # ===== از دکمه برای تشخیص وضعیت استفاده کن =====
+        btn_text = self.action_btn.text().strip()
+        
+        if btn_text == "Pause":
             self.pause_requested.emit(self.gid)
-        elif self._status in ["paused", "waiting"]:
+            print(f"⏸️ [Dialog] Pause requested for {self.gid}")
+        elif btn_text in ["Resume", "Start"]:
             self.resume_requested.emit(self.gid)
+            print(f"▶️ [Dialog] Resume requested for {self.gid}")
+        else:
+            print(f"⚠️ [Dialog] Unknown action: {btn_text}")
 
     def _on_cancel_clicked(self):
         """Handle cancel button click"""
@@ -892,7 +898,7 @@ class DownloadProgressDialog(QDialog):
         speed = int(dl_data.get("downloadSpeed", 0))
         status = dl_data.get("status", "unknown")
         name = dl_data.get("name", "")
-
+        
         self._status = status
         self._is_complete = status == "complete"
 
@@ -954,7 +960,8 @@ class DownloadProgressDialog(QDialog):
 
     def _update_buttons(self, status):
         """Update button states based on download status"""
-
+        self._status = status
+        
         if status == "complete":
             self.action_btn.setIcon(get_icon("folder"))
             self.action_btn.setText(" Open Folder")

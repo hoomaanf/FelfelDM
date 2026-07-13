@@ -3154,7 +3154,15 @@ class MainWindow(QMainWindow):
         if not gid:
             return
 
-        real_status = self.aria2.get_status(gid)
+        # ===== دریافت وضعیت از aria2 =====
+        status_data = self.aria2.get_status(gid)
+        
+        # ===== استخراج status از دیکشنری =====
+        if status_data and isinstance(status_data, dict):
+            real_status = status_data.get("status", "")
+        else:
+            real_status = self._all_downloads.get(gid, {}).get("status", "")
+        
         print(f"📊 Current status: {real_status}")
 
         if real_status in ["active", "waiting"]:
@@ -3179,9 +3187,7 @@ class MainWindow(QMainWindow):
                     if q and q.name != "__direct__":
                         for other_gid in q.downloads:
                             if other_gid in self._all_downloads:
-                                status = self._all_downloads[other_gid].get(
-                                    "status", ""
-                                )
+                                status = self._all_downloads[other_gid].get("status", "")
                                 if status in ["active", "waiting"]:
                                     has_active = True
                                     break
@@ -3189,9 +3195,7 @@ class MainWindow(QMainWindow):
                         if not has_active:
                             q.paused = True
                             self.store.save()
-                            print(
-                                f"⏸️ Queue '{q.name}' auto-paused (no active downloads)"
-                            )
+                            print(f"⏸️ Queue '{q.name}' auto-paused (no active downloads)")
 
                     self._refresh_table()
                     self._refresh_queue_list()
@@ -3199,14 +3203,8 @@ class MainWindow(QMainWindow):
                     self._update_queue_buttons()
                     self._update_toggle_button()
 
-                    if (
-                        hasattr(self, "_progress_dialog")
-                        and self._progress_dialog is not None
-                    ):
-                        if (
-                            self._progress_dialog.isVisible()
-                            and gid in self._all_downloads
-                        ):
+                    if hasattr(self, "_progress_dialog") and self._progress_dialog is not None:
+                        if self._progress_dialog.isVisible() and gid in self._all_downloads:
                             self._progress_dialog.update_data(self._all_downloads[gid])
 
                     if not has_active and q and q.name != "__direct__":
@@ -3229,7 +3227,6 @@ class MainWindow(QMainWindow):
             except Exception as e:
                 print(f"❌ Pause error: {e}")
                 import traceback
-
                 traceback.print_exc()
         else:
             print(f"⚠️ Cannot pause: status is {real_status}")
@@ -3253,7 +3250,17 @@ class MainWindow(QMainWindow):
             )
             return
 
-        real_status = self.aria2.get_status(gid)
+        # ===== دریافت وضعیت از aria2 =====
+        status_data = self.aria2.get_status(gid)
+        
+        # ===== استخراج status از دیکشنری =====
+        if status_data and isinstance(status_data, dict):
+            real_status = status_data.get("status", "")
+        else:
+            real_status = self._all_downloads.get(gid, {}).get("status", "")
+        
+        print(f"📊 Current status: {real_status}")
+
         if real_status == "paused":
             try:
                 result = self.aria2.resume(gid)
@@ -3270,9 +3277,7 @@ class MainWindow(QMainWindow):
 
                     if q and q.speed_limit > 0:
                         self.aria2.set_download_speed_limit(gid, q.speed_limit)
-                        print(
-                            f"⚡ Queue speed limit {q.speed_limit}KB/s applied to {gid}"
-                        )
+                        print(f"⚡ Queue speed limit {q.speed_limit}KB/s applied to {gid}")
 
                     self.tray.showMessage(
                         "FelfelDM",
@@ -3285,18 +3290,12 @@ class MainWindow(QMainWindow):
                     self._update_progress_bar()
                     self._update_toggle_button()
 
-                    if (
-                        hasattr(self, "_progress_dialog")
-                        and self._progress_dialog is not None
-                    ):
-                        if (
-                            self._progress_dialog.isVisible()
-                            and gid in self._all_downloads
-                        ):
+                    if hasattr(self, "_progress_dialog") and self._progress_dialog is not None:
+                        if self._progress_dialog.isVisible() and gid in self._all_downloads:
                             self._progress_dialog.update_data(self._all_downloads[gid])
             except Exception as e:
                 print(f"❌ Resume error: {e}")
-
+                
     def _cancel_from_dialog(self, gid):
         """Cancel download from progress dialog (without deleting files)"""
         try:
@@ -3403,11 +3402,13 @@ class MainWindow(QMainWindow):
             queue_name = d.get("queue_name", "__direct__")
             target_queue = None
 
+            # ===== پیدا کردن صف =====
             for q in self.store.queues:
                 if q.name == queue_name:
                     target_queue = q
                     break
 
+            # ===== اگه صف وجود نداشت، بساز =====
             if target_queue is None:
                 target_queue = Queue(queue_name, paused=False)
                 if queue_name == "__direct__":
