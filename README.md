@@ -255,7 +255,7 @@ The FelfelDM browser extension shows its status through visual badges on its ico
 FelfelDM/
 ├── core/                    # Core modules
 │   ├── aria2_rpc.py        # aria2 JSON-RPC client
-│   ├── backend_worker.py   # Background download worker
+│   ├── worker.py   # Background download worker
 │   ├── data_store.py       # Data persistence
 │   ├── proxy_manager.py    # Proxy configuration
 │   ├── temp_db.py          # Temporary in-memory database
