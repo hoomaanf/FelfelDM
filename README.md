@@ -38,23 +38,48 @@
 - 📊 **Real-time Progress** — Live download speed and progress tracking
 - 🎯 **Smart Management** — Auto-retry, pause/resume, and error handling
 - 🗑️ **Safe Removal** — Remove from list or delete files permanently
+- 🎵 **YouTube Download** — Download videos and audio from YouTube with dynamic quality selection
+
+### Queue Management
+
+- 📋 **Queue Status** — Real-time status display for each queue (Running, Paused, Idle, Empty)
+- 🔄 **Auto-Pause on Empty** — Queues automatically pause when empty
+- ⏱️ **Smart Scheduling** — Automatic start/stop based on time windows
+- 🔒 **Manual Override** — User pause/resume overrides automatic scheduling
+- 📊 **Queue Progress** — Overall progress bar for each queue
 
 ### Advanced Features
 
 - 🌐 **Browser Extension** — Firefox & Chrome extension with smart connection handling
 - 🔌 **aria2 Integration** — High-performance multi-connection downloads
 - 🎨 **Modern UI** — Dark/Light theme with Papirus icons
-- ⚡ **Speed Limit** — Global download speed limiting
+- ⚡ **Speed Limit** — Global and per-queue download speed limiting
 - 🖥️ **System Tray** — Minimize to tray with status indicator
 - 🔄 **Download Interception** — Catch browser downloads automatically
 - 🎬 **Splash Screen** — Beautiful loading animation with circular logo
 - 🔧 **Systemd Service** — Run as background service
 - 📥 **CLI Support** — Add URLs from command line with `--add`
-- 🎵 **YouTube Download** — Download videos/audio from YouTube with dynamic quality selection
 - 🌐 **Proxy Support** — Global, per-queue, and per-download proxy configuration (HTTP/HTTPS/SOCKS5)
 - 📦 **Independent Progress Windows** — Separate windows for download progress that stay open even when main window is closed
 - 🟢 **Smart Extension** — Browser extension shows connection status with visual badges
 - ⚡ **Smart Fallback** — When FelfelDM is not running, downloads proceed normally
+- 💾 **Persistent State** — All downloads and queues are preserved between sessions
+- 🔄 **Download Resume** — Resume interrupted downloads from where they stopped
+
+### YouTube Download Features
+
+- 🎥 **Video Download** — Download videos in MP4, WebM formats
+- 🎵 **Audio Extraction** — Extract audio as MP3, M4A
+- 📐 **Quality Selection** — Choose from available qualities (1080p, 720p, 480p, etc.)
+- 🔄 **Best Quality** — Automatically select the best available format
+- 🍪 **Cookie Support** — Use browser cookies for age-restricted content
+- 🌐 **Proxy Support** — Download YouTube videos through proxy
+- 📊 **Real-time Progress** — Live progress, speed, and ETA for YouTube downloads
+- ⏸️ **Pause/Resume** — Pause and resume YouTube downloads
+- 🗑️ **Clean Removal** — Remove downloads and associated files
+- 🎬 **YouTube Category** — YouTube downloads are visually distinguished in the queue
+- 📁 **Custom Output** — Choose where to save downloaded files
+- 🖥️ **Standalone Dialog** — Independent progress dialog for YouTube downloads
 
 ---
 
@@ -102,10 +127,47 @@ FelfelDM --clear
 
 ### Adding Downloads
 
+#### Regular Downloads:
 1. Click **Download** button or press `Ctrl+N`
 2. Enter URLs (one per line)
 3. Select queue and options
 4. Click OK
+
+#### YouTube Downloads:
+1. Click **YouTube** button in the toolbar
+2. Paste the YouTube URL
+3. Select quality and format
+4. Choose queue and save location
+5. Click Download
+
+### YouTube Download
+
+FelfelDM supports downloading videos and audio from YouTube with advanced features:
+
+**Quality Selection:**
+- **Dynamic Quality List** — Automatically fetches available qualities for each video
+- **Video Formats** — MP4, WebM with various resolutions (1080p, 720p, 480p, etc.)
+- **Audio Formats** — MP3, M4A with bitrate options
+- **Best Quality** — Automatically selects the best available format
+
+**Requirements:**
+- yt-dlp must be installed
+- For age-restricted or private videos, export cookies from your browser
+
+### Queue Status
+
+FelfelDM shows the current status of each queue in the sidebar:
+
+| Status | Description |
+|--------|-------------|
+| **▶ Running** | Queue is active and at least one download is in progress |
+| **⏸ Paused** | Queue is manually paused by the user |
+| **⏳ Idle** | Queue has downloads but none are active (all complete/error) |
+| **📭 Empty** | Queue has no downloads |
+| **✅ Complete** | All downloads in the queue are complete |
+| **▶ Running (🕐 Scheduled)** | Queue is running within its scheduled time window |
+| **⏸ Paused (🕐 Scheduled)** | Queue is paused but within its scheduled time window |
+| **⏰ Waiting for Schedule** | Queue is waiting for its scheduled time to start |
 
 ### Proxy Configuration
 
@@ -126,20 +188,6 @@ FelfelDM supports proxy configuration at three levels:
 - YouTube downloads also support proxy configuration
 - Proxy settings from the main dialog are automatically applied to the download progress window
 - No need to re-enter proxy details in the progress dialog
-
-### YouTube Download
-
-FelfelDM supports downloading videos and audio from YouTube with advanced features:
-
-**Quality Selection:**
-- **Dynamic Quality List** — Automatically fetches available qualities for each video
-- **Video Formats** — MP4, WebM with various resolutions (1080p, 720p, 480p, etc.)
-- **Audio Formats** — MP3, M4A with bitrate options
-- **Best Quality** — Automatically selects the best available format
-
-**Requirements:**
-- yt-dlp must be installed
-- For age-restricted or private videos, export cookies from your browser
 
 ### Keyboard Shortcuts
 
@@ -205,14 +253,30 @@ The FelfelDM browser extension shows its status through visual badges on its ico
 
 ```bash
 FelfelDM/
-├── core/                    # Core modules (aria2, worker, data_store, proxy_manager)
-├── ui/                      # UI components (main_window, dialogs, splash, proxy_dialog)
-├── utils/                   # Utilities (helpers, style)
+├── core/                    # Core modules
+│   ├── aria2_rpc.py        # aria2 JSON-RPC client
+│   ├── backend_worker.py   # Background download worker
+│   ├── data_store.py       # Data persistence
+│   ├── proxy_manager.py    # Proxy configuration
+│   ├── temp_db.py          # Temporary in-memory database
+│   ├── youtube_worker.py   # YouTube download worker
+│   └── local_server.py     # Local HTTP server for extension
+├── ui/                      # UI components
+│   ├── main_window.py      # Main application window
+│   ├── dialogs.py          # Various dialogs
+│   ├── table_model.py      # Download table model
+│   ├── delegates.py        # Custom delegates
+│   ├── splash.py           # Splash screen
+│   ├── youtube_progress.py # YouTube progress dialog
+│   └── download_proxy_dialog.py # Proxy configuration dialog
+├── utils/                   # Utilities
+│   ├── helpers.py          # Helper functions
+│   └── style.py            # Theme styles
 ├── FelfelDM-extension/      # Browser extension
-├── logo/                    # Application icons (circular, high quality)
+├── logo/                    # Application icons
 ├── screenshots/             # Application screenshots
 ├── main.py                  # Entry point with CLI support
-├── install.sh               # Installation script (all distros)
+├── install.sh               # Installation script
 ├── uninstall.sh             # Uninstallation script
 ├── requirements.txt         # Python dependencies
 └── README.md                # This file
@@ -287,12 +351,34 @@ chmod +x uninstall.sh
 2. Export cookies from YouTube
 3. Use the cookie file in YouTube download dialog
 
+### YouTube downloads not starting
+
+1. Make sure yt-dlp is installed: `which yt-dlp`
+2. Check if yt-dlp is up to date: `yt-dlp -U`
+3. Try downloading without proxy first
+4. Check the console output for error messages
+
+### YouTube download speed not showing
+
+1. YouTube downloads use yt-dlp for downloading
+2. Speed is shown in the YouTube progress dialog
+3. Total speed in the status bar includes both aria2 and YouTube downloads
+4. Check the YouTube progress dialog for detailed information
+
 ### Proxy not working
 
 1. Test proxy in terminal: `curl -x http://proxy:port https://www.google.com`
 2. For SOCKS5, use: `curl -x socks5://proxy:port https://www.google.com`
 3. Check authentication format: `http://user:pass@proxy:port`
 4. Make sure proxy is enabled in Settings
+
+### Queue scheduling not working
+
+1. Make sure schedule is enabled in queue settings
+2. Check the schedule time and days
+3. Queue will automatically start/stop based on schedule
+4. Manual pause/resume overrides automatic scheduling
+5. Check console output for schedule debug messages
 
 ---
 

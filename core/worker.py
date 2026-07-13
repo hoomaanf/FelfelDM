@@ -7,7 +7,6 @@ import uuid
 from datetime import datetime
 import os
 
-# اضافه کردن import برای YouTubeWorker
 from core.youtube_worker import YouTubeWorker
 from core.data_store import DataStore
 
@@ -17,12 +16,11 @@ class BackendWorker(QThread):
     aria2_error = pyqtSignal(str)
     size_fetched = pyqtSignal(str, int, str)
 
-    # سیگنال‌های جدید برای دانلود یوتیوب
     youtube_progress = pyqtSignal(str, int)  # download_id, progress
     youtube_status = pyqtSignal(str, str)  # download_id, status
     youtube_speed = pyqtSignal(str, str, str)  # download_id, speed, eta
     youtube_finished = pyqtSignal(str, bool, str)  # download_id, success, message
-    youtube_size_fetched = pyqtSignal(str, int)  # ===== جدید: download_id, size =====
+    youtube_size_fetched = pyqtSignal(str, int)  # ===== download_id, size =====
 
     def __init__(self, aria2, store: DataStore):
         super().__init__()
@@ -100,12 +98,10 @@ class BackendWorker(QThread):
                 worker = self.youtube_workers[download_id]
                 del self.youtube_workers[download_id]
 
-        # ===== خارج از لاک، worker رو کنسل کن =====
         if worker and worker.is_running():
             worker.cancel()
             worker.wait(1000)
 
-        # ===== لاک رو بگیر و دیتا رو پاک کن (فایل‌ها رو پاک نکن) =====
         with self.youtube_lock:
             if download_id in self.youtube_downloads:
                 del self.youtube_downloads[download_id]
@@ -130,7 +126,6 @@ class BackendWorker(QThread):
             loop_count += 1
 
             try:
-                # ===== بخش aria2 (کدهای قبلی) =====
                 if not self.aria2.is_connected():
                     if not self.aria2.start_aria2():
                         self.stats_updated.emit({"connected": False})
@@ -149,7 +144,6 @@ class BackendWorker(QThread):
                     if not gid:
                         continue
 
-                    # ===== بخش جدید: SKIP برای GIDهای یوتیوب =====
                     if gid in self.youtube_gids:
                         continue
 
@@ -174,7 +168,6 @@ class BackendWorker(QThread):
                 for d in list(downloads)[:25]:
                     gid = d.get("gid")
                     if gid and d.get("status") in ("active", "waiting"):
-                        # SKIP برای GIDهای یوتیوب
                         if gid in self.youtube_gids:
                             continue
                         full = self.aria2.tell_status(gid)
@@ -184,8 +177,13 @@ class BackendWorker(QThread):
                                     downloads[i] = full
                                     break
 
-                # ===== بخش جدید: به‌روزرسانی دانلودهای یوتیوب =====
-                youtube_status = self._get_youtube_status()
+                try:
+                    youtube_status = self._get_youtube_status()
+                    if not isinstance(youtube_status, list):
+                        youtube_status = []
+                except Exception as e:
+                    print(f"⚠️ [Worker] Error getting youtube status: {e}")
+                    youtube_status = []
 
                 self.stats_updated.emit(
                     {
@@ -195,7 +193,7 @@ class BackendWorker(QThread):
                         "active": active,
                         "waiting": waiting,
                         "stopped": stopped,
-                        "youtube_downloads": youtube_status,  # اضافه کردن دانلودهای یوتیوب
+                        "youtube_downloads": youtube_status,
                     }
                 )
 
@@ -208,10 +206,10 @@ class BackendWorker(QThread):
     def _get_youtube_status(self) -> List[dict]:
         """گرفتن وضعیت دانلودهای یوتیوب"""
         status_list = []
-        with self.youtube_lock:
-            for download_id, info in self.youtube_downloads.items():
-                status_list.append(
-                    {
+        try:
+            with self.youtube_lock:
+                for download_id, info in self.youtube_downloads.items():
+                    status_list.append({
                         "id": download_id,
                         "url": info.get("url", ""),
                         "title": info.get("yt_options", {}).get("title", ""),
@@ -220,15 +218,16 @@ class BackendWorker(QThread):
                         "speed": info.get("speed", ""),
                         "eta": info.get("eta", ""),
                         "total_size": info.get("total_size", 0),
-                    }
-                )
+                    })
+        except Exception as e:
+            print(f"⚠️ [Worker] Error getting youtube status: {e}")
+            return []
+        
         return status_list
 
     def stop(self):
         self.running = False
-        # توقف دانلودهای یوتیوب
         self._stop_all_youtube_downloads()
-        # توقف workerهای گرفتن حجم
         self._stop_all_size_workers()
         if not self.wait(2000):
             self.terminate()
@@ -411,7 +410,6 @@ class BackendWorker(QThread):
             proxy_url=proxy_url,
         )
 
-        # اتصال سیگنال‌ها
         worker.progress.connect(lambda p: self._on_youtube_progress(download_id, p))
         worker.status.connect(lambda s: self._on_youtube_status(download_id, s))
         worker.speed_eta.connect(lambda s, e: self._on_youtube_speed(download_id, s, e))
@@ -419,17 +417,14 @@ class BackendWorker(QThread):
             lambda success, msg: self._on_youtube_finished(download_id, success, msg)
         )
 
-        # ===== لاک رو بگیر و worker رو ذخیره کن =====
         with self.youtube_lock:
             self.youtube_workers[download_id] = worker
             if download_id in self.youtube_downloads:
                 self.youtube_downloads[download_id]["status"] = "downloading"
                 self.store.update_youtube_status(download_id, "downloading")
 
-        # ===== ارسال سیگنال وضعیت =====
         self.youtube_status.emit(download_id, "downloading")
 
-        # ===== شروع دانلود =====
         print(f"🎬 [START] Calling worker.start() for {download_id}")
         worker.start()
         print(f"🎬 YouTube download started: {download_id}")
@@ -437,7 +432,6 @@ class BackendWorker(QThread):
     def _resume_youtube_download(self, item: dict):
         """ادامه دانلود یوتیوب بعد از راه‌اندازی مجدد"""
         download_id = item["id"]
-        # مشابه _start_youtube_download ولی با وضعیت paused
         worker = YouTubeWorker(
             url=item["url"],
             output_path=item["save_path"],
@@ -474,7 +468,6 @@ class BackendWorker(QThread):
                 if download_id in self.youtube_downloads:
                     self.youtube_downloads[download_id]["status"] = "paused"
                     self.store.update_youtube_status(download_id, "paused")
-            # ===== ارسال سیگنال =====
             self.youtube_status.emit(download_id, "paused")
             print(f"⏸️ [Worker] Paused and signal sent: {download_id}")
 
@@ -493,7 +486,6 @@ class BackendWorker(QThread):
                 if download_id in self.youtube_downloads:
                     self.youtube_downloads[download_id]["status"] = "downloading"
                     self.store.update_youtube_status(download_id, "downloading")
-            # ===== ارسال سیگنال =====
             self.youtube_status.emit(download_id, "downloading")
             print(f"▶️ [Worker] Resumed and signal sent: {download_id}")
 
@@ -511,13 +503,11 @@ class BackendWorker(QThread):
                 del self.youtube_workers[download_id]
 
             if download_id in self.youtube_downloads:
-                # ذخیره مسیر فایل برای پاک کردن
                 yt_options = self.youtube_downloads[download_id].get("yt_options", {})
                 title = yt_options.get("title", "Unknown")
                 format_type = yt_options.get("format", "video")
                 ext = "mp4" if format_type == "video" else "mp3"
 
-                # ساخت نام فایل
                 import re
 
                 filename = re.sub(r'[<>:"/\\|?*]', "_", title)
@@ -526,16 +516,13 @@ class BackendWorker(QThread):
                 save_path = self.youtube_downloads[download_id].get("save_path", "")
                 file_path = os.path.join(save_path, full_filename)
 
-        # ===== خارج از لاک، worker رو کنسل کن =====
         if worker and worker.is_running():
             worker.cancel()
             worker.wait(1000)
 
-        # ===== پاک کردن فایل‌ها =====
         if file_path and save_path:
             self._delete_youtube_files(file_path, save_path, title)
 
-        # ===== لاک رو بگیر و دیتا رو پاک کن =====
         with self.youtube_lock:
             if download_id in self.youtube_downloads:
                 del self.youtube_downloads[download_id]
@@ -559,19 +546,17 @@ class BackendWorker(QThread):
             import glob
             import re
 
-            # ===== پاک کردن فایل اصلی =====
             if os.path.exists(file_path):
                 os.remove(file_path)
                 print(f"🗑️ Deleted: {file_path}")
 
-            # ===== پاک کردن فایل‌های ناقص (پسوندهای مختلف) =====
             base_name = os.path.splitext(os.path.basename(file_path))[0]
             patterns = [
-                f"{base_name}.*.part",  # فایل‌های part
-                f"{base_name}.*.ytdl",  # فایل‌های ytdl
-                f"{base_name}.*.f*",  # فایل‌های fragment
-                f"{base_name}.*.temp",  # فایل‌های temp
-                f"{base_name}.*.download",  # فایل‌های download
+                f"{base_name}.*.part", 
+                f"{base_name}.*.ytdl",  
+                f"{base_name}.*.f*", 
+                f"{base_name}.*.temp",  
+                f"{base_name}.*.download", 
             ]
 
             for pattern in patterns:
@@ -583,7 +568,6 @@ class BackendWorker(QThread):
                     except:
                         pass
 
-            # ===== پاک کردن با استفاده از title (برای اطمینان) =====
             safe_title = re.sub(r'[<>:"/\\|?*]', "_", title)
             partial_patterns = [
                 f"{safe_title}.*.part",
@@ -637,7 +621,6 @@ class BackendWorker(QThread):
             f"🎬 [Worker] YouTube download finished: {download_id} - Success: {success} - Message: {message}"
         )
 
-        # ===== اگر cancelled هست، فقط پاک کن =====
         if "cancelled" in message.lower() or "cancel" in message.lower():
             with self.youtube_lock:
                 if download_id in self.youtube_downloads:
@@ -661,14 +644,11 @@ class BackendWorker(QThread):
                     self.youtube_downloads[download_id]["error_message"] = message
                     self.store.update_youtube_status(download_id, "error")
 
-            # حذف worker
             if download_id in self.youtube_workers:
                 del self.youtube_workers[download_id]
 
-            # حذف از GID set
             self.youtube_gids.discard(download_id)
 
-        # ===== ارسال سیگنال برای UI =====
         self.youtube_finished.emit(download_id, success, message)
 
     def _stop_all_youtube_downloads(self):
@@ -685,7 +665,6 @@ class BackendWorker(QThread):
 
     def _fetch_size_for_gid(self, gid: str, url: str):
         """دریافت حجم و کتگوری برای یک دانلود مشخص (فقط برای aria2)"""
-        # ===== بخش جدید: اگر GID یوتیوب باشه، نادیده بگیر =====
         if gid in self.youtube_gids:
             return
 

@@ -15,7 +15,6 @@ KEYRING_KEY = "aria2_secret"
 
 
 class Queue:
-    # ... (کدهای قبلی رو نگه دار، تغییری نداره)
     def __init__(
         self,
         name,
@@ -116,6 +115,38 @@ class Queue:
         else:
             return t >= start or t <= end
 
+    def get_next_schedule_time(self):
+        """Get the next scheduled time for this queue"""
+        if not self.schedule_enabled:
+            return None
+        
+        now = datetime.now()
+        today_weekday = now.weekday()
+        current_time = now.time().replace(second=0, microsecond=0)
+        
+        # Check if today is in days
+        if today_weekday in self.days:
+            start = self.schedule_start
+            end = self.schedule_end
+            
+            if start <= end:
+                if current_time <= end:
+                    # Today, at start time
+                    return datetime.combine(now.date(), start)
+            else:
+                # Overnight schedule
+                if current_time >= start or current_time <= end:
+                    return datetime.combine(now.date(), start)
+        
+        # Find next day
+        for i in range(1, 8):
+            next_day = (today_weekday + i) % 7
+            if next_day in self.days:
+                next_date = now.date() + timedelta(days=i)
+                return datetime.combine(next_date, self.schedule_start)
+        
+        return None
+
 
 class DataStore:
     def __init__(self):
@@ -131,7 +162,6 @@ class DataStore:
         self.settings = self._get_default_settings()
         self.download_proxies = {}
         
-        # ===== بخش جدید: ذخیره‌سازی دانلودهای یوتیوب =====
         self.youtube_downloads_file = self.config_dir / "youtube_downloads.json"
         self.youtube_downloads: Dict[str, dict] = {}  # download_id -> download_data
 
@@ -154,7 +184,6 @@ class DataStore:
         }
 
     def load(self):
-        # ===== بارگذاری داده‌های قبلی =====
         if not self.data_file.exists():
             print("📁 No config file found, using defaults")
             self.queues = [Queue("Default", paused=True)]
@@ -197,7 +226,6 @@ class DataStore:
         if not self.queues:
             self.queues = [Queue("Default", paused=True)]
 
-        # ===== بارگذاری دانلودهای یوتیوب =====
         self._load_youtube_downloads()
 
     def _load_youtube_downloads(self):
@@ -305,10 +333,8 @@ class DataStore:
         # Restore secret
         self.settings["aria2_secret"] = secret
         
-        # ===== ذخیره دانلودهای یوتیوب =====
         self._save_youtube_downloads()
 
-    # ===== بخش جدید: متدهای مدیریت دانلود یوتیوب =====
     
     def add_youtube_download(self, download_data: dict) -> str:
         """

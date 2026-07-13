@@ -20,7 +20,6 @@ from utils.helpers import format_size, get_icon
 
 
 class YouTubeProgressDialog(QDialog):
-    # ===== سیگنال‌ها برای ارتباط با MainWindow =====
     pause_requested = pyqtSignal(str)  # download_id
     resume_requested = pyqtSignal(str)  # download_id
     cancel_requested = pyqtSignal(str)  # download_id
@@ -48,11 +47,7 @@ class YouTubeProgressDialog(QDialog):
         )
         self.setWindowModality(Qt.WindowModality.NonModal)
         self.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose, True)
-        self.setWindowFlags(
-            self.windowFlags() & ~Qt.WindowType.WindowContextHelpButtonHint
-        )
 
-        # ===== ذخیره داده‌ها =====
         self.download_id = download_id
         self.url = url
         self.output_path = output_path
@@ -75,20 +70,16 @@ class YouTubeProgressDialog(QDialog):
 
         self._build_ui()
 
-        # ===== اگر دانلود جدید هست، worker بساز =====
         if not self._is_existing_download:
             self._create_worker()
         else:
-            # ===== دانلود موجود: وضعیت رو از parent بگیر =====
             self.status_label.setText("⏳ Loading...")
             self.status_label.setStyleSheet("color: #95a5a6;")
 
-            # ===== پیش‌فرض: دکمه رو غیرفعال کن =====
             self.action_btn.setEnabled(False)
             self.action_btn.setIcon(get_icon("media-playback-start"))
             self.action_btn.setText(" Start")
 
-            # ===== اگر parent و _all_downloads موجوده، وضعیت رو بگیر =====
             if (
                 parent
                 and hasattr(parent, "_all_downloads")
@@ -99,10 +90,8 @@ class YouTubeProgressDialog(QDialog):
                 speed = parent._all_downloads[download_id].get("speed", "")
                 eta = parent._all_downloads[download_id].get("eta", "")
 
-                # ===== به‌روزرسانی progress =====
                 self.update_progress(progress, speed, eta)
 
-                # ===== تنظیم وضعیت =====
                 if status == "pending":
                     self.status_label.setText("⏳ Pending...")
                     self.status_label.setStyleSheet("color: #f39c12;")
@@ -140,7 +129,6 @@ class YouTubeProgressDialog(QDialog):
                     self.action_btn.setEnabled(False)
 
             else:
-                # ===== اگر parent یا _all_downloads موجود نیست =====
                 self.status_label.setText("⏳ Pending...")
                 self.status_label.setStyleSheet("color: #f39c12;")
                 self.action_btn.setEnabled(False)
@@ -319,7 +307,6 @@ class YouTubeProgressDialog(QDialog):
         self._worker.resumed.connect(self._on_resumed)
         self._worker.start()
 
-    # ===== متدهای به‌روزرسانی از خارج =====
     def update_progress(self, progress: int, speed: str = "", eta: str = ""):
         """به‌روزرسانی پیشرفت از خارج"""
         self._progress_value = progress
@@ -341,7 +328,6 @@ class YouTubeProgressDialog(QDialog):
         self._status_text = status
         self.status_label.setText(status)
 
-        # تغییر رنگ بر اساس وضعیت
         if "Downloading" in status or "⬇" in status:
             self.status_label.setStyleSheet("color: #3daee9;")
         elif "Paused" in status or "⏸" in status:
@@ -369,7 +355,6 @@ class YouTubeProgressDialog(QDialog):
             self.progress_bar.setValue(100)
             self.progress_bar.setFormat("100%")
 
-            # ===== تغییر دکمه به Open Folder =====
             self.action_btn.setIcon(get_icon("folder"))
             self.action_btn.setText(" Open Folder")
             self.action_btn.setEnabled(True)
@@ -417,7 +402,6 @@ class YouTubeProgressDialog(QDialog):
         """دریافت worker (برای اتصال سیگنال از خارج)"""
         return self._worker
 
-    # ===== سیگنال‌های داخلی =====
     def _on_progress(self, value):
         self._progress_value = value
         self.progress_bar.setValue(value)
@@ -513,7 +497,6 @@ class YouTubeProgressDialog(QDialog):
             self.accept()
             return
 
-        # ===== اگر دانلود موجود هست، سیگنال بفرست =====
         if self._is_existing_download and self.download_id:
             reply = QMessageBox.question(
                 self,
@@ -530,7 +513,6 @@ class YouTubeProgressDialog(QDialog):
                 QTimer.singleShot(500, self.reject)
             return
 
-        # ===== اگر worker داریم =====
         if self._worker:
             reply = QMessageBox.question(
                 self,
@@ -560,7 +542,6 @@ class YouTubeProgressDialog(QDialog):
             self.status_label.setStyleSheet("color: #27ae60;")
             self.speed_eta_label.setText("")
 
-            # ===== تغییر دکمه به Open Folder =====
             self.action_btn.setIcon(get_icon("folder"))
             self.action_btn.setText(" Open Folder")
             self.action_btn.setEnabled(True)
@@ -598,6 +579,9 @@ class YouTubeProgressDialog(QDialog):
     def set_action_button_enabled(self, enabled: bool):
         """فعال/غیرفعال کردن دکمه اکشن"""
         self.action_btn.setEnabled(enabled)
+        if not enabled:
+            self.action_btn.setIcon(get_icon("media-playback-start"))
+            self.action_btn.setText(" Start")
 
     def _open_folder(self):
         """باز کردن پوشه"""

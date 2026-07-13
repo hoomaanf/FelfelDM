@@ -4,7 +4,6 @@ import json
 import subprocess
 import time
 import re
-import socket
 import os
 from typing import Optional, Dict, Any, List
 import urllib.request
@@ -20,9 +19,9 @@ class Aria2RPC:
         self._connected = False
         self._aria2_process = None
 
-        # تنظیمات aria2 برای زمان‌های مختلف
         self._timeout = 10
         self._retry_count = 3
+        self._retry_delay = 0.5
 
     def _is_youtube_gid(self, gid: str) -> bool:
         """بررسی اینکه GID مربوط به دانلود یوتیوب هست یا نه (فرمت UUID)"""
@@ -41,17 +40,16 @@ class Aria2RPC:
         return f"{self.host}:{self.port}/jsonrpc"
 
     def _call(self, method: str, params: List = None) -> Optional[Dict]:
-        """فراخوانی متد RPC"""
+        """فراخوانی متد RPC با مدیریت خطا"""
         if params is None:
             params = []
 
-        # اگر secret وجود دارد، به params اضافه کن
         if self.secret:
             params = [f"token:{self.secret}"] + params
 
         payload = {
             "jsonrpc": "2.0",
-            "id": "felfeldm",
+            "id": f"felfeldm_{int(time.time() * 1000)}",
             "method": method,
             "params": params,
         }
@@ -67,29 +65,52 @@ class Aria2RPC:
                     result = json.loads(response.read().decode("utf-8"))
                     if "error" in result:
                         error_msg = result["error"].get("message", str(result["error"]))
-                        if "Invalid GID" in error_msg:
+                        if "Invalid GID" in error_msg or ("not found" in error_msg.lower() and "gid" in error_msg.lower()):
+                            print(f"ℹ️ [aria2] GID not found (ignored): {error_msg}")
                             return None
                         if self.on_error:
                             self.on_error(f"aria2 error: {error_msg}")
                         return None
                     return result.get("result")
+
+            except urllib.error.HTTPError as e:
+                print(f"❌ [aria2] HTTP Error {e.code}: {e.reason}")
+                try:
+                    error_body = e.read().decode("utf-8")
+                    print(f"❌ [aria2] Response body: {error_body}")
+                    print(f"❌ [aria2] Method: {method}")
+                    print(f"❌ [aria2] Params: {params}")
+                except:
+                    pass
+
+                if "GID" in error_body and "not found" in error_body:
+                    return None
+
+                if attempt < self._retry_count - 1:
+                    time.sleep(self._retry_delay * (attempt + 1))
+                    continue
+                if self.on_error:
+                    self.on_error(f"HTTP Error {e.code}: {e.reason}")
+                return None
+
             except urllib.error.URLError as e:
                 if attempt < self._retry_count - 1:
-                    time.sleep(0.5)
+                    time.sleep(self._retry_delay * (attempt + 1))
                     continue
                 if self.on_error:
                     self.on_error(f"Connection error: {e}")
                 return None
+
             except Exception as e:
                 if attempt < self._retry_count - 1:
-                    time.sleep(0.5)
+                    time.sleep(self._retry_delay * (attempt + 1))
                     continue
                 if self.on_error:
                     self.on_error(f"Error: {e}")
                 return None
 
         return None
-
+    
     def is_connected(self) -> bool:
         """بررسی اتصال به aria2"""
         try:
@@ -129,7 +150,6 @@ class Aria2RPC:
 
             subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
-            # منتظر بمان تا aria2 راه‌اندازی شود
             for _ in range(30):
                 time.sleep(0.5)
                 if self.is_connected():
@@ -147,8 +167,6 @@ class Aria2RPC:
             if self.on_error:
                 self.on_error(f"Failed to start aria2: {e}")
             return False
-
-    # ===== متدهای اصلی =====
 
     def get_version(self) -> Optional[Dict]:
         """دریافت نسخه aria2"""
@@ -178,7 +196,6 @@ class Aria2RPC:
         if not gid:
             return None
 
-        # ===== SKIP برای GIDهای یوتیوب =====
         if self._is_youtube_gid(gid):
             return None
 
@@ -189,20 +206,20 @@ class Aria2RPC:
         return self.get_status(gid)
 
     def add_url(self, url: str, options: Dict = None) -> Optional[str]:
-        """افزودن دانلود جدید با URL"""
+        """
+        افزودن دانلود جدید با URL
+        
+        اصلاح شده: options مستقیماً به صورت dict ارسال میشه، نه list
+        """
         if not url:
             return None
 
         if options is None:
             options = {}
 
-        # تبدیل options به فرمت aria2
-        aria2_options = []
-        for key, value in options.items():
-            if value is not None and value != "":
-                aria2_options.append(f"{key}={value}")
+        options = {k: v for k, v in options.items() if v is not None and v != ""}
 
-        params = [[url], aria2_options]
+        params = [[url], options]
 
         result = self._call("aria2.addUri", params)
         return result
@@ -220,7 +237,7 @@ class Aria2RPC:
         if not gid:
             return False
 
-        # ===== SKIP برای GIDهای یوتیوب =====
+        
         if self._is_youtube_gid(gid):
             return False
 
@@ -232,7 +249,7 @@ class Aria2RPC:
         if not gid:
             return False
 
-        # ===== SKIP برای GIDهای یوتیوب =====
+        
         if self._is_youtube_gid(gid):
             return False
 
@@ -244,23 +261,39 @@ class Aria2RPC:
         if not gid:
             return False
 
-        # ===== SKIP برای GIDهای یوتیوب =====
+        
         if self._is_youtube_gid(gid):
             return False
 
         result = self._call("aria2.unpause", [gid])
         return result is not None
 
+    def unpause(self, gid: str) -> bool:
+        """همان resume (برای سازگاری)"""
+        return self.resume(gid)
+
     def remove(self, gid: str) -> bool:
         """حذف دانلود"""
         if not gid:
             return False
 
-        # ===== SKIP برای GIDهای یوتیوب =====
+        
         if self._is_youtube_gid(gid):
             return False
 
         result = self._call("aria2.remove", [gid])
+        return result is not None
+
+    def force_remove(self, gid: str) -> bool:
+        """حذف اجباری دانلود"""
+        if not gid:
+            return False
+
+        
+        if self._is_youtube_gid(gid):
+            return False
+
+        result = self._call("aria2.forceRemove", [gid])
         return result is not None
 
     def change_global_option(self, options: Dict) -> bool:
@@ -271,12 +304,16 @@ class Aria2RPC:
         result = self._call("aria2.changeGlobalOption", [options])
         return result is not None
 
+    def get_global_option(self) -> Optional[Dict]:
+        """دریافت تنظیمات کلی"""
+        return self._call("aria2.getGlobalOption")
+
     def set_download_speed_limit(self, gid: str, speed_kb: int) -> bool:
         """تنظیم محدودیت سرعت برای یک دانلود"""
         if not gid:
             return False
 
-        # ===== SKIP برای GIDهای یوتیوب =====
+        
         if self._is_youtube_gid(gid):
             return False
 
@@ -288,9 +325,32 @@ class Aria2RPC:
         result = self._call("aria2.changeOption", [gid, options])
         return result is not None
 
+    def change_option(self, gid: str, options: Dict) -> bool:
+        """تغییر تنظیمات یک دانلود"""
+        if not gid or not options:
+            return False
+
+        
+        if self._is_youtube_gid(gid):
+            return False
+
+        result = self._call("aria2.changeOption", [gid, options])
+        return result is not None
+
+    def get_option(self, gid: str) -> Optional[Dict]:
+        """دریافت تنظیمات یک دانلود"""
+        if not gid:
+            return None
+
+        
+        if self._is_youtube_gid(gid):
+            return None
+
+        return self._call("aria2.getOption", [gid])
+
     def set_global_proxy(self, proxy_config) -> bool:
         """تنظیم پروکسی کلی"""
-        if proxy_config and proxy_config.is_valid():
+        if proxy_config and hasattr(proxy_config, 'is_valid') and proxy_config.is_valid():
             proxy_url = proxy_config._build_proxy_url()
             options = {"all-proxy": proxy_url}
         else:
@@ -298,3 +358,186 @@ class Aria2RPC:
 
         result = self._call("aria2.changeGlobalOption", [options])
         return result is not None
+
+
+    def pause_all(self) -> bool:
+        """توقف همه دانلودها"""
+        result = self._call("aria2.pauseAll")
+        return result is not None
+
+    def force_pause_all(self) -> bool:
+        """توقف اجباری همه دانلودها"""
+        result = self._call("aria2.forcePauseAll")
+        return result is not None
+
+    def resume_all(self) -> bool:
+        """ادامه همه دانلودها"""
+        result = self._call("aria2.unpauseAll")
+        return result is not None
+
+    def unpause_all(self) -> bool:
+        """همان resume_all (برای سازگاری)"""
+        return self.resume_all()
+
+    def purge_download_result(self) -> bool:
+        """پاک کردن نتایج دانلودهای کامل شده"""
+        result = self._call("aria2.purgeDownloadResult")
+        return result is not None
+
+    def save_session(self) -> bool:
+        """ذخیره جلسه aria2"""
+        result = self._call("aria2.saveSession")
+        return result is not None
+
+    def shutdown(self) -> bool:
+        """خاموش کردن aria2"""
+        result = self._call("aria2.shutdown")
+        if result is not None:
+            self._connected = False
+            return True
+        return False
+
+    def force_shutdown(self) -> bool:
+        """خاموش کردن اجباری aria2"""
+        result = self._call("aria2.forceShutdown")
+        if result is not None:
+            self._connected = False
+            return True
+        return False
+
+    def get_files(self, gid: str) -> Optional[List[Dict]]:
+        """دریافت لیست فایل‌های یک دانلود"""
+        if not gid:
+            return None
+
+        
+        if self._is_youtube_gid(gid):
+            return None
+
+        return self._call("aria2.getFiles", [gid])
+
+    def get_peers(self, gid: str) -> Optional[List[Dict]]:
+        """دریافت لیست همتاهای یک دانلود"""
+        if not gid:
+            return None
+
+        
+        if self._is_youtube_gid(gid):
+            return None
+
+        return self._call("aria2.getPeers", [gid])
+
+    def get_servers(self, gid: str) -> Optional[List[Dict]]:
+        """دریافت لیست سرورهای یک دانلود"""
+        if not gid:
+            return None
+
+        
+        if self._is_youtube_gid(gid):
+            return None
+
+        return self._call("aria2.getServers", [gid])
+
+    def change_position(self, gid: str, pos: int, how: str = "POS_SET") -> Optional[int]:
+        """
+        تغییر موقعیت دانلود در صف
+
+        Args:
+            gid: شناسه دانلود
+            pos: موقعیت جدید یا مقدار جابه‌جایی
+            how: روش جابه‌جایی ("POS_SET", "POS_CUR", "POS_END")
+        """
+        if not gid:
+            return None
+
+        
+        if self._is_youtube_gid(gid):
+            return None
+
+        return self._call("aria2.changePosition", [gid, pos, how])
+
+    def add_torrent(self, torrent: str, options: Dict = None) -> Optional[str]:
+        """افزودن دانلود با فایل تورنت"""
+        if not torrent:
+            return None
+
+        if options is None:
+            options = {}
+
+        # خواندن فایل تورنت
+        try:
+            with open(torrent, "rb") as f:
+                torrent_data = f.read()
+            import base64
+            torrent_b64 = base64.b64encode(torrent_data).decode("ascii")
+        except Exception as e:
+            if self.on_error:
+                self.on_error(f"Failed to read torrent file: {e}")
+            return None
+
+        options = {k: v for k, v in options.items() if v is not None and v != ""}
+        params = [torrent_b64, options]
+
+        return self._call("aria2.addTorrent", params)
+
+    def add_metalink(self, metalink: str, options: Dict = None) -> Optional[str]:
+        """افزودن دانلود با فایل متالینک"""
+        if not metalink:
+            return None
+
+        if options is None:
+            options = {}
+
+        options = {k: v for k, v in options.items() if v is not None and v != ""}
+        params = [metalink, options]
+
+        return self._call("aria2.addMetalink", params)
+
+
+    def get_gid_status(self, gid: str) -> Optional[Dict]:
+        """دریافت وضعیت دانلود با GID (با هندلینگ خطا)"""
+        try:
+            return self.get_status(gid)
+        except:
+            return None
+
+    def is_download_active(self, gid: str) -> bool:
+        """بررسی اینکه دانلود فعال است یا نه"""
+        status = self.get_status(gid)
+        if not status:
+            return False
+        return status.get("status") in ["active", "waiting"]
+
+    def is_download_complete(self, gid: str) -> bool:
+        """بررسی اینکه دانلود کامل شده است یا نه"""
+        status = self.get_status(gid)
+        if not status:
+            return False
+        return status.get("status") == "complete"
+
+    def is_download_paused(self, gid: str) -> bool:
+        """بررسی اینکه دانلود متوقف شده است یا نه"""
+        status = self.get_status(gid)
+        if not status:
+            return False
+        return status.get("status") == "paused"
+
+    def get_download_progress(self, gid: str) -> Optional[float]:
+        """دریافت پیشرفت دانلود به صورت درصد"""
+        status = self.get_status(gid)
+        if not status:
+            return None
+
+        total = int(status.get("totalLength", 0))
+        completed = int(status.get("completedLength", 0))
+
+        if total == 0:
+            return 0.0
+        return (completed / total) * 100
+
+    def get_download_speed(self, gid: str) -> Optional[int]:
+        """دریافت سرعت دانلود به بایت بر ثانیه"""
+        status = self.get_status(gid)
+        if not status:
+            return None
+        return int(status.get("downloadSpeed", 0))

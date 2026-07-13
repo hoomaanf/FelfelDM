@@ -19,8 +19,8 @@ class YouTubeWorker(QThread):
     info_fetched = pyqtSignal(dict)
     paused = pyqtSignal()
     resumed = pyqtSignal()
-    size_fetched = pyqtSignal(int)  # ===== سیگنال جدید برای حجم =====
-
+    size_fetched = pyqtSignal(int)  
+    
     def __init__(
         self, url, output_path, format_type="mp4", cookie_file=None, proxy_url=None
     ):
@@ -31,20 +31,20 @@ class YouTubeWorker(QThread):
         self.cookie_file = cookie_file
         self.proxy_url = proxy_url  # Proxy URL for yt-dlp
         self.is_fetching_info = False
-        self.is_fetching_size = False  # ===== جدید =====
+        self.is_fetching_size = False  
         self.process = None
         self.is_paused = False
         self.is_cancelled = False
         self.current_file = None
         self._is_running = False
         self._last_progress = 0
-        self._file_size = 0  # ===== جدید: حجم فایل =====
+        self._file_size = 0  
 
     def run(self):
         self._is_running = True
         if self.is_fetching_info:
             self._fetch_info()
-        elif self.is_fetching_size:  # ===== جدید =====
+        elif self.is_fetching_size: 
             self._fetch_size()
         else:
             self._download()
@@ -53,7 +53,6 @@ class YouTubeWorker(QThread):
     def is_running(self):
         return self._is_running or self.isRunning()
 
-    # ===== بخش جدید: گرفتن حجم با yt-dlp =====
     def fetch_size(self):
         """دریافت حجم فایل با yt-dlp (بدون دانلود)"""
         if self.is_fetching_size:
@@ -67,7 +66,6 @@ class YouTubeWorker(QThread):
         try:
             self.status.emit("Getting file size...")
 
-            # ===== چک کردن وجود yt-dlp =====
             import shutil
 
             if not shutil.which("yt-dlp"):
@@ -97,7 +95,6 @@ class YouTubeWorker(QThread):
 
             result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
 
-            # ===== چاپ خطاها برای دیباگ =====
             if result.returncode != 0:
                 error_msg = result.stderr.strip()
                 print(f"❌ Size fetch failed with code {result.returncode}")
@@ -114,7 +111,6 @@ class YouTubeWorker(QThread):
                 self.size_fetched.emit(0)
                 return
 
-            # دریافت حجم
             filesize = info.get("filesize")
             if not filesize:
                 filesize = info.get("filesize_approx", 0)
@@ -126,7 +122,6 @@ class YouTubeWorker(QThread):
                 )
                 self.size_fetched.emit(self._file_size)
             else:
-                # اگر حجم مستقیم نبود، سعی کن از فرمت‌ها محاسبه کنی
                 formats = info.get("formats", [])
                 max_size = 0
                 for f in formats:
@@ -140,9 +135,7 @@ class YouTubeWorker(QThread):
                     self.size_fetched.emit(self._file_size)
                 else:
                     print(f"⚠️ Could not determine file size for {self.url}")
-                    # ===== اینجا رو عوض کن: به جای 0، یک مقدار پیش‌فرض 1 ارسال کن =====
-                    # تا دانلود شروع بشه
-                    self.size_fetched.emit(1)  # 1 byte به عنوان placeholder
+                    self.size_fetched.emit(1)  
 
         except subprocess.TimeoutExpired:
             print("❌ Timeout while fetching size")
@@ -296,8 +289,6 @@ class YouTubeWorker(QThread):
         finally:
             self._is_running = False
 
-    # core/youtube_worker.py - بخش _download (خطوطی که status رو emit میکنن)
-
     def _download(self):
         """Download YouTube video/audio"""
         try:
@@ -345,7 +336,7 @@ class YouTubeWorker(QThread):
 
             print(f"📥 Full command: {' '.join(cmd)}")
 
-            self.status.emit("⬇ Downloading...")  # ===== فقط یکبار =====
+            self.status.emit("⬇ Downloading...")
 
             env = os.environ.copy()
             if self.proxy_url:

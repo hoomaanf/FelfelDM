@@ -28,6 +28,7 @@ class Queue:
         self.paused = paused
         self.proxy_config = proxy_config
         self.speed_limit = speed_limit
+        self.manually_paused = paused
 
     def to_dict(self):
         return {

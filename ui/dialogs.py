@@ -1548,16 +1548,13 @@ class YouTubeDownloadDialog(QDialog):
         cookie_row.addWidget(cookie_browse)
         options_layout.addRow("Cookies:", cookie_row)
 
-        # ===== بخش جدید: انتخاب صف =====
         queue_row = QHBoxLayout()
         self.queue_combo = QComboBox()
 
-        # پر کردن صف‌ها
         for i, q in enumerate(self.queues):
             if q.name != "__direct__":
                 self.queue_combo.addItem(q.name, i)
 
-        # انتخاب صف پیش‌فرض
         if self.default_queue < self.queue_combo.count():
             self.queue_combo.setCurrentIndex(self.default_queue)
 
@@ -1861,11 +1858,9 @@ class YouTubeDownloadDialog(QDialog):
             QMessageBox.warning(self, "Error", "Please enter a valid YouTube URL")
             return
 
-        # انتخاب صف
         queue_index = self.queue_combo.currentData()
         queue_name = self.queue_combo.currentText()
 
-        # آماده‌سازی داده برای ارسال
         download_data = {
             "url": data["url"],
             "save_path": data["path"],
@@ -1883,7 +1878,6 @@ class YouTubeDownloadDialog(QDialog):
             "video_info": data.get("video_info"),
         }
 
-        # ارسال سیگنال به parent
         self.youtube_download_requested.emit(download_data)
         self.accept()
 
@@ -1903,7 +1897,6 @@ class YouTubeDownloadDialog(QDialog):
             ext = format_info.get("ext", "mp4")
             resolution = format_info.get("resolution", "")
 
-            # تشخیص نوع (ویدیو یا صدا)
             if format_info.get("vcodec") and format_info.get("vcodec") != "none":
                 format_type = "video"
                 quality = resolution or "best"
