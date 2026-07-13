@@ -1328,7 +1328,6 @@ class MainWindow(QMainWindow):
             all_queues = self.store.queues
             dlg = QuickDownloadDialog(all_queues, self)
             dlg.url_edit.setPlainText(urls[0])
-
             dlg.setWindowModality(Qt.WindowModality.WindowModal)
 
             if dlg.exec():
@@ -1336,16 +1335,24 @@ class MainWindow(QMainWindow):
                 if not d["urls"]:
                     return
 
-                direct_queue = None
+                # ===== دریافت صف انتخاب شده از دیالوگ =====
+                queue_name = d.get("queue_name", "__direct__")
+                target_queue = None
+
                 for q in self.store.queues:
-                    if q.name == "__direct__":
-                        direct_queue = q
+                    if q.name == queue_name:
+                        target_queue = q
                         break
-                if not direct_queue:
-                    direct_queue = Queue("__direct__", paused=False, max_concurrent=99)
-                    self.store.queues.insert(0, direct_queue)
-                else:
-                    direct_queue.paused = False
+
+                # ===== اگه صف وجود نداشت، بساز =====
+                if target_queue is None:
+                    target_queue = Queue(queue_name, paused=False)
+                    if queue_name == "__direct__":
+                        target_queue.max_concurrent = 99
+                    self.store.queues.insert(0, target_queue)
+                    self.store.save()
+                elif queue_name == "__direct__":
+                    target_queue.paused = False
 
                 options = {
                     "dir": d["path"],
@@ -1363,16 +1370,14 @@ class MainWindow(QMainWindow):
                 for url in d["urls"]:
                     gid = self.aria2.add_url(url, options)
                     if gid:
-                        direct_queue.downloads.append(gid)
+                        target_queue.downloads.append(gid)
                         raw_name = url.split("/")[-1]
-                        clean_name = (
-                            raw_name.split("?")[0] if "?" in raw_name else raw_name
-                        )
+                        clean_name = raw_name.split("?")[0] if "?" in raw_name else raw_name
                         if not clean_name:
                             clean_name = "Unknown"
                         full_path = os.path.join(d["path"], clean_name)
 
-                        direct_queue.downloads_info[gid] = {
+                        target_queue.downloads_info[gid] = {
                             "url": url,
                             "name": clean_name,
                             "totalLength": 0,
@@ -1389,7 +1394,16 @@ class MainWindow(QMainWindow):
                             ],
                             "category": "📁 Other",
                         }
-                        self.aria2.resume(gid)
+
+                        # ===== Pause نگه دار (مگر اینکه __direct__ باشه) =====
+                        if queue_name == "__direct__":
+                            self.aria2.resume(gid)
+                        else:
+                            self.aria2.pause(gid)
+                            if gid in self._all_downloads:
+                                self._all_downloads[gid]["status"] = "paused"
+                                self._all_downloads[gid]["downloadSpeed"] = 0
+
                         added_gids.append(gid)
 
                 self.store.save()
@@ -1397,12 +1411,27 @@ class MainWindow(QMainWindow):
                 self._refresh_table()
                 self._update_shutdown_button_state()
 
-                if len(added_gids) == 1:
-                    QTimer.singleShot(
-                        500, lambda: self._open_progress_dialog(added_gids[0])
+                # ===== پیام مناسب =====
+                if queue_name == "__direct__":
+                    self.tray.showMessage(
+                        "FelfelDM",
+                        f"✅ Added {len(added_gids)} download(s) to Direct Downloads",
+                        QSystemTrayIcon.MessageIcon.Information,
+                        2000,
                     )
+                else:
+                    self.tray.showMessage(
+                        "FelfelDM",
+                        f"✅ Added {len(added_gids)} download(s) to '{queue_name}' (paused)",
+                        QSystemTrayIcon.MessageIcon.Information,
+                        2000,
+                    )
+
+                if len(added_gids) == 1 and queue_name == "__direct__":
+                    QTimer.singleShot(500, lambda: self._open_progress_dialog(added_gids[0]))
             return
 
+        # ===== چندین URL =====
         visible_queues = [q for q in self.store.queues if q.name != "__direct__"]
 
         default_idx = 0
@@ -1457,6 +1486,8 @@ class MainWindow(QMainWindow):
 
                     new_gids.append(gid)
                     added += 1
+
+                    # ===== همیشه Pause کن (چون __direct__ نیست) =====
                     self.aria2.pause(gid)
                     if gid in self._all_downloads:
                         self._all_downloads[gid]["status"] = "paused"
@@ -1466,28 +1497,17 @@ class MainWindow(QMainWindow):
             self._refresh_queue_list()
             self._update_queue_buttons()
 
-            if q and not q.paused and q.is_scheduled_now():
-                for gid in new_gids:
-                    if gid in self._all_downloads:
-                        self.aria2.resume(gid)
-                        self._all_downloads[gid]["status"] = "active"
-                self._refresh_table()
-                self.tray.showMessage(
-                    "FelfelDM",
-                    f"✅ Added {added} download(s) to running queue",
-                    QSystemTrayIcon.MessageIcon.Information,
-                    2000,
-                )
-            elif added > 0:
-                self.tray.showMessage(
-                    "FelfelDM",
-                    f"✅ Added {added} download(s) in paused state",
-                    QSystemTrayIcon.MessageIcon.Information,
-                    2000,
-                )
+            # ===== هیچوقت Resume نکن (چون __direct__ نیست) =====
+            self._refresh_table()
+            self.tray.showMessage(
+                "FelfelDM",
+                f"✅ Added {added} download(s) to '{q.name}' (paused)",
+                QSystemTrayIcon.MessageIcon.Information,
+                2000,
+            )
 
             self._refresh_table()
-
+   
     def _add_download(self):
         visible_queues = [q for q in self.store.queues if q.name != "__direct__"]
 
