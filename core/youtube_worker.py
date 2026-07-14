@@ -19,8 +19,8 @@ class YouTubeWorker(QThread):
     info_fetched = pyqtSignal(dict)
     paused = pyqtSignal()
     resumed = pyqtSignal()
-    size_fetched = pyqtSignal(int)  
-    
+    size_fetched = pyqtSignal(int)
+
     def __init__(
         self, url, output_path, format_type="mp4", cookie_file=None, proxy_url=None
     ):
@@ -31,20 +31,20 @@ class YouTubeWorker(QThread):
         self.cookie_file = cookie_file
         self.proxy_url = proxy_url  # Proxy URL for yt-dlp
         self.is_fetching_info = False
-        self.is_fetching_size = False  
+        self.is_fetching_size = False
         self.process = None
         self.is_paused = False
         self.is_cancelled = False
         self.current_file = None
         self._is_running = False
         self._last_progress = 0
-        self._file_size = 0  
+        self._file_size = 0
 
     def run(self):
         self._is_running = True
         if self.is_fetching_info:
             self._fetch_info()
-        elif self.is_fetching_size: 
+        elif self.is_fetching_size:
             self._fetch_size()
         else:
             self._download()
@@ -135,7 +135,7 @@ class YouTubeWorker(QThread):
                     self.size_fetched.emit(self._file_size)
                 else:
                     print(f"⚠️ Could not determine file size for {self.url}")
-                    self.size_fetched.emit(1)  
+                    self.size_fetched.emit(1)
 
         except subprocess.TimeoutExpired:
             print("❌ Timeout while fetching size")

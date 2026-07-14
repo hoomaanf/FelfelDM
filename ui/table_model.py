@@ -64,7 +64,11 @@ class DownloadTableModel(QAbstractTableModel):
                     total = 0
 
                 if total == 0:
-                    if download_type == "youtube" and status in ["downloading", "pending", "paused"]:
+                    if download_type == "youtube" and status in [
+                        "downloading",
+                        "pending",
+                        "paused",
+                    ]:
                         return "⏳ Getting size..."
                     if status in ["waiting", "active", "paused"]:
                         return "⏳ Getting size..."
@@ -264,7 +268,7 @@ class DownloadTableModel(QAbstractTableModel):
                 if status == "error":
                     return QColor("#e74c3c")
                 if status == "downloading":
-                    return QColor("#9b59b6")  
+                    return QColor("#9b59b6")
                 if status == "paused":
                     return QColor("#f39c12")
                 if status == "pending":
@@ -283,7 +287,7 @@ class DownloadTableModel(QAbstractTableModel):
 
         if role == Qt.ItemDataRole.BackgroundRole:
             if download_type == "youtube":
-                return QColor(155, 89, 182, 20) 
+                return QColor(155, 89, 182, 20)
 
         return None
 
@@ -400,7 +404,11 @@ class DownloadTableModel(QAbstractTableModel):
                         if len(parts) == 2:
                             return int(parts[0]) * 60 + int(parts[1])
                         elif len(parts) == 3:
-                            return int(parts[0]) * 3600 + int(parts[1]) * 60 + int(parts[2])
+                            return (
+                                int(parts[0]) * 3600
+                                + int(parts[1]) * 60
+                                + int(parts[2])
+                            )
                 except:
                     pass
             return 999999999

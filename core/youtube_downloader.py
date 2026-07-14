@@ -38,13 +38,13 @@ class YouTubeDownloader:
 
     def download(
         self, url: str, output_path: str, format_type: str = "mp4", gid: str = None
-    ) -> Tuple[bool, str, str]:  # اضافه کردن خروجی: مسیر فایل
+    ) -> Tuple[bool, str, str]: 
         cmd = [
             self.ytdlp_path,
             "-o",
             os.path.join(output_path, "%(title)s.%(ext)s"),
             "--no-playlist",
-            "--restrict-filenames",  # مهم: نام فایل رو امن‌تر می‌کنه
+            "--restrict-filenames", 
             url,
         ]
 
@@ -67,7 +67,6 @@ class YouTubeDownloader:
         try:
             result = subprocess.run(cmd, check=True, capture_output=True, text=True)
 
-            # پیدا کردن فایل دانلود شده
             downloaded_file = self._find_downloaded_file(output_path, url)
 
             return True, "Download completed successfully!", downloaded_file
@@ -78,14 +77,12 @@ class YouTubeDownloader:
     def _find_downloaded_file(self, output_path: str, url: str) -> str:
         """فایل دانلود شده رو پیدا کن"""
         try:
-            # لیست فایل‌های جدید در پوشه
             files = os.listdir(output_path)
             for file in files:
                 full_path = os.path.join(output_path, file)
                 if os.path.isfile(full_path) and file.lower().endswith(
                     (".mp4", ".mkv", ".webm", ".mp3", ".m4a", ".opus")
                 ):
-                    # می‌تونی بر اساس زمان تغییر یا نام چک کنی
                     return full_path
             return ""
         except:

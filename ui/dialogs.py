@@ -849,13 +849,12 @@ class DownloadProgressDialog(QDialog):
                 QMessageBox.warning(self, "Folder Not Found", "Folder not found.")
             return
 
-        # ===== از دکمه برای تشخیص وضعیت استفاده کن =====
         btn_text = self.action_btn.text().strip()
         
         if btn_text == "Pause":
             self.pause_requested.emit(self.gid)
             print(f"⏸️ [Dialog] Pause requested for {self.gid}")
-        elif btn_text in ["Resume", "Start"]:
+        elif btn_text in ["Resume", "Start", "Retry"]: 
             self.resume_requested.emit(self.gid)
             print(f"▶️ [Dialog] Resume requested for {self.gid}")
         else:
@@ -998,6 +997,15 @@ class DownloadProgressDialog(QDialog):
             self.cancel_btn.setIcon(get_icon("edit-delete"))
             self.cancel_btn.setEnabled(True)
 
+        elif status == "error":
+            self.action_btn.setIcon(get_icon("media-playback-start"))
+            self.action_btn.setText(" Retry")
+            self.action_btn.setEnabled(True)
+
+            self.cancel_btn.setText(" Cancel")
+            self.cancel_btn.setIcon(get_icon("edit-delete"))
+            self.cancel_btn.setEnabled(True)
+
         else:
             self.action_btn.setEnabled(False)
             self.cancel_btn.setEnabled(False)
@@ -1033,6 +1041,13 @@ class SettingsDialog(QDialog):
         self.max_concurrent = QSpinBox()
         self.max_concurrent.setRange(1, 50)
         self.max_concurrent.setValue(settings.get("max_concurrent", 5))
+        
+        # ===== Max Retry Attempts (جدید) =====
+        self.max_retries = QSpinBox()
+        self.max_retries.setRange(0, 20)
+        self.max_retries.setSpecialValueText("Disabled")
+        self.max_retries.setValue(settings.get("max_retries", 3))
+        
         self.max_tries = QSpinBox()
         self.max_tries.setRange(0, 100)
         self.max_tries.setSpecialValueText("Unlimited")
@@ -1040,8 +1055,10 @@ class SettingsDialog(QDialog):
         self.conns = QSpinBox()
         self.conns.setRange(1, 16)
         self.conns.setValue(settings.get("connections", 8))
+        
         dl_layout.addRow("Max Concurrent Downloads:", self.max_concurrent)
-        dl_layout.addRow("Max Retry Attempts:", self.max_tries)
+        dl_layout.addRow("Max Retry Attempts:", self.max_retries)  # ===== جدید =====
+        dl_layout.addRow("Max Retry Attempts (aria2):", self.max_tries)
         dl_layout.addRow("Default Connections:", self.conns)
         lay.addWidget(dl_group)
 
@@ -1479,6 +1496,7 @@ WantedBy=default.target
             "aria2_port": self.port.value(),
             "aria2_secret": self.secret.text(),
             "connections": self.conns.value(),
+            "max_retries": self.max_retries.value(),  # ===== جدید =====
             "max_tries": self.max_tries.value(),
             "max_concurrent": self.max_concurrent.value(),
             "auto_clear_completed": self.auto_clear_completed.isChecked(),

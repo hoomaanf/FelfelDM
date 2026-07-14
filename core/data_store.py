@@ -3,7 +3,7 @@
 import os
 import json
 import shutil
-from datetime import datetime, time as dtime,timedelta
+from datetime import datetime, time as dtime, timedelta
 from pathlib import Path
 from appdirs import user_config_dir
 import keyring
@@ -40,6 +40,7 @@ class Queue:
         self.paused = paused
         self.proxy_config = proxy_config
         self.speed_limit = speed_limit
+        self.error_count = 0
 
     def to_dict(self):
         proxy_dict = None
@@ -69,6 +70,7 @@ class Queue:
             "paused": self.paused,
             "proxy_config": proxy_dict,
             "speed_limit": self.speed_limit,
+            "error_count": self.error_count,
         }
 
     @classmethod
@@ -88,6 +90,7 @@ class Queue:
         q.downloads = list(d.get("downloads", []))
         q.downloads_info = d.get("downloads_info", {})
         q.speed_limit = d.get("speed_limit", 0)
+        q.error_count = d.get("error_count", 0)
 
         proxy_config = d.get("proxy_config")
         if proxy_config:
@@ -119,16 +122,16 @@ class Queue:
         """Get the next scheduled time for this queue"""
         if not self.schedule_enabled:
             return None
-        
+
         now = datetime.now()
         today_weekday = now.weekday()
         current_time = now.time().replace(second=0, microsecond=0)
-        
+
         # Check if today is in days
         if today_weekday in self.days:
             start = self.schedule_start
             end = self.schedule_end
-            
+
             if start <= end:
                 if current_time <= end:
                     # Today, at start time
@@ -137,14 +140,14 @@ class Queue:
                 # Overnight schedule
                 if current_time >= start or current_time <= end:
                     return datetime.combine(now.date(), start)
-        
+
         # Find next day
         for i in range(1, 8):
             next_day = (today_weekday + i) % 7
             if next_day in self.days:
                 next_date = now.date() + timedelta(days=i)
                 return datetime.combine(next_date, self.schedule_start)
-        
+
         return None
 
 
@@ -161,7 +164,7 @@ class DataStore:
         self.queues = []
         self.settings = self._get_default_settings()
         self.download_proxies = {}
-        
+
         self.youtube_downloads_file = self.config_dir / "youtube_downloads.json"
         self.youtube_downloads: Dict[str, dict] = {}  # download_id -> download_data
 
@@ -248,19 +251,19 @@ class DataStore:
         """ذخیره دانلودهای یوتیوب در فایل جداگانه"""
         try:
             temp_file = self.youtube_downloads_file.with_suffix(".tmp")
-            
+
             with open(temp_file, "w", encoding="utf-8") as f:
                 json.dump(
                     {"downloads": self.youtube_downloads},
                     f,
                     indent=2,
-                    ensure_ascii=False
+                    ensure_ascii=False,
                 )
                 f.flush()
                 os.fsync(f.fileno())
-            
+
             os.replace(temp_file, self.youtube_downloads_file)
-            
+
         except Exception as e:
             print(f"⚠️ Error saving YouTube downloads: {e}")
 
@@ -332,14 +335,13 @@ class DataStore:
 
         # Restore secret
         self.settings["aria2_secret"] = secret
-        
+
         self._save_youtube_downloads()
 
-    
     def add_youtube_download(self, download_data: dict) -> str:
         """
         افزودن دانلود یوتیوب جدید
-        
+
         Args:
             download_data: {
                 'id': str,
@@ -359,36 +361,39 @@ class DataStore:
         Returns:
             download_id: str
         """
-        download_id = download_data.get('id')
+        download_id = download_data.get("id")
         if not download_id:
             import uuid
+
             download_id = str(uuid.uuid4())
-            download_data['id'] = download_id
-        
+            download_data["id"] = download_id
+
         self.youtube_downloads[download_id] = download_data
         self._save_youtube_downloads()
         return download_id
-    
+
     def get_youtube_download(self, download_id: str) -> Optional[dict]:
         """دریافت یک دانلود یوتیوب با شناسه"""
         return self.youtube_downloads.get(download_id)
-    
+
     def get_all_youtube_downloads(self) -> List[dict]:
         """دریافت همه دانلودهای یوتیوب"""
         return list(self.youtube_downloads.values())
-    
+
     def get_youtube_downloads_by_status(self, status: str) -> List[dict]:
         """دریافت دانلودهای یوتیوب با وضعیت مشخص"""
-        return [d for d in self.youtube_downloads.values() if d.get('status') == status]
-    
+        return [d for d in self.youtube_downloads.values() if d.get("status") == status]
+
     def get_youtube_downloads_by_queue(self, queue_id: str) -> List[dict]:
         """دریافت دانلودهای یوتیوب در یک صف خاص"""
-        return [d for d in self.youtube_downloads.values() if d.get('queue_id') == queue_id]
-    
+        return [
+            d for d in self.youtube_downloads.values() if d.get("queue_id") == queue_id
+        ]
+
     def update_youtube_download(self, download_id: str, updates: dict) -> bool:
         """
         به‌روزرسانی یک دانلود یوتیوب
-        
+
         Args:
             download_id: شناسه دانلود
             updates: دیکشنری شامل فیلدهایی که باید به‌روز شوند
@@ -397,51 +402,52 @@ class DataStore:
         """
         if download_id not in self.youtube_downloads:
             return False
-        
+
         self.youtube_downloads[download_id].update(updates)
         self._save_youtube_downloads()
         return True
-    
+
     def update_youtube_status(self, download_id: str, status: str) -> bool:
         """به‌روزرسانی وضعیت دانلود یوتیوب"""
-        return self.update_youtube_download(download_id, {'status': status})
-    
+        return self.update_youtube_download(download_id, {"status": status})
+
     def update_youtube_progress(self, download_id: str, progress: int) -> bool:
         """به‌روزرسانی پیشرفت دانلود یوتیوب"""
-        return self.update_youtube_download(download_id, {'progress': progress})
-    
+        return self.update_youtube_download(download_id, {"progress": progress})
+
     def delete_youtube_download(self, download_id: str) -> bool:
         """حذف یک دانلود یوتیوب"""
         if download_id not in self.youtube_downloads:
             return False
-        
+
         del self.youtube_downloads[download_id]
         self._save_youtube_downloads()
         return True
-    
+
     def clear_completed_youtube_downloads(self) -> int:
         """حذف همه دانلودهای یوتیوب که کامل شده‌اند"""
         completed_ids = [
-            d_id for d_id, d in self.youtube_downloads.items()
-            if d.get('status') in ['completed', 'cancelled']
+            d_id
+            for d_id, d in self.youtube_downloads.items()
+            if d.get("status") in ["completed", "cancelled"]
         ]
-        
+
         for d_id in completed_ids:
             del self.youtube_downloads[d_id]
-        
+
         if completed_ids:
             self._save_youtube_downloads()
-        
+
         return len(completed_ids)
-    
+
     def get_youtube_downloads_count(self) -> int:
         """تعداد کل دانلودهای یوتیوب"""
         return len(self.youtube_downloads)
-    
+
     def get_youtube_downloads_count_by_status(self, status: str) -> int:
         """تعداد دانلودهای یوتیوب با وضعیت مشخص"""
         return len(self.get_youtube_downloads_by_status(status))
-    
+
     def get_youtube_downloads_info_for_display(self) -> List[dict]:
         """
         دریافت اطلاعات دانلودهای یوتیوب برای نمایش در جدول
@@ -449,21 +455,23 @@ class DataStore:
         """
         display_list = []
         for d_id, d in self.youtube_downloads.items():
-            display_list.append({
-                'id': d_id,
-                'url': d.get('url', ''),
-                'title': d.get('yt_options', {}).get('title', d.get('url', '')),
-                'status': d.get('status', 'pending'),
-                'progress': d.get('progress', 0),
-                'speed': d.get('speed', ''),
-                'eta': d.get('eta', ''),
-                'save_path': d.get('save_path', ''),
-                'queue_id': d.get('queue_id', ''),
-                'created_at': d.get('created_at', ''),
-                'completed_at': d.get('completed_at'),
-                'error_message': d.get('error_message', ''),
-                'quality': d.get('yt_options', {}).get('quality', 'best'),
-                'format': d.get('yt_options', {}).get('format', 'video'),
-                'download_type': 'youtube'
-            })
+            display_list.append(
+                {
+                    "id": d_id,
+                    "url": d.get("url", ""),
+                    "title": d.get("yt_options", {}).get("title", d.get("url", "")),
+                    "status": d.get("status", "pending"),
+                    "progress": d.get("progress", 0),
+                    "speed": d.get("speed", ""),
+                    "eta": d.get("eta", ""),
+                    "save_path": d.get("save_path", ""),
+                    "queue_id": d.get("queue_id", ""),
+                    "created_at": d.get("created_at", ""),
+                    "completed_at": d.get("completed_at"),
+                    "error_message": d.get("error_message", ""),
+                    "quality": d.get("yt_options", {}).get("quality", "best"),
+                    "format": d.get("yt_options", {}).get("format", "video"),
+                    "download_type": "youtube",
+                }
+            )
         return display_list

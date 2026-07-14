@@ -65,7 +65,10 @@ class Aria2RPC:
                     result = json.loads(response.read().decode("utf-8"))
                     if "error" in result:
                         error_msg = result["error"].get("message", str(result["error"]))
-                        if "Invalid GID" in error_msg or ("not found" in error_msg.lower() and "gid" in error_msg.lower()):
+                        if "Invalid GID" in error_msg or (
+                            "not found" in error_msg.lower()
+                            and "gid" in error_msg.lower()
+                        ):
                             print(f"ℹ️ [aria2] GID not found (ignored): {error_msg}")
                             return None
                         if self.on_error:
@@ -110,7 +113,7 @@ class Aria2RPC:
                 return None
 
         return None
-    
+
     def is_connected(self) -> bool:
         """بررسی اتصال به aria2"""
         try:
@@ -208,7 +211,7 @@ class Aria2RPC:
     def add_url(self, url: str, options: Dict = None) -> Optional[str]:
         """
         افزودن دانلود جدید با URL
-        
+
         اصلاح شده: options مستقیماً به صورت dict ارسال میشه، نه list
         """
         if not url:
@@ -237,7 +240,6 @@ class Aria2RPC:
         if not gid:
             return False
 
-        
         if self._is_youtube_gid(gid):
             return False
 
@@ -249,7 +251,6 @@ class Aria2RPC:
         if not gid:
             return False
 
-        
         if self._is_youtube_gid(gid):
             return False
 
@@ -261,7 +262,6 @@ class Aria2RPC:
         if not gid:
             return False
 
-        
         if self._is_youtube_gid(gid):
             return False
 
@@ -277,7 +277,6 @@ class Aria2RPC:
         if not gid:
             return False
 
-        
         if self._is_youtube_gid(gid):
             return False
 
@@ -289,7 +288,6 @@ class Aria2RPC:
         if not gid:
             return False
 
-        
         if self._is_youtube_gid(gid):
             return False
 
@@ -313,7 +311,6 @@ class Aria2RPC:
         if not gid:
             return False
 
-        
         if self._is_youtube_gid(gid):
             return False
 
@@ -330,7 +327,6 @@ class Aria2RPC:
         if not gid or not options:
             return False
 
-        
         if self._is_youtube_gid(gid):
             return False
 
@@ -342,7 +338,6 @@ class Aria2RPC:
         if not gid:
             return None
 
-        
         if self._is_youtube_gid(gid):
             return None
 
@@ -350,7 +345,11 @@ class Aria2RPC:
 
     def set_global_proxy(self, proxy_config) -> bool:
         """تنظیم پروکسی کلی"""
-        if proxy_config and hasattr(proxy_config, 'is_valid') and proxy_config.is_valid():
+        if (
+            proxy_config
+            and hasattr(proxy_config, "is_valid")
+            and proxy_config.is_valid()
+        ):
             proxy_url = proxy_config._build_proxy_url()
             options = {"all-proxy": proxy_url}
         else:
@@ -358,7 +357,6 @@ class Aria2RPC:
 
         result = self._call("aria2.changeGlobalOption", [options])
         return result is not None
-
 
     def pause_all(self) -> bool:
         """توقف همه دانلودها"""
@@ -410,7 +408,6 @@ class Aria2RPC:
         if not gid:
             return None
 
-        
         if self._is_youtube_gid(gid):
             return None
 
@@ -421,7 +418,6 @@ class Aria2RPC:
         if not gid:
             return None
 
-        
         if self._is_youtube_gid(gid):
             return None
 
@@ -432,13 +428,14 @@ class Aria2RPC:
         if not gid:
             return None
 
-        
         if self._is_youtube_gid(gid):
             return None
 
         return self._call("aria2.getServers", [gid])
 
-    def change_position(self, gid: str, pos: int, how: str = "POS_SET") -> Optional[int]:
+    def change_position(
+        self, gid: str, pos: int, how: str = "POS_SET"
+    ) -> Optional[int]:
         """
         تغییر موقعیت دانلود در صف
 
@@ -450,7 +447,6 @@ class Aria2RPC:
         if not gid:
             return None
 
-        
         if self._is_youtube_gid(gid):
             return None
 
@@ -469,6 +465,7 @@ class Aria2RPC:
             with open(torrent, "rb") as f:
                 torrent_data = f.read()
             import base64
+
             torrent_b64 = base64.b64encode(torrent_data).decode("ascii")
         except Exception as e:
             if self.on_error:
@@ -492,7 +489,6 @@ class Aria2RPC:
         params = [metalink, options]
 
         return self._call("aria2.addMetalink", params)
-
 
     def get_gid_status(self, gid: str) -> Optional[Dict]:
         """دریافت وضعیت دانلود با GID (با هندلینگ خطا)"""

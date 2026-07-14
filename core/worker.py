@@ -118,7 +118,7 @@ class BackendWorker(QThread):
                 del self._size_workers[download_id]
 
         print(f"🗑️ [Worker] YouTube download cancelled (files kept): {download_id}")
-    
+
     def run(self):
         loop_count = 0
 
@@ -209,20 +209,22 @@ class BackendWorker(QThread):
         try:
             with self.youtube_lock:
                 for download_id, info in self.youtube_downloads.items():
-                    status_list.append({
-                        "id": download_id,
-                        "url": info.get("url", ""),
-                        "title": info.get("yt_options", {}).get("title", ""),
-                        "status": info.get("status", "pending"),
-                        "progress": info.get("progress", 0),
-                        "speed": info.get("speed", ""),
-                        "eta": info.get("eta", ""),
-                        "total_size": info.get("total_size", 0),
-                    })
+                    status_list.append(
+                        {
+                            "id": download_id,
+                            "url": info.get("url", ""),
+                            "title": info.get("yt_options", {}).get("title", ""),
+                            "status": info.get("status", "pending"),
+                            "progress": info.get("progress", 0),
+                            "speed": info.get("speed", ""),
+                            "eta": info.get("eta", ""),
+                            "total_size": info.get("total_size", 0),
+                        }
+                    )
         except Exception as e:
             print(f"⚠️ [Worker] Error getting youtube status: {e}")
             return []
-        
+
         return status_list
 
     def stop(self):
@@ -552,11 +554,11 @@ class BackendWorker(QThread):
 
             base_name = os.path.splitext(os.path.basename(file_path))[0]
             patterns = [
-                f"{base_name}.*.part", 
-                f"{base_name}.*.ytdl",  
-                f"{base_name}.*.f*", 
-                f"{base_name}.*.temp",  
-                f"{base_name}.*.download", 
+                f"{base_name}.*.part",
+                f"{base_name}.*.ytdl",
+                f"{base_name}.*.f*",
+                f"{base_name}.*.temp",
+                f"{base_name}.*.download",
             ]
 
             for pattern in patterns:
