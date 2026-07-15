@@ -3,6 +3,10 @@
 import os
 import time
 import subprocess
+import tempfile
+import threading
+
+
 from datetime import datetime
 from PyQt6.QtWidgets import *
 from PyQt6.QtCore import *
@@ -10,6 +14,7 @@ from PyQt6.QtGui import *
 
 from core import Aria2RPC, DataStore, Queue, BackendWorker, TempDB
 from ui.dialogs import *
+from ui.update_dialog import UpdateDialog
 from ui.table_model import DownloadTableModel
 from ui.delegates import ProgressDelegate
 from utils.helpers import format_size, format_speed, get_category, get_icon
@@ -42,8 +47,6 @@ class MainWindow(QMainWindow):
         elif theme_setting == "auto":
 
             try:
-                import subprocess
-
                 result = subprocess.run(
                     [
                         "kreadconfig5",
@@ -441,15 +444,6 @@ class MainWindow(QMainWindow):
         )
         self.tray.show()
 
-    def _show_about(self):
-        QMessageBox.about(
-            self,
-            "About FelfelDM",
-            "<h2 style='color: #e74c3c;'>🌶️ FelfelDM</h2>"
-            "<p>A modern download manager</p>"
-            "<p>Built with PyQt6 and aria2</p>",
-        )
-
     def closeEvent(self, event):
         """Handle close event - allow closing main window while downloads continue"""
         has_active = False
@@ -543,8 +537,6 @@ class MainWindow(QMainWindow):
             self.worker.terminate()
 
         try:
-            import subprocess
-
             subprocess.run(["pkill", "-9", "aria2c"], capture_output=True)
         except:
             pass
@@ -2305,7 +2297,7 @@ class MainWindow(QMainWindow):
             try:
                 folder_path = None
                 print(f"🔍 [OpenFolder] Looking for folder for GID: {gid}")
-                
+
                 # 1. از _all_downloads
                 if gid in self._all_downloads:
                     dl = self._all_downloads[gid]
@@ -2313,7 +2305,7 @@ class MainWindow(QMainWindow):
                     if files and files[0].get("path"):
                         folder_path = os.path.dirname(files[0]["path"])
                         print(f"📂 [OpenFolder] Found in _all_downloads: {folder_path}")
-                
+
                 # 2. از queue info
                 if not folder_path:
                     for q in self.store.queues:
@@ -2322,13 +2314,17 @@ class MainWindow(QMainWindow):
                             files = info.get("files", [])
                             if files and files[0].get("path"):
                                 folder_path = os.path.dirname(files[0]["path"])
-                                print(f"📂 [OpenFolder] Found in queue info: {folder_path}")
+                                print(
+                                    f"📂 [OpenFolder] Found in queue info: {folder_path}"
+                                )
                                 break
                             elif q.save_path and os.path.exists(q.save_path):
                                 folder_path = q.save_path
-                                print(f"📂 [OpenFolder] Using queue save_path: {folder_path}")
+                                print(
+                                    f"📂 [OpenFolder] Using queue save_path: {folder_path}"
+                                )
                                 break
-                
+
                 # 3. از YouTube
                 if not folder_path:
                     saved_data = self.store.get_youtube_download(gid)
@@ -2336,25 +2332,29 @@ class MainWindow(QMainWindow):
                         folder_path = saved_data.get("save_path", "")
                         if folder_path and os.path.exists(folder_path):
                             print(f"📂 [OpenFolder] Found in YouTube: {folder_path}")
-                
+
                 # 4. fallback به Downloads
                 if not folder_path or not os.path.exists(folder_path):
                     folder_path = os.path.expanduser("~/Downloads")
                     print(f"📂 [OpenFolder] Using fallback: {folder_path}")
-                
+
                 # باز کردن
                 if folder_path and os.path.exists(folder_path):
                     print(f"✅ [OpenFolder] Opening: {folder_path}")
                     from PyQt6.QtCore import QUrl
                     from PyQt6.QtGui import QDesktopServices
+
                     QDesktopServices.openUrl(QUrl.fromLocalFile(folder_path))
                 else:
                     print(f"❌ [OpenFolder] Folder not found: {folder_path}")
-                    QMessageBox.warning(self, "Error", f"Folder not found:\n{folder_path}")
-                    
+                    QMessageBox.warning(
+                        self, "Error", f"Folder not found:\n{folder_path}"
+                    )
+
             except Exception as e:
                 print(f"❌ [OpenFolder] Error: {e}")
                 import traceback
+
                 traceback.print_exc()
                 QMessageBox.warning(self, "Error", f"Could not open folder:\n{str(e)}")
 
@@ -3368,7 +3368,7 @@ class MainWindow(QMainWindow):
                 | Qt.WindowType.WindowMaximizeButtonHint
             )
             self._progress_dialog.setWindowModality(Qt.WindowModality.NonModal)
-            
+
             self._progress_dialog.pause_requested.connect(self._pause_from_dialog)
             self._progress_dialog.resume_requested.connect(self._resume_from_dialog)
             self._progress_dialog.cancel_requested.connect(self._cancel_from_dialog)
@@ -4952,3 +4952,71 @@ class MainWindow(QMainWindow):
 
         except Exception as e:
             print(f"⚠️ Error deleting files: {e}")
+
+    def _show_about(self):
+        dialog = QDialog(self)
+        dialog.setWindowTitle("About FelfelDM")
+        dialog.setMinimumWidth(420)
+        dialog.setModal(True)
+
+        layout = QVBoxLayout(dialog)
+        layout.setSpacing(12)
+        layout.setContentsMargins(25, 25, 25, 20)
+
+        icon_label = QLabel()
+        icon_path = get_resource_path("logo/icon512.png")
+        if os.path.exists(icon_path):
+            pixmap = QPixmap(icon_path)
+            if not pixmap.isNull():
+                icon_label.setPixmap(
+                    pixmap.scaled(
+                        80,
+                        80,
+                        Qt.AspectRatioMode.KeepAspectRatio,
+                        Qt.TransformationMode.SmoothTransformation,
+                    )
+                )
+        icon_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        layout.addWidget(icon_label)
+
+        title = QLabel("<h1 style='color: #e74c3c;'>🌶️ FelfelDM</h1>")
+        title.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        layout.addWidget(title)
+
+        desc = QLabel(
+            "<p style='font-size: 14px;'>A modern download manager</p>"
+            "<p style='font-size: 12px; color: #888;'>Built with PyQt6 and aria2</p>"
+        )
+        desc.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        desc.setWordWrap(True)
+        layout.addWidget(desc)
+
+        layout.addSpacing(10)
+
+        btn_layout = QHBoxLayout()
+        btn_layout.setSpacing(10)
+
+        update_btn = QPushButton(" Update")
+        update_btn.setIcon(get_icon("system-software-update"))
+        update_btn.setMinimumWidth(120)
+        update_btn.clicked.connect(lambda: self._show_update_dialog(dialog))
+
+        close_btn = QPushButton("Close")
+        close_btn.setMinimumWidth(100)
+        close_btn.clicked.connect(dialog.accept)
+
+        btn_layout.addStretch()
+        btn_layout.addWidget(update_btn)
+        btn_layout.addWidget(close_btn)
+        btn_layout.addStretch()
+
+        layout.addLayout(btn_layout)
+
+        dialog.exec()
+
+    def _show_update_dialog(self, parent_dialog=None):
+        if parent_dialog:
+            parent_dialog.accept()
+
+        update_dialog = UpdateDialog(self)
+        update_dialog.exec()

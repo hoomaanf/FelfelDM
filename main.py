@@ -8,6 +8,8 @@ import os
 import argparse
 import threading
 import time
+import subprocess  # ===== اضافه شد =====
+import shutil     # ===== اضافه شد =====
 from PyQt6.QtWidgets import QApplication
 from PyQt6.QtGui import QIcon
 from PyQt6.QtCore import Qt, QTimer, QCoreApplication
@@ -18,7 +20,7 @@ from utils.style import setup_style, CustomProxyStyle
 # Global reference for cleanup
 server = None
 app = None
-local_server = None  #
+local_server = None
 
 APP_ID = f"FelfelDM_{os.getenv('USER', 'default')}"
 
@@ -26,8 +28,6 @@ APP_ID = f"FelfelDM_{os.getenv('USER', 'default')}"
 def signal_handler(sig, frame):
     """Handle SIGINT and SIGTERM signals"""
     print("\n🛑 Received signal, shutting down...")
-
-    # Stop local server
     global server
     if server:
         try:
@@ -36,7 +36,6 @@ def signal_handler(sig, frame):
         except:
             pass
 
-    # Stop QLocalServer
     global local_server
     if local_server:
         try:
@@ -45,7 +44,6 @@ def signal_handler(sig, frame):
         except:
             pass
 
-    # Quit application
     global app
     if app:
         try:
@@ -53,7 +51,6 @@ def signal_handler(sig, frame):
         except:
             pass
 
-    # Force exit after 2 seconds
     def force_exit():
         print("⏰ Force exiting...")
         sys.exit(0)
@@ -63,6 +60,41 @@ def signal_handler(sig, frame):
     timer.start()
 
 
+# ===== تابع آپدیت =====
+def update_self():
+    """Update FelfelDM from GitHub using install.sh"""
+    print("🔄 Updating FelfelDM from GitHub...")
+    print("📥 Running: bash <(curl -s https://raw.githubusercontent.com/hoomaanf/FelfelDM/main/install.sh)")
+    print("")
+    
+    try:
+        # اجرای مستقیم دستور با bash
+        result = subprocess.run(
+            [
+                "bash", "-c",
+                "curl -s https://raw.githubusercontent.com/hoomaanf/FelfelDM/main/install.sh | bash"
+            ],
+            capture_output=False,  # ===== نمایش خروجی مستقیم در ترمینال =====
+            text=True
+        )
+        
+        if result.returncode == 0:
+            print("")
+            print("✅ Update completed successfully!")
+            return True
+        else:
+            print("")
+            print(f"❌ Update failed with code: {result.returncode}")
+            return False
+            
+    except FileNotFoundError:
+        print("❌ Error: curl or bash not found. Please install them first.")
+        return False
+    except Exception as e:
+        print(f"❌ Update error: {e}")
+        return False
+
+
 def main():
     global server, app, local_server
 
@@ -70,11 +102,24 @@ def main():
     parser.add_argument("--add", nargs="+", help="Add URLs to download")
     parser.add_argument("--clear", action="store_true", help="Clear all data")
     parser.add_argument("--daemon", action="store_true", help="Run as daemon (no GUI)")
+    parser.add_argument("--update", action="store_true", help="Update FelfelDM from GitHub")  # ===== اضافه شد =====
     args = parser.parse_args()
 
-    if args.clear:
-        import shutil
+    # ===== آپدیت =====
+    if args.update:
+        print("🌶️ FelfelDM Updater")
+        print("=" * 50)
+        if update_self():
+            print("=" * 50)
+            print("✅ Update successful! Please restart FelfelDM.")
+            print("💡 Run: FelfelDM")
+        else:
+            print("=" * 50)
+            print("❌ Update failed! Please check your internet connection and try again.")
+            print("💡 Or manually run: bash <(curl -s https://raw.githubusercontent.com/hoomaanf/FelfelDM/main/install.sh)")
+        return
 
+    if args.clear:
         config_dir = os.path.expanduser("~/.config/felfelDM")
         if os.path.exists(config_dir):
             shutil.rmtree(config_dir)
@@ -83,7 +128,6 @@ def main():
 
     if args.daemon:
         print("🌶️ FelfelDM Daemon starting...")
-
         from PyQt6.QtCore import QCoreApplication
         from core.local_server import LocalServer
         import signal
