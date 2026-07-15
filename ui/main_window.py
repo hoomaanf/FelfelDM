@@ -2302,18 +2302,61 @@ class MainWindow(QMainWindow):
 
         # ===== Open Folder =====
         def _open_folder():
-            files = dl_data.get("files", [])
-            if files and files[0].get("path"):
-                path = files[0]["path"]
-                folder = os.path.dirname(path)
-                if os.path.exists(folder):
-                    QDesktopServices.openUrl(QUrl.fromLocalFile(folder))
-                else:
+            try:
+                folder_path = None
+                print(f"🔍 [OpenFolder] Looking for folder for GID: {gid}")
+                
+                # 1. از _all_downloads
+                if gid in self._all_downloads:
+                    dl = self._all_downloads[gid]
+                    files = dl.get("files", [])
+                    if files and files[0].get("path"):
+                        folder_path = os.path.dirname(files[0]["path"])
+                        print(f"📂 [OpenFolder] Found in _all_downloads: {folder_path}")
+                
+                # 2. از queue info
+                if not folder_path:
+                    for q in self.store.queues:
+                        if gid in q.downloads_info:
+                            info = q.downloads_info[gid]
+                            files = info.get("files", [])
+                            if files and files[0].get("path"):
+                                folder_path = os.path.dirname(files[0]["path"])
+                                print(f"📂 [OpenFolder] Found in queue info: {folder_path}")
+                                break
+                            elif q.save_path and os.path.exists(q.save_path):
+                                folder_path = q.save_path
+                                print(f"📂 [OpenFolder] Using queue save_path: {folder_path}")
+                                break
+                
+                # 3. از YouTube
+                if not folder_path:
                     saved_data = self.store.get_youtube_download(gid)
                     if saved_data:
-                        folder = saved_data.get("save_path", "")
-                        if os.path.exists(folder):
-                            QDesktopServices.openUrl(QUrl.fromLocalFile(folder))
+                        folder_path = saved_data.get("save_path", "")
+                        if folder_path and os.path.exists(folder_path):
+                            print(f"📂 [OpenFolder] Found in YouTube: {folder_path}")
+                
+                # 4. fallback به Downloads
+                if not folder_path or not os.path.exists(folder_path):
+                    folder_path = os.path.expanduser("~/Downloads")
+                    print(f"📂 [OpenFolder] Using fallback: {folder_path}")
+                
+                # باز کردن
+                if folder_path and os.path.exists(folder_path):
+                    print(f"✅ [OpenFolder] Opening: {folder_path}")
+                    from PyQt6.QtCore import QUrl
+                    from PyQt6.QtGui import QDesktopServices
+                    QDesktopServices.openUrl(QUrl.fromLocalFile(folder_path))
+                else:
+                    print(f"❌ [OpenFolder] Folder not found: {folder_path}")
+                    QMessageBox.warning(self, "Error", f"Folder not found:\n{folder_path}")
+                    
+            except Exception as e:
+                print(f"❌ [OpenFolder] Error: {e}")
+                import traceback
+                traceback.print_exc()
+                QMessageBox.warning(self, "Error", f"Could not open folder:\n{str(e)}")
 
         menu.addAction(get_icon("folder"), "Open Folder", _open_folder)
 
@@ -3305,7 +3348,7 @@ class MainWindow(QMainWindow):
         self.status_label.setText(f"⚠ {message}")
 
     def _open_progress_dialog(self, gid):
-        """Open progress dialog for a download"""
+        """Open progress dialog for a download in a separate window"""
         dl_data = self._all_downloads.get(gid, {})
 
         if hasattr(self, "_progress_dialog") and self._progress_dialog is not None:
@@ -3315,9 +3358,17 @@ class MainWindow(QMainWindow):
                 pass
             self._progress_dialog = None
 
-        self._progress_dialog = DownloadProgressDialog(gid, dl_data, self)
+        self._progress_dialog = DownloadProgressDialog(gid, dl_data, None)
 
         if self._progress_dialog:
+            self._progress_dialog.setWindowFlags(
+                Qt.WindowType.Window
+                | Qt.WindowType.WindowCloseButtonHint
+                | Qt.WindowType.WindowMinimizeButtonHint
+                | Qt.WindowType.WindowMaximizeButtonHint
+            )
+            self._progress_dialog.setWindowModality(Qt.WindowModality.NonModal)
+            
             self._progress_dialog.pause_requested.connect(self._pause_from_dialog)
             self._progress_dialog.resume_requested.connect(self._resume_from_dialog)
             self._progress_dialog.cancel_requested.connect(self._cancel_from_dialog)
