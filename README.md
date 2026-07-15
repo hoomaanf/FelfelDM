@@ -13,6 +13,7 @@
     <img src="https://img.shields.io/badge/Platform-Linux-FCC624?style=for-the-badge&logo=linux" alt="Platform">
     <img src="https://img.shields.io/badge/Status-Active-success?style=for-the-badge" alt="Status">
     <br>
+    <img src="https://img.shields.io/badge/AUR-available-blue?style=for-the-badge&logo=arch-linux" alt="AUR">
     <img src="https://img.shields.io/badge/Firefox-FF7139?style=for-the-badge&logo=firefox" alt="Firefox">
     <img src="https://img.shields.io/badge/Chrome-4285F4?style=for-the-badge&logo=google-chrome" alt="Chrome">
   </p>
@@ -26,6 +27,26 @@
   <img src="screenshots/main-window.png" alt="FelfelDM Main Window" width="800">
   <p><em>Main Interface - Dark Theme</em></p>
 </div>
+
+---
+
+## 🚀 Quick Install
+
+### AUR (Arch Linux / Manjaro)
+
+```bash
+# Git version (latest updates)
+yay -S felfeldm-git
+
+# Or with paru
+paru -S felfeldm-git
+```
+
+### Other Distributions
+
+```bash
+bash <(curl -s https://raw.githubusercontent.com/hoomaanf/FelfelDM/main/install.sh)
+```
 
 ---
 
@@ -86,7 +107,22 @@
 
 ## 🛠️ Installation
 
-### Quick Install (Recommended)
+### AUR (Arch Linux / Manjaro)
+
+```bash
+# Git version (latest updates)
+yay -S felfeldm-git
+
+# Or with paru
+paru -S felfeldm-git
+
+# Or manually
+git clone https://aur.archlinux.org/felfeldm-git.git
+cd felfeldm-git
+makepkg -si
+```
+
+### Quick Install (Other Distributions)
 
 ```bash
 bash <(curl -s https://raw.githubusercontent.com/hoomaanf/FelfelDM/main/install.sh)
@@ -102,6 +138,12 @@ cd FelfelDM
 
 ### Uninstall
 
+#### From AUR:
+```bash
+sudo pacman -Rsn felfeldm-git
+```
+
+#### From other installations:
 ```bash
 bash <(curl -s https://raw.githubusercontent.com/hoomaanf/FelfelDM/main/uninstall.sh)
 ```
@@ -121,12 +163,13 @@ bash <(curl -s https://raw.githubusercontent.com/hoomaanf/FelfelDM/main/uninstal
 ### Update from terminal
 
 ```bash
+# Via AUR (Arch Linux)
+yay -S felfeldm-git
+
+# Via built-in updater
 FelfelDM --update
-```
 
-Or manually:
-
-```bash
+# Or manually
 bash <(curl -s https://raw.githubusercontent.com/hoomaanf/FelfelDM/main/install.sh)
 ```
 
