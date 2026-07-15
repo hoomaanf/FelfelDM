@@ -65,6 +65,7 @@
 - ⚡ **Smart Fallback** — When FelfelDM is not running, downloads proceed normally
 - 💾 **Persistent State** — All downloads and queues are preserved between sessions
 - 🔄 **Download Resume** — Resume interrupted downloads from where they stopped
+- 🔄 **In-App Update** — Update FelfelDM directly from the application (Help → About → Update)
 
 ### YouTube Download Features
 
@@ -107,6 +108,30 @@ bash <(curl -s https://raw.githubusercontent.com/hoomaanf/FelfelDM/main/uninstal
 
 ---
 
+## 🔄 Update
+
+### Update from within the app
+
+1. Run FelfelDM
+2. Go to **Help → About**
+3. Click the **Update** button
+4. A dialog will show the update progress
+5. Restart the app when prompted
+
+### Update from terminal
+
+```bash
+FelfelDM --update
+```
+
+Or manually:
+
+```bash
+bash <(curl -s https://raw.githubusercontent.com/hoomaanf/FelfelDM/main/install.sh)
+```
+
+---
+
 ## 🚀 Usage
 
 ### Running the Application
@@ -123,6 +148,9 @@ FelfelDM --daemon
 
 # Clear all data and reset settings
 FelfelDM --clear
+
+# Update FelfelDM
+FelfelDM --update
 ```
 
 ### Adding Downloads
@@ -255,26 +283,44 @@ The FelfelDM browser extension shows its status through visual badges on its ico
 FelfelDM/
 ├── core/                    # Core modules
 │   ├── aria2_rpc.py        # aria2 JSON-RPC client
-│   ├── worker.py   # Background download worker
 │   ├── data_store.py       # Data persistence
+│   ├── download_updater.py # Download status updater
+│   ├── file_size_fetcher.py# File size fetcher
+│   ├── local_server.py     # Local HTTP server for extension
 │   ├── proxy_manager.py    # Proxy configuration
+│   ├── queue_model.py      # Queue data model
 │   ├── temp_db.py          # Temporary in-memory database
-│   ├── youtube_worker.py   # YouTube download worker
-│   └── local_server.py     # Local HTTP server for extension
+│   ├── worker.py           # Background download worker
+│   ├── youtube_downloader.py # YouTube download core
+│   └── youtube_worker.py   # YouTube download worker
 ├── ui/                      # UI components
-│   ├── main_window.py      # Main application window
+│   ├── delegates.py        # Custom table delegates
 │   ├── dialogs.py          # Various dialogs
-│   ├── table_model.py      # Download table model
-│   ├── delegates.py        # Custom delegates
+│   ├── download_proxy_dialog.py # Proxy configuration dialog
+│   ├── main_window.py      # Main application window
+│   ├── proxy_dialog.py     # Proxy settings dialog
 │   ├── splash.py           # Splash screen
-│   ├── youtube_progress.py # YouTube progress dialog
-│   └── download_proxy_dialog.py # Proxy configuration dialog
+│   ├── table_model.py      # Download table model
+│   ├── update_dialog.py    # Update dialog
+│   └── youtube_progress.py # YouTube progress dialog
 ├── utils/                   # Utilities
 │   ├── helpers.py          # Helper functions
 │   └── style.py            # Theme styles
 ├── FelfelDM-extension/      # Browser extension
+│   ├── background.js       # Extension background script
+│   ├── content.js          # Content script
+│   ├── popup.html          # Popup UI
+│   ├── popup.js            # Popup logic
+│   ├── install.sh          # Extension installer
+│   ├── manifest-chrome.json # Chrome manifest
+│   └── manifest-firefox.json # Firefox manifest
+├── FelfelDM.git/            # Arch Linux package files
+│   ├── felfeldm.install    # Arch install script
+│   └── PKGBUILD            # Arch package build file
 ├── logo/                    # Application icons
+│   └── icon512.png         # Main icon
 ├── screenshots/             # Application screenshots
+│   └── main-window.png     # Main window screenshot
 ├── main.py                  # Entry point with CLI support
 ├── install.sh               # Installation script
 ├── uninstall.sh             # Uninstallation script
