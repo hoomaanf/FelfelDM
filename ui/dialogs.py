@@ -1,6 +1,11 @@
 # ui/dialogs.py
 
 import os
+import subprocess
+import time
+import socket
+
+
 from PyQt6.QtWidgets import *
 from PyQt6.QtGui import QDesktopServices
 from PyQt6.QtCore import *
@@ -1178,30 +1183,24 @@ class SettingsDialog(QDialog):
         if checked:
             self.service_status.setText("⏳ Installing service...")
             self.service_status.setStyleSheet("color: #f39c12; font-size: 11px;")
-            self.run_as_service.setEnabled(False)
             QApplication.processEvents()
-
             QTimer.singleShot(100, self._install_service_async)
         else:
-            self.service_status.setText("⏳ Removing service...")
+            self.service_status.setText("⏳ Stopping service...")
             self.service_status.setStyleSheet("color: #f39c12; font-size: 11px;")
-            self.run_as_service.setEnabled(False)
             QApplication.processEvents()
-
-            QTimer.singleShot(100, self._remove_service_async)
+            QTimer.singleShot(100, self._stop_service_async)
 
     def _install_service_async(self):
         try:
-            import subprocess
-            import os
-            import time
-
-            import sys
-
-            if getattr(sys, "frozen", False):
-                exe_path = sys.executable
-            else:
+            result = subprocess.run(["which", "FelfelDM"], capture_output=True, text=True)
+            exe_path = result.stdout.strip() if result.returncode == 0 else "/usr/bin/FelfelDM"
+            
+            if not os.path.exists(exe_path):
                 exe_path = "/usr/local/bin/FelfelDM"
+            
+            if not os.path.exists(exe_path):
+                exe_path = "/usr/bin/FelfelDM"
 
             self._free_port(8765)
 
@@ -1209,24 +1208,24 @@ class SettingsDialog(QDialog):
             os.makedirs(service_dir, exist_ok=True)
 
             service_content = f"""[Unit]
-Description=FelfelDM Download Manager Service
-After=network.target
+    Description=FelfelDM Download Manager Service
+    After=network.target
 
-[Service]
-Type=simple
-ExecStart={exe_path} --daemon
-Restart=on-failure
-RestartSec=10
-TimeoutStopSec=3
-WorkingDirectory=/usr/share/felfeldm
-StandardOutput=journal
-StandardError=journal
-KillMode=process
-KillSignal=SIGTERM
+    [Service]
+    Type=simple
+    ExecStart={exe_path} --daemon
+    Restart=on-failure
+    RestartSec=10
+    TimeoutStopSec=3
+    WorkingDirectory=/usr/share/felfeldm
+    StandardOutput=journal
+    StandardError=journal
+    KillMode=process
+    KillSignal=SIGTERM
 
-[Install]
-WantedBy=default.target
-"""
+    [Install]
+    WantedBy=default.target
+    """
 
             service_path = os.path.join(service_dir, "felfeldm.service")
             with open(service_path, "w") as f:
@@ -1264,25 +1263,10 @@ WantedBy=default.target
             self.service_status.setStyleSheet("color: #e74c3c; font-size: 11px;")
             self.run_as_service.setEnabled(True)
             self.run_as_service.setChecked(False)
-
-    def _remove_service_async(self):
+    
+    def _stop_service_async(self):
+        """فقط سرویس رو متوقف کن، پاک نکن"""
         try:
-            import subprocess
-            import os
-            import time
-
-            subprocess.Popen(
-                ["pkill", "-9", "-f", "main.py --daemon"],
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-            )
-            subprocess.Popen(
-                ["pkill", "-9", "-f", "FelfelDM --daemon"],
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-            )
-            time.sleep(0.5)
-
             subprocess.Popen(
                 ["systemctl", "--user", "stop", "felfeldm.service"],
                 stdout=subprocess.DEVNULL,
@@ -1297,10 +1281,6 @@ WantedBy=default.target
             )
             time.sleep(0.5)
 
-            service_path = os.path.expanduser("~/.config/systemd/user/felfeldm.service")
-            if os.path.exists(service_path):
-                os.remove(service_path)
-
             subprocess.Popen(
                 ["systemctl", "--user", "daemon-reload"],
                 stdout=subprocess.DEVNULL,
@@ -1314,12 +1294,10 @@ WantedBy=default.target
                 stderr=subprocess.DEVNULL,
             )
 
-            self._free_port(8765)
-
             QTimer.singleShot(1000, self._check_service_status)
 
-            self.service_status.setText("✅ Service removed")
-            self.service_status.setStyleSheet("color: #95a5a6; font-size: 11px;")
+            self.service_status.setText("⏸️ Service stopped")
+            self.service_status.setStyleSheet("color: #f39c12; font-size: 11px;")
             self.run_as_service.setEnabled(True)
             self.run_as_service.setChecked(False)
 
@@ -1328,14 +1306,9 @@ WantedBy=default.target
             self.service_status.setStyleSheet("color: #e74c3c; font-size: 11px;")
             self.run_as_service.setEnabled(True)
             self.run_as_service.setChecked(True)
-
+    
     def _free_port(self, port):
         try:
-            import subprocess
-            import socket
-            import time
-            import os
-
             sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             sock.settimeout(1)
             result = sock.connect_ex(("localhost", port))
@@ -1389,9 +1362,6 @@ WantedBy=default.target
 
     def _check_service_status(self):
         try:
-            import subprocess
-            import socket
-
             result = subprocess.run(
                 ["systemctl", "--user", "is-active", "felfeldm.service"],
                 capture_output=True,
@@ -1416,19 +1386,16 @@ WantedBy=default.target
             if is_active and is_enabled and port_open:
                 self.service_status.setText("✅ Service is active")
                 self.service_status.setStyleSheet("color: #27ae60; font-size: 11px;")
-                self.run_as_service.setChecked(True)
             elif is_active:
                 self.service_status.setText("⚠️ Service is active but not enabled")
                 self.service_status.setStyleSheet("color: #f39c12; font-size: 11px;")
             else:
-                self.service_status.setText("🔹 Service is removed")
+                self.service_status.setText("🔹 Service is stopped")
                 self.service_status.setStyleSheet("color: #95a5a6; font-size: 11px;")
-                self.run_as_service.setChecked(False)
 
         except:
-            self.service_status.setText("🔹 Service is removed")
+            self.service_status.setText("🔹 Service is stopped")
             self.service_status.setStyleSheet("color: #95a5a6; font-size: 11px;")
-            self.run_as_service.setChecked(False)
 
     def _toggle_global_speed(self, checked):
         self.global_speed_spin.setEnabled(checked)
