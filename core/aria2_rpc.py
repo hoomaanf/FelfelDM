@@ -452,43 +452,6 @@ class Aria2RPC:
 
         return self._call("aria2.changePosition", [gid, pos, how])
 
-    def add_torrent(self, torrent: str, options: Dict = None) -> Optional[str]:
-        """افزودن دانلود با فایل تورنت"""
-        if not torrent:
-            return None
-
-        if options is None:
-            options = {}
-
-        try:
-            with open(torrent, "rb") as f:
-                torrent_data = f.read()
-            import base64
-
-            torrent_b64 = base64.b64encode(torrent_data).decode("ascii")
-        except Exception as e:
-            if self.on_error:
-                self.on_error(f"Failed to read torrent file: {e}")
-            return None
-
-        options = {k: v for k, v in options.items() if v is not None and v != ""}
-        params = [torrent_b64, options]
-
-        return self._call("aria2.addTorrent", params)
-
-    def add_metalink(self, metalink: str, options: Dict = None) -> Optional[str]:
-        """افزودن دانلود با فایل متالینک"""
-        if not metalink:
-            return None
-
-        if options is None:
-            options = {}
-
-        options = {k: v for k, v in options.items() if v is not None and v != ""}
-        params = [metalink, options]
-
-        return self._call("aria2.addMetalink", params)
-
     def get_gid_status(self, gid: str) -> Optional[Dict]:
         """دریافت وضعیت دانلود با GID (با هندلینگ خطا)"""
         try:
