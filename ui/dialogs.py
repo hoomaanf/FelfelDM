@@ -855,11 +855,11 @@ class DownloadProgressDialog(QDialog):
             return
 
         btn_text = self.action_btn.text().strip()
-        
+
         if btn_text == "Pause":
             self.pause_requested.emit(self.gid)
             print(f"⏸️ [Dialog] Pause requested for {self.gid}")
-        elif btn_text in ["Resume", "Start", "Retry"]: 
+        elif btn_text in ["Resume", "Start", "Retry"]:
             self.resume_requested.emit(self.gid)
             print(f"▶️ [Dialog] Resume requested for {self.gid}")
         else:
@@ -902,9 +902,40 @@ class DownloadProgressDialog(QDialog):
         speed = int(dl_data.get("downloadSpeed", 0))
         status = dl_data.get("status", "unknown")
         name = dl_data.get("name", "")
-        
+
+        if status == "complete" and not self._is_complete:
+            self._is_complete = True
+
+            print(f"✅ [Dialog] Download completed! Bringing window to front...")
+
+            self.setWindowFlags(
+                Qt.WindowType.Window
+                | Qt.WindowType.WindowCloseButtonHint
+                | Qt.WindowType.WindowMinimizeButtonHint
+                | Qt.WindowType.WindowMaximizeButtonHint
+                | Qt.WindowType.WindowStaysOnTopHint
+            )
+
+            self.show()
+            self.raise_()
+            self.activateWindow()
+
+            if self.windowState() & Qt.WindowState.WindowMinimized:
+                self.setWindowState(Qt.WindowState.WindowActive)
+
+            self.setWindowTitle("Download Completed!")
+
+            QTimer.singleShot(
+                3000,
+                lambda: self.setWindowFlags(
+                    Qt.WindowType.Window
+                    | Qt.WindowType.WindowCloseButtonHint
+                    | Qt.WindowType.WindowMinimizeButtonHint
+                    | Qt.WindowType.WindowMaximizeButtonHint
+                ),
+            )
+
         self._status = status
-        self._is_complete = status == "complete"
 
         files = dl_data.get("files", [])
         if files and files[0].get("path"):
@@ -965,7 +996,7 @@ class DownloadProgressDialog(QDialog):
     def _update_buttons(self, status):
         """Update button states based on download status"""
         self._status = status
-        
+
         if status == "complete":
             self.action_btn.setIcon(get_icon("folder"))
             self.action_btn.setText(" Open Folder")
@@ -1046,13 +1077,13 @@ class SettingsDialog(QDialog):
         self.max_concurrent = QSpinBox()
         self.max_concurrent.setRange(1, 50)
         self.max_concurrent.setValue(settings.get("max_concurrent", 5))
-        
+
         # ===== Max Retry Attempts (جدید) =====
         self.max_retries = QSpinBox()
         self.max_retries.setRange(0, 20)
         self.max_retries.setSpecialValueText("Disabled")
         self.max_retries.setValue(settings.get("max_retries", 3))
-        
+
         self.max_tries = QSpinBox()
         self.max_tries.setRange(0, 100)
         self.max_tries.setSpecialValueText("Unlimited")
@@ -1060,7 +1091,7 @@ class SettingsDialog(QDialog):
         self.conns = QSpinBox()
         self.conns.setRange(1, 16)
         self.conns.setValue(settings.get("connections", 8))
-        
+
         dl_layout.addRow("Max Concurrent Downloads:", self.max_concurrent)
         dl_layout.addRow("Max Retry Attempts:", self.max_retries)  # ===== جدید =====
         dl_layout.addRow("Max Retry Attempts (aria2):", self.max_tries)
@@ -1193,12 +1224,16 @@ class SettingsDialog(QDialog):
 
     def _install_service_async(self):
         try:
-            result = subprocess.run(["which", "FelfelDM"], capture_output=True, text=True)
-            exe_path = result.stdout.strip() if result.returncode == 0 else "/usr/bin/FelfelDM"
-            
+            result = subprocess.run(
+                ["which", "FelfelDM"], capture_output=True, text=True
+            )
+            exe_path = (
+                result.stdout.strip() if result.returncode == 0 else "/usr/bin/FelfelDM"
+            )
+
             if not os.path.exists(exe_path):
                 exe_path = "/usr/local/bin/FelfelDM"
-            
+
             if not os.path.exists(exe_path):
                 exe_path = "/usr/bin/FelfelDM"
 
@@ -1263,7 +1298,7 @@ class SettingsDialog(QDialog):
             self.service_status.setStyleSheet("color: #e74c3c; font-size: 11px;")
             self.run_as_service.setEnabled(True)
             self.run_as_service.setChecked(False)
-    
+
     def _stop_service_async(self):
         """فقط سرویس رو متوقف کن، پاک نکن"""
         try:
@@ -1306,7 +1341,7 @@ class SettingsDialog(QDialog):
             self.service_status.setStyleSheet("color: #e74c3c; font-size: 11px;")
             self.run_as_service.setEnabled(True)
             self.run_as_service.setChecked(True)
-    
+
     def _free_port(self, port):
         try:
             sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
