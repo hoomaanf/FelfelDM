@@ -101,17 +101,14 @@ class MainWindow(QMainWindow):
         QApplication.processEvents()
         self._start_backend()
 
-        # ===== ۱. صبر کن تا aria2 آماده بشه =====
         self.splash.update_status("Waiting for aria2...", 92)
         QApplication.processEvents()
-        
-        # ===== ۲. منتظر بمون تا aria2 وصل بشه (حداکثر ۵ ثانیه) =====
+
         wait_count = 0
         while not self.aria2.is_connected() and wait_count < 25:
             time.sleep(0.2)
             wait_count += 1
-        
-        # ===== ۳. حالا restore رو اجرا کن (با اسپلش) =====
+
         self.splash.update_status("Restoring downloads...", 93)
         QApplication.processEvents()
         self._restore_downloads_with_progress()
@@ -125,6 +122,7 @@ class MainWindow(QMainWindow):
         QApplication.processEvents()
 
         QTimer.singleShot(800, self._close_splash)
+
     def _detect_theme(self, theme_setting: str) -> bool:
         if theme_setting == "light":
             return False
@@ -219,14 +217,16 @@ class MainWindow(QMainWindow):
         self.pause_queue_btn.clicked.connect(self._pause_current_queue)
         btn_layout.addWidget(self.pause_queue_btn)
         sb_lay.addLayout(btn_layout)
-        
+
         move_layout = QHBoxLayout()
         move_layout.setSpacing(4)
 
         self.move_up_btn = QPushButton()
         self.move_up_btn.setIcon(get_icon("go-up"))
         self.move_up_btn.setToolTip("Move queue up")
-        self.move_up_btn.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        self.move_up_btn.setSizePolicy(
+            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed
+        )
         self.move_up_btn.setFixedHeight(30)
         self.move_up_btn.setMinimumWidth(0)
         self.move_up_btn.clicked.connect(self._move_queue_up)
@@ -235,7 +235,9 @@ class MainWindow(QMainWindow):
         self.move_down_btn = QPushButton()
         self.move_down_btn.setIcon(get_icon("go-down"))
         self.move_down_btn.setToolTip("Move queue down")
-        self.move_down_btn.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        self.move_down_btn.setSizePolicy(
+            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed
+        )
         self.move_down_btn.setFixedHeight(30)
         self.move_down_btn.setMinimumWidth(0)
         self.move_down_btn.clicked.connect(self._move_queue_down)
@@ -795,7 +797,7 @@ class MainWindow(QMainWindow):
             QApplication.processEvents()
 
     def _try_pause_download(self, gid: str, name: str) -> None:
-        """تلاش برای pause با نادیده گرفتن خطاها"""
+
         try:
             status_check = self.aria2.get_status(gid)
             if status_check and isinstance(status_check, dict):
@@ -846,7 +848,7 @@ class MainWindow(QMainWindow):
 
         self.move_up_btn.setEnabled(current_row > 0)
         self.move_down_btn.setEnabled(0 <= current_row < total_queues - 1)
-        
+
         if not q or len(q.downloads) == 0 or q.name == "__direct__":
             self.start_queue_btn.setEnabled(False)
             self.pause_queue_btn.setEnabled(False)
@@ -3421,7 +3423,11 @@ class MainWindow(QMainWindow):
                         q.downloads_info[gid]["status"] = "downloading"
                         break
 
-                if self._progress_dialog and self._progress_dialog.isVisible() and gid in self._all_downloads:
+                if (
+                    self._progress_dialog
+                    and self._progress_dialog.isVisible()
+                    and gid in self._all_downloads
+                ):
                     self._progress_dialog.update_data(self._all_downloads[gid])
 
                 self._refresh_table()
@@ -3434,7 +3440,9 @@ class MainWindow(QMainWindow):
 
                     if q and q.speed_limit > 0:
                         self.aria2.set_download_speed_limit(gid, q.speed_limit)
-                        print(f"⚡ Queue speed limit {q.speed_limit}KB/s applied to {gid}")
+                        print(
+                            f"⚡ Queue speed limit {q.speed_limit}KB/s applied to {gid}"
+                        )
 
                     self.tray.showMessage(
                         "FelfelDM",
@@ -3472,21 +3480,18 @@ class MainWindow(QMainWindow):
         )
 
     def _cancel_with_delete_from_dialog(self, gid: str) -> None:
-        """Cancel download and delete files from progress dialog"""
+
         print(f"🗑️ Cancel with delete requested for: {gid}")
 
-        # ===== ۱. اول از aria2 حذف کن =====
         try:
             self.aria2.remove(gid)
             print(f"⏹️ Removed from aria2: {gid}")
         except Exception as e:
             print(f"⚠️ Could not remove from aria2: {e}")
 
-        # ===== ۲. صبر کن تا aria2 فایل رو آزاد کنه =====
         QApplication.processEvents()
         time.sleep(0.5)
 
-        # ===== ۳. فایل‌ها رو پیدا کن =====
         file_paths = []
         aria2_files = []
 
@@ -3496,12 +3501,11 @@ class MainWindow(QMainWindow):
                 path = f.get("path")
                 if path and os.path.exists(path):
                     file_paths.append(path)
-                    # ===== فایل aria2 =====
+
                     aria2_path = path + ".aria2"
                     if os.path.exists(aria2_path):
                         aria2_files.append(aria2_path)
-            
-            # ===== اگه فایل پیدا نشد، از queue info بگیر =====
+
             if not file_paths:
                 for q in self.store.queues:
                     if gid in q.downloads_info:
@@ -3517,7 +3521,6 @@ class MainWindow(QMainWindow):
                                     aria2_files.append(aria2_path)
                         break
 
-        # ===== ۴. پاک کردن از queue و _all_downloads =====
         for q in self.store.queues:
             if gid in q.downloads:
                 q.downloads.remove(gid)
@@ -3527,7 +3530,6 @@ class MainWindow(QMainWindow):
         if gid in self._all_downloads:
             del self._all_downloads[gid]
 
-        # ===== ۵. پاک کردن فایل‌ها (با تاخیر و چند بار تلاش) =====
         def delete_with_retry(path, max_attempts=5):
             for attempt in range(max_attempts):
                 try:
@@ -3536,7 +3538,9 @@ class MainWindow(QMainWindow):
                         print(f"🗑️ DELETED: {os.path.basename(path)}")
                         return True
                 except PermissionError:
-                    print(f"⏳ File in use, retrying {attempt+1}/{max_attempts}: {os.path.basename(path)}")
+                    print(
+                        f"⏳ File in use, retrying {attempt+1}/{max_attempts}: {os.path.basename(path)}"
+                    )
                     time.sleep(0.3)
                 except Exception as e:
                     print(f"⚠️ Delete failed {path}: {e}")
@@ -3549,7 +3553,6 @@ class MainWindow(QMainWindow):
         for path in aria2_files:
             delete_with_retry(path)
 
-        # ===== ۶. اگر بازم فایل تمپ موند، force delete =====
         for path in aria2_files:
             if os.path.exists(path):
                 print(f"⚠️ Temp file still exists: {path}, trying force delete...")
@@ -3618,7 +3621,7 @@ class MainWindow(QMainWindow):
             for url in d["urls"]:
                 gid = self.aria2.add_url(url, options)
                 if gid:
-                    # ===== ۱. اول به صف اضافه کن =====
+
                     target_queue.downloads.append(gid)
                     clean_name = self._extract_filename(url)
                     full_path = os.path.join(d["path"], clean_name)
@@ -3641,7 +3644,6 @@ class MainWindow(QMainWindow):
                         "category": "📁 Other",
                     }
 
-                    # ===== ۲. به _all_downloads اضافه کن =====
                     self._all_downloads[gid] = {
                         "gid": gid,
                         "name": clean_name,
@@ -3655,15 +3657,14 @@ class MainWindow(QMainWindow):
                         "category": "📁 Other",
                     }
 
-                    # ===== ۳. برای Direct: فقط اضافه کن، resume نکن (فعلاً) =====
                     if queue_name == "__direct__":
-                        # ===== هنوز resume نکن =====
+
                         self._all_downloads[gid]["status"] = "waiting"
                         if gid in target_queue.downloads_info:
                             target_queue.downloads_info[gid]["status"] = "waiting"
                         print(f"⏳ Added to Direct: {clean_name}")
                     else:
-                        # ===== برای غیر Direct: Pause کن =====
+
                         try:
                             self.aria2.pause(gid)
                         except:
@@ -3675,32 +3676,31 @@ class MainWindow(QMainWindow):
 
                     added_gids.append(gid)
 
-            # ===== ۴. ذخیره و Refresh =====
             self.store.save()
             self._refresh_queue_list()
-            self._refresh_table()  # ===== دانلود توی لیست هست =====
+            self._refresh_table()
             self._update_shutdown_button_state()
 
-            # ===== ۵. برای Direct: با تاخیر resume کن و مودال باز کن =====
             if queue_name == "__direct__":
                 for gid in added_gids:
+
                     def start_direct_download(gid=gid):
-                        # ===== Resume کن =====
+
                         try:
                             self.aria2.resume(gid)
                             self._all_downloads[gid]["status"] = "active"
                             if gid in target_queue.downloads_info:
                                 target_queue.downloads_info[gid]["status"] = "active"
-                            print(f"▶️ Started Direct: {self._all_downloads[gid].get('name', 'Unknown')}")
+                            print(
+                                f"▶️ Started Direct: {self._all_downloads[gid].get('name', 'Unknown')}"
+                            )
                         except Exception as e:
                             print(f"⚠️ Could not resume: {e}")
-                        
-                        # ===== مودال باز کن =====
+
                         self._open_progress_dialog(gid)
-                    
-                    # ===== با تاخیر 500ms اجرا کن =====
+
                     QTimer.singleShot(500, lambda gid=gid: start_direct_download(gid))
-  
+
     def _on_table_double_click(self, index: QModelIndex) -> None:
         gid = self.model.get_gid(index.row())
         if not gid:
@@ -4689,37 +4689,35 @@ class MainWindow(QMainWindow):
                     pass
 
     def _move_queue_up(self) -> None:
-        """انتقال صف به بالا"""
+
         current_row = self.queue_list.currentRow()
         if current_row <= 0:
             return
-        
-        # ===== جابجایی در لیست =====
+
         self.store.queues.insert(current_row - 1, self.store.queues.pop(current_row))
         self._current_queue_idx = current_row - 1
-        
+
         self.store.save()
         self._refresh_queue_list()
         self.queue_list.setCurrentRow(self._current_queue_idx)
         self._on_queue_changed(self._current_queue_idx)
 
     def _move_queue_down(self) -> None:
-        """انتقال صف به پایین"""
+
         current_row = self.queue_list.currentRow()
         if current_row < 0 or current_row >= len(self.store.queues) - 1:
             return
-        
-        # ===== جابجایی در لیست =====
+
         self.store.queues.insert(current_row + 1, self.store.queues.pop(current_row))
         self._current_queue_idx = current_row + 1
-        
+
         self.store.save()
         self._refresh_queue_list()
         self.queue_list.setCurrentRow(self._current_queue_idx)
         self._on_queue_changed(self._current_queue_idx)
 
     def _on_queues_reordered(self, parent, start, end, destination, row) -> None:
-        """وقتی کاربر با درگ دراپ صف‌ها رو جابجا میکنه"""
+
         if start != row:
             queue = self.store.queues.pop(start)
             if row > start:

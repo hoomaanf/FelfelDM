@@ -104,7 +104,7 @@ class Queue:
         return q
 
     def is_scheduled_now(self):
-        """Check if current time is within the scheduled window for this queue"""
+
         if not self.schedule_enabled:
             return True
         now = datetime.now()
@@ -119,7 +119,7 @@ class Queue:
             return t >= start or t <= end
 
     def get_next_schedule_time(self):
-        """Get the next scheduled time for this queue"""
+
         if not self.schedule_enabled:
             return None
 
@@ -232,7 +232,7 @@ class DataStore:
         self._load_youtube_downloads()
 
     def _load_youtube_downloads(self):
-        """بارگذاری دانلودهای یوتیوب از فایل جداگانه"""
+
         if not self.youtube_downloads_file.exists():
             print("📁 No YouTube downloads file found")
             self.youtube_downloads = {}
@@ -248,7 +248,7 @@ class DataStore:
             self.youtube_downloads = {}
 
     def _save_youtube_downloads(self):
-        """ذخیره دانلودهای یوتیوب در فایل جداگانه"""
+
         try:
             temp_file = self.youtube_downloads_file.with_suffix(".tmp")
 
@@ -339,28 +339,6 @@ class DataStore:
         self._save_youtube_downloads()
 
     def add_youtube_download(self, download_data: dict) -> str:
-        """
-        افزودن دانلود یوتیوب جدید
-
-        Args:
-            download_data: {
-                'id': str,
-                'url': str,
-                'save_path': str,
-                'queue_id': Optional[str],
-                'yt_options': dict,
-                'proxy': Optional[str],
-                'status': str,
-                'progress': int,
-                'speed': str,
-                'eta': str,
-                'created_at': str,
-                'completed_at': Optional[str],
-                'error_message': str
-            }
-        Returns:
-            download_id: str
-        """
         download_id = download_data.get("id")
         if not download_id:
             import uuid
@@ -373,33 +351,25 @@ class DataStore:
         return download_id
 
     def get_youtube_download(self, download_id: str) -> Optional[dict]:
-        """دریافت یک دانلود یوتیوب با شناسه"""
+
         return self.youtube_downloads.get(download_id)
 
     def get_all_youtube_downloads(self) -> List[dict]:
-        """دریافت همه دانلودهای یوتیوب"""
+
         return list(self.youtube_downloads.values())
 
     def get_youtube_downloads_by_status(self, status: str) -> List[dict]:
-        """دریافت دانلودهای یوتیوب با وضعیت مشخص"""
+
         return [d for d in self.youtube_downloads.values() if d.get("status") == status]
 
     def get_youtube_downloads_by_queue(self, queue_id: str) -> List[dict]:
-        """دریافت دانلودهای یوتیوب در یک صف خاص"""
+
         return [
             d for d in self.youtube_downloads.values() if d.get("queue_id") == queue_id
         ]
 
     def update_youtube_download(self, download_id: str, updates: dict) -> bool:
-        """
-        به‌روزرسانی یک دانلود یوتیوب
 
-        Args:
-            download_id: شناسه دانلود
-            updates: دیکشنری شامل فیلدهایی که باید به‌روز شوند
-        Returns:
-            bool: موفقیت یا شکست
-        """
         if download_id not in self.youtube_downloads:
             return False
 
@@ -408,15 +378,15 @@ class DataStore:
         return True
 
     def update_youtube_status(self, download_id: str, status: str) -> bool:
-        """به‌روزرسانی وضعیت دانلود یوتیوب"""
+
         return self.update_youtube_download(download_id, {"status": status})
 
     def update_youtube_progress(self, download_id: str, progress: int) -> bool:
-        """به‌روزرسانی پیشرفت دانلود یوتیوب"""
+
         return self.update_youtube_download(download_id, {"progress": progress})
 
     def delete_youtube_download(self, download_id: str) -> bool:
-        """حذف یک دانلود یوتیوب"""
+
         if download_id not in self.youtube_downloads:
             return False
 
@@ -425,7 +395,7 @@ class DataStore:
         return True
 
     def clear_completed_youtube_downloads(self) -> int:
-        """حذف همه دانلودهای یوتیوب که کامل شده‌اند"""
+
         completed_ids = [
             d_id
             for d_id, d in self.youtube_downloads.items()
@@ -441,18 +411,15 @@ class DataStore:
         return len(completed_ids)
 
     def get_youtube_downloads_count(self) -> int:
-        """تعداد کل دانلودهای یوتیوب"""
+
         return len(self.youtube_downloads)
 
     def get_youtube_downloads_count_by_status(self, status: str) -> int:
-        """تعداد دانلودهای یوتیوب با وضعیت مشخص"""
+
         return len(self.get_youtube_downloads_by_status(status))
 
     def get_youtube_downloads_info_for_display(self) -> List[dict]:
-        """
-        دریافت اطلاعات دانلودهای یوتیوب برای نمایش در جدول
-        هر آیتم شامل فیلدهای مورد نیاز برای نمایش است
-        """
+
         display_list = []
         for d_id, d in self.youtube_downloads.items():
             display_list.append(

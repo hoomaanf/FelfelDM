@@ -24,7 +24,7 @@ class Aria2RPC:
         self._retry_delay = 0.5
 
     def _is_youtube_gid(self, gid: str) -> bool:
-        """بررسی اینکه GID مربوط به دانلود یوتیوب هست یا نه (فرمت UUID)"""
+
         if not gid:
             return False
         return bool(
@@ -36,11 +36,11 @@ class Aria2RPC:
         )
 
     def _get_url(self):
-        """ساخت URL برای RPC"""
+
         return f"{self.host}:{self.port}/jsonrpc"
 
     def _call(self, method: str, params: List = None) -> Optional[Dict]:
-        """فراخوانی متد RPC با مدیریت خطا"""
+
         if params is None:
             params = []
 
@@ -115,7 +115,7 @@ class Aria2RPC:
         return None
 
     def is_connected(self) -> bool:
-        """بررسی اتصال به aria2"""
+
         try:
             result = self._call("aria2.getVersion")
             if result:
@@ -128,7 +128,7 @@ class Aria2RPC:
             return False
 
     def start_aria2(self) -> bool:
-        """شروع aria2 به عنوان دیمن"""
+
         try:
             port = self.port
             cmd = [
@@ -172,30 +172,30 @@ class Aria2RPC:
             return False
 
     def get_version(self) -> Optional[Dict]:
-        """دریافت نسخه aria2"""
+
         return self._call("aria2.getVersion")
 
     def get_global_stat(self) -> Optional[Dict]:
-        """دریافت آمار کلی"""
+
         return self._call("aria2.getGlobalStat")
 
     def tell_active(self) -> List[Dict]:
-        """دریافت دانلودهای فعال"""
+
         result = self._call("aria2.tellActive")
         return result if result else []
 
     def tell_waiting(self, offset: int = 0, num: int = 100) -> List[Dict]:
-        """دریافت دانلودهای در انتظار"""
+
         result = self._call("aria2.tellWaiting", [offset, num])
         return result if result else []
 
     def tell_stopped(self, offset: int = 0, num: int = 100) -> List[Dict]:
-        """دریافت دانلودهای متوقف شده"""
+
         result = self._call("aria2.tellStopped", [offset, num])
         return result if result else []
 
     def get_status(self, gid: str) -> Optional[Dict]:
-        """دریافت وضعیت یک دانلود"""
+
         if not gid:
             return None
 
@@ -205,15 +205,11 @@ class Aria2RPC:
         return self._call("aria2.tellStatus", [gid])
 
     def tell_status(self, gid: str) -> Optional[Dict]:
-        """همان get_status (برای سازگاری)"""
+
         return self.get_status(gid)
 
     def add_url(self, url: str, options: Dict = None) -> Optional[str]:
-        """
-        افزودن دانلود جدید با URL
 
-        اصلاح شده: options مستقیماً به صورت dict ارسال میشه، نه list
-        """
         if not url:
             return None
 
@@ -228,7 +224,7 @@ class Aria2RPC:
         return result
 
     def add_uris(self, urls: List[str], options: Dict = None) -> List[Optional[str]]:
-        """افزودن چندین دانلود"""
+
         gids = []
         for url in urls:
             gid = self.add_url(url, options)
@@ -236,7 +232,7 @@ class Aria2RPC:
         return gids
 
     def pause(self, gid: str) -> bool:
-        """توقف موقت دانلود"""
+
         if not gid:
             return False
 
@@ -247,7 +243,7 @@ class Aria2RPC:
         return result is not None
 
     def force_pause(self, gid: str) -> bool:
-        """توقف اجباری دانلود"""
+
         if not gid:
             return False
 
@@ -258,7 +254,7 @@ class Aria2RPC:
         return result is not None
 
     def resume(self, gid: str) -> bool:
-        """ادامه دانلود"""
+
         if not gid:
             return False
 
@@ -269,11 +265,11 @@ class Aria2RPC:
         return result is not None
 
     def unpause(self, gid: str) -> bool:
-        """همان resume (برای سازگاری)"""
+
         return self.resume(gid)
 
     def remove(self, gid: str) -> bool:
-        """حذف دانلود"""
+
         if not gid:
             return False
 
@@ -284,7 +280,7 @@ class Aria2RPC:
         return result is not None
 
     def force_remove(self, gid: str) -> bool:
-        """حذف اجباری دانلود"""
+
         if not gid:
             return False
 
@@ -295,7 +291,7 @@ class Aria2RPC:
         return result is not None
 
     def change_global_option(self, options: Dict) -> bool:
-        """تغییر تنظیمات کلی"""
+
         if not options:
             return False
 
@@ -303,11 +299,11 @@ class Aria2RPC:
         return result is not None
 
     def get_global_option(self) -> Optional[Dict]:
-        """دریافت تنظیمات کلی"""
+
         return self._call("aria2.getGlobalOption")
 
     def set_download_speed_limit(self, gid: str, speed_kb: int) -> bool:
-        """تنظیم محدودیت سرعت برای یک دانلود"""
+
         if not gid:
             return False
 
@@ -323,7 +319,7 @@ class Aria2RPC:
         return result is not None
 
     def change_option(self, gid: str, options: Dict) -> bool:
-        """تغییر تنظیمات یک دانلود"""
+
         if not gid or not options:
             return False
 
@@ -334,7 +330,7 @@ class Aria2RPC:
         return result is not None
 
     def get_option(self, gid: str) -> Optional[Dict]:
-        """دریافت تنظیمات یک دانلود"""
+
         if not gid:
             return None
 
@@ -344,7 +340,7 @@ class Aria2RPC:
         return self._call("aria2.getOption", [gid])
 
     def set_global_proxy(self, proxy_config) -> bool:
-        """تنظیم پروکسی کلی"""
+
         if (
             proxy_config
             and hasattr(proxy_config, "is_valid")
@@ -359,36 +355,36 @@ class Aria2RPC:
         return result is not None
 
     def pause_all(self) -> bool:
-        """توقف همه دانلودها"""
+
         result = self._call("aria2.pauseAll")
         return result is not None
 
     def force_pause_all(self) -> bool:
-        """توقف اجباری همه دانلودها"""
+
         result = self._call("aria2.forcePauseAll")
         return result is not None
 
     def resume_all(self) -> bool:
-        """ادامه همه دانلودها"""
+
         result = self._call("aria2.unpauseAll")
         return result is not None
 
     def unpause_all(self) -> bool:
-        """همان resume_all (برای سازگاری)"""
+
         return self.resume_all()
 
     def purge_download_result(self) -> bool:
-        """پاک کردن نتایج دانلودهای کامل شده"""
+
         result = self._call("aria2.purgeDownloadResult")
         return result is not None
 
     def save_session(self) -> bool:
-        """ذخیره جلسه aria2"""
+
         result = self._call("aria2.saveSession")
         return result is not None
 
     def shutdown(self) -> bool:
-        """خاموش کردن aria2"""
+
         result = self._call("aria2.shutdown")
         if result is not None:
             self._connected = False
@@ -396,7 +392,7 @@ class Aria2RPC:
         return False
 
     def force_shutdown(self) -> bool:
-        """خاموش کردن اجباری aria2"""
+
         result = self._call("aria2.forceShutdown")
         if result is not None:
             self._connected = False
@@ -404,7 +400,7 @@ class Aria2RPC:
         return False
 
     def get_files(self, gid: str) -> Optional[List[Dict]]:
-        """دریافت لیست فایل‌های یک دانلود"""
+
         if not gid:
             return None
 
@@ -414,7 +410,7 @@ class Aria2RPC:
         return self._call("aria2.getFiles", [gid])
 
     def get_peers(self, gid: str) -> Optional[List[Dict]]:
-        """دریافت لیست همتاهای یک دانلود"""
+
         if not gid:
             return None
 
@@ -424,7 +420,7 @@ class Aria2RPC:
         return self._call("aria2.getPeers", [gid])
 
     def get_servers(self, gid: str) -> Optional[List[Dict]]:
-        """دریافت لیست سرورهای یک دانلود"""
+
         if not gid:
             return None
 
@@ -436,14 +432,6 @@ class Aria2RPC:
     def change_position(
         self, gid: str, pos: int, how: str = "POS_SET"
     ) -> Optional[int]:
-        """
-        تغییر موقعیت دانلود در صف
-
-        Args:
-            gid: شناسه دانلود
-            pos: موقعیت جدید یا مقدار جابه‌جایی
-            how: روش جابه‌جایی ("POS_SET", "POS_CUR", "POS_END")
-        """
         if not gid:
             return None
 
@@ -453,35 +441,35 @@ class Aria2RPC:
         return self._call("aria2.changePosition", [gid, pos, how])
 
     def get_gid_status(self, gid: str) -> Optional[Dict]:
-        """دریافت وضعیت دانلود با GID (با هندلینگ خطا)"""
+
         try:
             return self.get_status(gid)
         except:
             return None
 
     def is_download_active(self, gid: str) -> bool:
-        """بررسی اینکه دانلود فعال است یا نه"""
+
         status = self.get_status(gid)
         if not status:
             return False
         return status.get("status") in ["active", "waiting"]
 
     def is_download_complete(self, gid: str) -> bool:
-        """بررسی اینکه دانلود کامل شده است یا نه"""
+
         status = self.get_status(gid)
         if not status:
             return False
         return status.get("status") == "complete"
 
     def is_download_paused(self, gid: str) -> bool:
-        """بررسی اینکه دانلود متوقف شده است یا نه"""
+
         status = self.get_status(gid)
         if not status:
             return False
         return status.get("status") == "paused"
 
     def get_download_progress(self, gid: str) -> Optional[float]:
-        """دریافت پیشرفت دانلود به صورت درصد"""
+
         status = self.get_status(gid)
         if not status:
             return None
@@ -494,7 +482,7 @@ class Aria2RPC:
         return (completed / total) * 100
 
     def get_download_speed(self, gid: str) -> Optional[int]:
-        """دریافت سرعت دانلود به بایت بر ثانیه"""
+
         status = self.get_status(gid)
         if not status:
             return None
