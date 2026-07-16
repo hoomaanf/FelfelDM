@@ -8,8 +8,8 @@ import os
 import argparse
 import threading
 import time
-import subprocess  # ===== اضافه شد =====
-import shutil     # ===== اضافه شد =====
+import subprocess  
+import shutil    
 from PyQt6.QtWidgets import QApplication
 from PyQt6.QtGui import QIcon
 from PyQt6.QtCore import Qt, QTimer, QCoreApplication
@@ -60,7 +60,6 @@ def signal_handler(sig, frame):
     timer.start()
 
 
-# ===== تابع آپدیت =====
 def update_self():
     """Update FelfelDM from GitHub using install.sh"""
     print("🔄 Updating FelfelDM from GitHub...")
@@ -68,13 +67,12 @@ def update_self():
     print("")
     
     try:
-        # اجرای مستقیم دستور با bash
         result = subprocess.run(
             [
                 "bash", "-c",
                 "curl -s https://raw.githubusercontent.com/hoomaanf/FelfelDM/main/install.sh | bash"
             ],
-            capture_output=False,  # ===== نمایش خروجی مستقیم در ترمینال =====
+            capture_output=False, 
             text=True
         )
         
@@ -102,10 +100,9 @@ def main():
     parser.add_argument("--add", nargs="+", help="Add URLs to download")
     parser.add_argument("--clear", action="store_true", help="Clear all data")
     parser.add_argument("--daemon", action="store_true", help="Run as daemon (no GUI)")
-    parser.add_argument("--update", action="store_true", help="Update FelfelDM from GitHub")  # ===== اضافه شد =====
+    parser.add_argument("--update", action="store_true", help="Update FelfelDM from GitHub")
     args = parser.parse_args()
 
-    # ===== آپدیت =====
     if args.update:
         print("🌶️ FelfelDM Updater")
         print("=" * 50)
@@ -128,10 +125,7 @@ def main():
 
     if args.daemon:
         print("🌶️ FelfelDM Daemon starting...")
-        from PyQt6.QtCore import QCoreApplication
         from core.local_server import LocalServer
-        import signal
-        import time
 
         app = QCoreApplication(sys.argv)
         server = LocalServer()

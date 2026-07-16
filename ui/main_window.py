@@ -3,9 +3,6 @@
 import os
 import time
 import subprocess
-import tempfile
-import threading
-
 
 from datetime import datetime
 from PyQt6.QtWidgets import *
@@ -626,20 +623,67 @@ class MainWindow(QMainWindow):
                                 q.downloads_info.pop(gid, None)
                             q.downloads_info[new_gid] = old_info
 
+                            # ===== صبر کن تا aria2 اطلاعات رو دریافت کنه =====
+                            time.sleep(0.5)
+
+                            # ===== دریافت وضعیت واقعی از aria2 =====
+                            real_total = 0
+                            real_completed = 0
+                            real_files = []
+
+                            for attempt in range(5):
+                                real_status = self.aria2.get_status(new_gid)
+                                if real_status and isinstance(real_status, dict):
+                                    real_total = int(real_status.get("totalLength", 0))
+                                    real_completed = int(
+                                        real_status.get("completedLength", 0)
+                                    )
+                                    real_files = real_status.get("files", [])
+                                    print(
+                                        f"📊 [Restore] Attempt {attempt+1}: total={real_total}, completed={real_completed}"
+                                    )
+                                    if real_total > 0:
+                                        break
+                                time.sleep(0.3)
+
+                            # ===== ذخیره در _all_downloads =====
                             self._all_downloads[new_gid] = {
                                 "gid": new_gid,
                                 "name": old_info.get(
                                     "name", url.split("/")[-1] or "Unknown"
                                 ),
                                 "status": "paused",
-                                "totalLength": old_info.get("totalLength", 0),
-                                "completedLength": old_info.get("completedLength", 0),
+                                "totalLength": (
+                                    real_total
+                                    if real_total > 0
+                                    else old_info.get("totalLength", 0)
+                                ),
+                                "completedLength": real_completed,
                                 "downloadSpeed": 0,
                                 "connections": 0,
-                                "files": old_info.get("files", []),
+                                "files": (
+                                    real_files
+                                    if real_files
+                                    else old_info.get("files", [])
+                                ),
                                 "errorMessage": "",
                                 "category": old_info.get("category", "📁 Other"),
+                                "size_fetch_attempts": 0,
+                                "error_count": 0,
                             }
+
+                            # ===== به‌روزرسانی temp_db =====
+                            self.temp_db.update_download_status(
+                                gid=new_gid,
+                                status="paused",
+                                progress=0,
+                                speed=0,
+                                name=old_info.get("name", "Unknown"),
+                                totalLength=self._all_downloads[new_gid]["totalLength"],
+                                completedLength=self._all_downloads[new_gid][
+                                    "completedLength"
+                                ],
+                            )
 
                             try:
                                 self.aria2.pause(new_gid)
@@ -2404,7 +2448,6 @@ class MainWindow(QMainWindow):
         self.model.update_rows(filtered)
 
     def _refresh_table(self):
-        """به‌روزرسانی جدول با دریافت اطلاعات لحظه‌ای از aria2"""
         q = self._current_queue()
         if not q:
             self.model.update_rows([])
@@ -2423,31 +2466,35 @@ class MainWindow(QMainWindow):
                     if status_data and isinstance(status_data, dict):
                         real_status = status_data.get("status", "unknown")
                         total_length = int(status_data.get("totalLength", 0))
-                        completed_length = int(status_data.get("completedLength", 0))
                         speed = int(status_data.get("downloadSpeed", 0))
 
+                        completed_length = row.get("completedLength", 0)
+                        
+                        aria2_completed = int(status_data.get("completedLength", 0))
+                        if aria2_completed > completed_length:
+                            completed_length = aria2_completed
+
                         row["status"] = real_status
-                        row["totalLength"] = (
-                            total_length
-                            if total_length > 0
-                            else row.get("totalLength", 0)
-                        )
-                        row["completedLength"] = completed_length
+                        row["totalLength"] = total_length if total_length > 0 else row.get("totalLength", 0)
+                        row["completedLength"] = completed_length  # ===== از دیتابیس =====
                         row["downloadSpeed"] = speed
 
                         if row["totalLength"] > 0:
-                            row["progress"] = int(
-                                (row["completedLength"] / row["totalLength"]) * 100
-                            )
+                            row["progress"] = int((row["completedLength"] / row["totalLength"]) * 100)
                         else:
                             row["progress"] = 0
 
-                        if q.paused and real_status not in [
-                            "complete",
-                            "completed",
-                            "error",
-                            "removed",
-                        ]:
+                        if row["totalLength"] == 0 and real_status in ["waiting", "paused"]:
+                            attempts = row.get("size_fetch_attempts", 0) + 1
+                            row["size_fetch_attempts"] = attempts
+                            if attempts > 3:
+                                row["status"] = "error"
+                                row["errorMessage"] = "❌ Failed to fetch file size (timeout)"
+                        else:
+                            if row["totalLength"] > 0:
+                                row["size_fetch_attempts"] = 0
+
+                        if q.paused and real_status not in ["complete", "completed", "error", "removed"]:
                             row["status"] = "paused"
                             row["downloadSpeed"] = 0
 
@@ -2458,17 +2505,20 @@ class MainWindow(QMainWindow):
                             speed=row["downloadSpeed"],
                             name=row.get("name", "Unknown"),
                             totalLength=row["totalLength"],
-                            completedLength=row["completedLength"],
+                            completedLength=row["completedLength"], 
                         )
 
                         self._all_downloads[gid] = row.copy()
+                        
+                    else:
+                        pass
 
                 else:
                     pass
 
             else:
+                # ===== دانلود جدید (همون کد قبلی) =====
                 info = q.downloads_info.get(gid, {})
-
                 status_data = self.aria2.get_status(gid)
 
                 if status_data and isinstance(status_data, dict):
@@ -2505,14 +2555,11 @@ class MainWindow(QMainWindow):
                     "category": info.get("category", "📁 Other"),
                     "download_type": info.get("download_type", "normal"),
                     "files": info.get("files", []),
+                    "size_fetch_attempts": 0,
+                    "error_count": 0,
                 }
 
-                if q.paused and real_status not in [
-                    "complete",
-                    "completed",
-                    "error",
-                    "removed",
-                ]:
+                if q.paused and real_status not in ["complete", "completed", "error", "removed"]:
                     row["status"] = "paused"
                     row["downloadSpeed"] = 0
 
@@ -2533,7 +2580,7 @@ class MainWindow(QMainWindow):
             rows.append(row)
 
         self.model.update_rows(rows)
-
+    
     def _update_toggle_button(self):
         """Update toggle button state based on selected download"""
         if not hasattr(self, "table") or not self.table.selectionModel():
@@ -2813,6 +2860,7 @@ class MainWindow(QMainWindow):
 
             old_data = self._all_downloads.get(gid, {})
             old_status = old_data.get("status")
+            old_completed = old_data.get("completedLength", 0)  # ===== اضافه شد =====
             error_count = old_data.get("error_count", 0)
 
             name = saved_name
@@ -2843,6 +2891,7 @@ class MainWindow(QMainWindow):
             total_length = saved_total
             completed_length = saved_completed
 
+            # ===== از aria2 بگیر (فقط total) =====
             aria2_total = dl.get("totalLength", 0)
             try:
                 aria2_total = int(aria2_total)
@@ -2852,14 +2901,18 @@ class MainWindow(QMainWindow):
             if aria2_total > 0:
                 total_length = aria2_total
 
+            # ===== completed رو از دیتابیس نگه دار =====
             aria2_completed = dl.get("completedLength", 0)
             try:
                 aria2_completed = int(aria2_completed)
             except (ValueError, TypeError):
                 aria2_completed = 0
 
-            if aria2_completed > 0:
+            # ===== فقط اگه aria2 مقدار بیشتری داشت، آپدیت کن =====
+            if aria2_completed > old_completed:
                 completed_length = aria2_completed
+            else:
+                completed_length = old_completed
 
             status = default_status
             if old_status == "paused" or saved_status == "paused":
@@ -2885,7 +2938,6 @@ class MainWindow(QMainWindow):
                 "error_count": error_count,
                 "errorMessage": dl.get("errorMessage", ""),
             }
-
         active_list = result.get("active", [])
         if not isinstance(active_list, list):
             active_list = []

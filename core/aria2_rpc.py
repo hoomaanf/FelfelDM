@@ -460,7 +460,6 @@ class Aria2RPC:
         if options is None:
             options = {}
 
-        # خواندن فایل تورنت
         try:
             with open(torrent, "rb") as f:
                 torrent_data = f.read()
