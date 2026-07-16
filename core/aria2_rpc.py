@@ -77,12 +77,8 @@ class Aria2RPC:
                     return result.get("result")
 
             except urllib.error.HTTPError as e:
-                print(f"❌ [aria2] HTTP Error {e.code}: {e.reason}")
                 try:
                     error_body = e.read().decode("utf-8")
-                    print(f"❌ [aria2] Response body: {error_body}")
-                    print(f"❌ [aria2] Method: {method}")
-                    print(f"❌ [aria2] Params: {params}")
                 except:
                     pass
 
