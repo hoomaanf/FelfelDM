@@ -5,7 +5,6 @@ import subprocess
 import time
 import socket
 
-
 from PyQt6.QtWidgets import *
 from PyQt6.QtGui import QDesktopServices
 from PyQt6.QtCore import *
@@ -15,112 +14,228 @@ from datetime import datetime, time as dtime
 from core.proxy_manager import ProxyType, ProxyConfig
 
 
+class AccordionGroup(QWidget):
+    """اکاردئون واقعی با فلش بالا/پایین"""
+
+    def __init__(self, title, parent=None, expanded=True):
+        super().__init__(parent)
+        self._expanded = expanded
+
+        self.toggle_btn = QPushButton()
+        self.toggle_btn.setStyleSheet("""
+            QPushButton {
+                text-align: left;
+                font-weight: 600;
+                padding: 8px 10px;
+                border: none;
+                border-radius: 4px;
+                background: transparent;
+                font-size: 13px;
+            }
+            QPushButton:hover {
+                background: rgba(255,255,255,0.05);
+            }
+            QPushButton:pressed {
+                background: rgba(255,255,255,0.08);
+            }
+        """)
+        self.toggle_btn.clicked.connect(self._toggle)
+        self.toggle_btn.setFixedHeight(32)
+
+        self.content = QWidget()
+        self.content_layout = QVBoxLayout(self.content)
+        self.content_layout.setContentsMargins(10, 5, 10, 10)
+        self.content_layout.setSpacing(8)
+
+        main_layout = QVBoxLayout(self)
+        main_layout.setContentsMargins(0, 0, 0, 0)
+        main_layout.setSpacing(0)
+        main_layout.addWidget(self.toggle_btn)
+
+        self.line = QFrame()
+        self.line.setFrameShape(QFrame.Shape.HLine)
+        self.line.setFrameShadow(QFrame.Shadow.Sunken)
+        self.line.setStyleSheet("background-color: #313244; max-height: 1px;")
+        main_layout.addWidget(self.line)
+
+        main_layout.addWidget(self.content)
+
+        self.set_title(title)
+        self.set_expanded(expanded)
+
+    def set_title(self, title):
+        self.toggle_btn.setText(f"  {title}")
+        self._update_icon()
+
+    def _update_icon(self):
+        icon = get_icon("go-down") if self._expanded else get_icon("go-next")
+        self.toggle_btn.setIcon(icon)
+
+    def _toggle(self):
+        self.set_expanded(not self._expanded)
+
+    def set_expanded(self, expanded):
+        self._expanded = expanded
+        self.content.setVisible(expanded)
+        self.line.setVisible(expanded)
+        self._update_icon()
+
+    def is_expanded(self):
+        return self._expanded
+
+    def addWidget(self, widget):
+        self.content_layout.addWidget(widget)
+
+    def addLayout(self, layout):
+        self.content_layout.addLayout(layout)
+
+    def layout(self):
+        return self.content_layout
+
+
+# ============================================================
+# AddDownloadDialog
+# ============================================================
+
 class AddDownloadDialog(QDialog):
     def __init__(self, queues, default_queue=0, parent=None):
         super().__init__(parent)
         self.setWindowTitle("Add Downloads")
-        self.setMinimumWidth(580)
-        self.setMinimumHeight(450)
+        self.setMinimumWidth(620)
+        self.setMinimumHeight(420)
 
-        lay = QVBoxLayout(self)
-        lay.setSpacing(8)
+        self.queues = queues
+        self.default_queue = default_queue
+        self._custom_proxy = None
 
-        # === URL Group ===
-        url_group = QGroupBox("URLs")
-        url_layout = QVBoxLayout(url_group)
+        main_layout = QVBoxLayout(self)
+        main_layout.setSpacing(8)
+        main_layout.setContentsMargins(16, 12, 16, 16)
+
+        # ===== URLs =====
+        url_acc = AccordionGroup("URLs")
+        url_acc.set_expanded(True)
+
         self.url_edit = QTextEdit()
         self.url_edit.setPlaceholderText("Enter URLs (one per line)...")
-        self.url_edit.setMinimumHeight(80)
-        url_layout.addWidget(self.url_edit)
+        self.url_edit.setMinimumHeight(100)
+        url_acc.addWidget(self.url_edit)
 
-        import_btn = QPushButton(get_icon("document-open"), "Import from File")
-        import_btn.clicked.connect(self._import_from_txt)
-        url_layout.addWidget(import_btn)
-        lay.addWidget(url_group)
+        self.import_btn = QPushButton(get_icon("document-open"), " Import from File")
+        self.import_btn.clicked.connect(self._import_from_txt)
+        url_acc.addWidget(self.import_btn)
 
-        # === Save Location Group ===
-        path_group = QGroupBox("Save Location")
-        path_layout = QHBoxLayout(path_group)
-        self.path_edit = QLineEdit(os.path.expanduser("~/Downloads"))
-        path_layout.addWidget(self.path_edit)
-        browse = QPushButton(get_icon("folder-open"), "Browse...")
-        browse.clicked.connect(self._browse)
-        path_layout.addWidget(browse)
-        lay.addWidget(path_group)
+        main_layout.addWidget(url_acc)
 
-        # === Options Group ===
-        options_group = QGroupBox("Options")
-        options_layout = QFormLayout(options_group)
+        # ===== Settings =====
+        settings_acc = AccordionGroup("Settings")
+        settings_acc.set_expanded(True)
 
+        row1 = QHBoxLayout()
+        row1.setSpacing(12)
+
+        queue_widget = QWidget()
+        queue_widget.setMinimumWidth(180)
+        queue_layout = QVBoxLayout(queue_widget)
+        queue_layout.setContentsMargins(0, 0, 0, 0)
+        queue_layout.setSpacing(2)
+        queue_layout.addWidget(QLabel("Queue:"))
         self.queue_cb = QComboBox()
-        for q in queues:
+        for q in self.queues:
             if q.name != "__direct__":
                 self.queue_cb.addItem(q.name)
-        self.queue_cb.setCurrentIndex(default_queue)
-        options_layout.addRow("Queue:", self.queue_cb)
+        if self.default_queue < self.queue_cb.count():
+            self.queue_cb.setCurrentIndex(self.default_queue)
+        queue_layout.addWidget(self.queue_cb)
+        row1.addWidget(queue_widget)
 
+        conn_widget = QWidget()
+        conn_widget.setMinimumWidth(120)
+        conn_layout = QVBoxLayout(conn_widget)
+        conn_layout.setContentsMargins(0, 0, 0, 0)
+        conn_layout.setSpacing(2)
+        conn_layout.addWidget(QLabel("Connections:"))
         self.conn_spin = QSpinBox()
         self.conn_spin.setRange(1, 16)
         self.conn_spin.setValue(8)
-        options_layout.addRow("Connections:", self.conn_spin)
-        lay.addWidget(options_group)
+        conn_layout.addWidget(self.conn_spin)
+        row1.addWidget(conn_widget)
 
-        # === Proxy Settings Group ===
-        proxy_group = QGroupBox("Proxy Settings")
-        proxy_layout = QVBoxLayout(proxy_group)
+        row1.addStretch()
+        settings_acc.addLayout(row1)
+
+        row2 = QHBoxLayout()
+        row2.setSpacing(6)
+        row2.addWidget(QLabel("Save to:"))
+        self.path_edit = QLineEdit(os.path.expanduser("~/Downloads"))
+        row2.addWidget(self.path_edit)
+        self.browse_btn = QPushButton()
+        self.browse_btn.setIcon(get_icon("folder-open"))
+        self.browse_btn.setFixedSize(28, 28)
+        self.browse_btn.clicked.connect(self._browse)
+        row2.addWidget(self.browse_btn)
+        settings_acc.addLayout(row2)
+
+        main_layout.addWidget(settings_acc)
+
+        # ===== Proxy =====
+        proxy_acc = AccordionGroup("Proxy Settings")
+        proxy_acc.set_expanded(False)
 
         self.proxy_combo = QComboBox()
         self.proxy_combo.addItems(
-            [
-                "Use Global/Queue Proxy",
-                "Custom Proxy for this download",
-                "No Proxy (Direct Connection)",
-            ]
+            ["Use Global/Queue Proxy", "Custom Proxy", "No Proxy"]
         )
-        self.proxy_combo.setCurrentIndex(0)
         self.proxy_combo.currentIndexChanged.connect(self._on_proxy_mode_changed)
-        proxy_layout.addWidget(self.proxy_combo)
+        proxy_acc.addWidget(self.proxy_combo)
 
-        # Custom proxy config button
-        proxy_btn_layout = QHBoxLayout()
-        self.proxy_config_btn = QPushButton(
-            get_icon("configure"), "Configure Custom Proxy"
-        )
-        self.proxy_config_btn.clicked.connect(self._configure_custom_proxy)
+        proxy_btn_row = QHBoxLayout()
+        proxy_btn_row.setSpacing(6)
+
+        self.proxy_config_btn = QPushButton(get_icon("configure"), " Configure")
         self.proxy_config_btn.setEnabled(False)
-        proxy_btn_layout.addWidget(self.proxy_config_btn)
+        self.proxy_config_btn.clicked.connect(self._configure_custom_proxy)
+        proxy_btn_row.addWidget(self.proxy_config_btn)
 
-        self.proxy_clear_btn = QPushButton(get_icon("edit-clear"), "Clear")
-        self.proxy_clear_btn.clicked.connect(self._clear_custom_proxy)
+        self.proxy_clear_btn = QPushButton(get_icon("edit-clear"), " Clear")
         self.proxy_clear_btn.setEnabled(False)
-        proxy_btn_layout.addWidget(self.proxy_clear_btn)
-        proxy_btn_layout.addStretch()
-        proxy_layout.addLayout(proxy_btn_layout)
+        self.proxy_clear_btn.clicked.connect(self._clear_custom_proxy)
+        proxy_btn_row.addWidget(self.proxy_clear_btn)
+
+        proxy_btn_row.addStretch()
+        proxy_acc.addLayout(proxy_btn_row)
 
         self.proxy_status_label = QLabel("")
-        self.proxy_status_label.setStyleSheet(
-            "color: #95a5a6; font-size: 10px; padding: 2px;"
-        )
         self.proxy_status_label.setWordWrap(True)
-        proxy_layout.addWidget(self.proxy_status_label)
+        self.proxy_status_label.setStyleSheet("font-size: 11px; padding: 2px;")
+        proxy_acc.addWidget(self.proxy_status_label)
 
-        lay.addWidget(proxy_group)
+        main_layout.addWidget(proxy_acc)
 
-        # === Info Label ===
-        info_label = QLabel("ℹ️ Downloads will be added in Paused state")
-        info_label.setStyleSheet("color: #95a5a6; font-size: 10px; padding: 4px;")
-        lay.addWidget(info_label)
+        # ===== Info & Buttons =====
+        self.info_label = QLabel("Downloads will be added in Paused state")
+        self.info_label.setStyleSheet("color: #95a5a6; font-size: 11px; padding: 4px;")
+        main_layout.addWidget(self.info_label)
 
-        # === Buttons ===
-        btn_box = QDialogButtonBox(
+        self.btn_box = QDialogButtonBox(
             QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
         )
-        btn_box.accepted.connect(self.accept)
-        btn_box.rejected.connect(self.reject)
-        lay.addWidget(btn_box)
+        self.btn_box.accepted.connect(self.accept)
+        self.btn_box.rejected.connect(self.reject)
+        main_layout.addWidget(self.btn_box)
 
-        # Custom proxy storage
-        self._custom_proxy = None
+        self._setup_tab_order()
+
+    def _setup_tab_order(self):
+        self.setTabOrder(self.url_edit, self.import_btn)
+        self.setTabOrder(self.import_btn, self.queue_cb)
+        self.setTabOrder(self.queue_cb, self.conn_spin)
+        self.setTabOrder(self.conn_spin, self.path_edit)
+        self.setTabOrder(self.path_edit, self.browse_btn)
+        self.setTabOrder(self.browse_btn, self.proxy_combo)
+        self.setTabOrder(self.proxy_combo, self.proxy_config_btn)
+        self.setTabOrder(self.proxy_config_btn, self.proxy_clear_btn)
+        self.setTabOrder(self.proxy_clear_btn, self.btn_box)
 
     def _browse(self):
         d = QFileDialog.getExistingDirectory(
@@ -138,10 +253,10 @@ class AddDownloadDialog(QDialog):
                 with open(file_path, "r", encoding="utf-8") as f:
                     lines = [line.strip() for line in f if line.strip()]
                 if lines:
-                    current_text = self.url_edit.toPlainText().strip()
+                    current = self.url_edit.toPlainText().strip()
                     combined = (
-                        current_text + "\n" + "\n".join(lines)
-                        if current_text
+                        current + "\n" + "\n".join(lines)
+                        if current
                         else "\n".join(lines)
                     )
                     self.url_edit.setPlainText(combined)
@@ -149,23 +264,23 @@ class AddDownloadDialog(QDialog):
                 QMessageBox.warning(self, "Error", f"Failed to parse file:\n{str(e)}")
 
     def _on_proxy_mode_changed(self, index):
-        """Enable/disable custom proxy config based on selection"""
-        is_custom = index == 1  # Custom proxy mode
+        is_custom = index == 1
         self.proxy_config_btn.setEnabled(is_custom)
         self.proxy_clear_btn.setEnabled(is_custom and self._custom_proxy is not None)
-
         if not is_custom:
             self.proxy_status_label.setText("")
         elif self._custom_proxy:
             self._update_proxy_status()
 
     def _configure_custom_proxy(self):
-        """Open custom proxy configuration dialog"""
         from ui.download_proxy_dialog import SimpleProxyDialog
 
-        url = self.url_edit.text().strip()
-        display_name = os.path.basename(url) if url else "YouTube Download"
-
+        url = (
+            self.url_edit.toPlainText().strip().split("\n")[0]
+            if self.url_edit.toPlainText()
+            else "Download"
+        )
+        display_name = os.path.basename(url) if url else "Download"
         dlg = SimpleProxyDialog(display_name, self._custom_proxy, self)
         if dlg.exec():
             new_config = dlg.get_proxy_config()
@@ -174,33 +289,27 @@ class AddDownloadDialog(QDialog):
             self._update_proxy_status()
 
     def _clear_custom_proxy(self):
-        """Clear custom proxy"""
         self._custom_proxy = None
         self.proxy_clear_btn.setEnabled(False)
         self.proxy_status_label.setText("")
-        self.proxy_status_label.setStyleSheet("color: #95a5a6; font-size: 10px;")
 
     def _update_proxy_status(self):
-        """Update status label with custom proxy info"""
         if self._custom_proxy and self._custom_proxy.is_valid():
             self.proxy_status_label.setText(
-                f"✅ Custom: {self._custom_proxy.get_display_string()}"
+                f"✓ {self._custom_proxy.get_display_string()}"
             )
-            self.proxy_status_label.setStyleSheet("color: #27ae60; font-size: 10px;")
+            self.proxy_status_label.setStyleSheet("color: #27ae60; font-size: 11px;")
         else:
-            self.proxy_status_label.setText("⚠️ Invalid proxy configuration")
-            self.proxy_status_label.setStyleSheet("color: #e74c3c; font-size: 10px;")
+            self.proxy_status_label.setText("Invalid proxy configuration")
+            self.proxy_status_label.setStyleSheet("color: #e74c3c; font-size: 11px;")
 
     def _get_urls(self):
-        """Get list of URLs from text edit"""
-        raw_text = self.url_edit.toPlainText()
-        return [line.strip() for line in raw_text.split("\n") if line.strip()]
+        raw = self.url_edit.toPlainText()
+        return [line.strip() for line in raw.split("\n") if line.strip()]
 
     def get_data(self):
-        """Get all dialog data"""
         urls = self._get_urls()
-        proxy_mode = self.proxy_combo.currentIndex()  # 0: global, 1: custom, 2: none
-
+        proxy_mode = self.proxy_combo.currentIndex()
         return {
             "urls": urls,
             "path": self.path_edit.text().strip(),
@@ -211,485 +320,138 @@ class AddDownloadDialog(QDialog):
         }
 
 
-class SingleDownloadDialog(QDialog):
-    def __init__(self, parent=None):
-        super().__init__(parent)
-        self.setWindowTitle("Single Download")
-        self.setMinimumWidth(500)
-
-        lay = QVBoxLayout(self)
-        lay.setSpacing(10)
-
-        # === URL Group ===
-        url_group = QGroupBox("URL")
-        url_layout = QVBoxLayout(url_group)
-        self.url_edit = QLineEdit()
-        self.url_edit.setPlaceholderText("https://example.com/file.zip")
-        url_layout.addWidget(self.url_edit)
-        lay.addWidget(url_group)
-
-        # === Save Location Group ===
-        path_group = QGroupBox("Save Location")
-        path_layout = QHBoxLayout(path_group)
-        self.path_edit = QLineEdit(os.path.expanduser("~/Downloads"))
-        path_layout.addWidget(self.path_edit)
-        browse = QPushButton(get_icon("folder-open"), "Browse")
-        browse.clicked.connect(self._browse)
-        path_layout.addWidget(browse)
-        lay.addWidget(path_group)
-
-        # === Options Group ===
-        options_group = QGroupBox("Options")
-        options_layout = QFormLayout(options_group)
-
-        self.conn_spin = QSpinBox()
-        self.conn_spin.setRange(1, 16)
-        self.conn_spin.setValue(8)
-        options_layout.addRow("Connections:", self.conn_spin)
-
-        self.start_immediately = QCheckBox("Start download immediately")
-        self.start_immediately.setChecked(True)
-        options_layout.addRow("", self.start_immediately)
-
-        lay.addWidget(options_group)
-
-        # === Proxy Settings Group ===
-        proxy_group = QGroupBox("Proxy Settings")
-        proxy_layout = QVBoxLayout(proxy_group)
-
-        self.proxy_combo = QComboBox()
-        self.proxy_combo.addItems(
-            [
-                "Use Global/Queue Proxy",
-                "Custom Proxy for this download",
-                "No Proxy (Direct Connection)",
-            ]
-        )
-        self.proxy_combo.setCurrentIndex(0)
-        self.proxy_combo.currentIndexChanged.connect(self._on_proxy_mode_changed)
-        proxy_layout.addWidget(self.proxy_combo)
-
-        # Custom proxy config button
-        proxy_btn_layout = QHBoxLayout()
-        self.proxy_config_btn = QPushButton(
-            get_icon("configure"), "Configure Custom Proxy"
-        )
-        self.proxy_config_btn.clicked.connect(self._configure_custom_proxy)
-        self.proxy_config_btn.setEnabled(False)
-        proxy_btn_layout.addWidget(self.proxy_config_btn)
-
-        self.proxy_clear_btn = QPushButton(get_icon("edit-clear"), "Clear")
-        self.proxy_clear_btn.clicked.connect(self._clear_custom_proxy)
-        self.proxy_clear_btn.setEnabled(False)
-        proxy_btn_layout.addWidget(self.proxy_clear_btn)
-        proxy_btn_layout.addStretch()
-        proxy_layout.addLayout(proxy_btn_layout)
-
-        self.proxy_status_label = QLabel("")
-        self.proxy_status_label.setStyleSheet(
-            "color: #95a5a6; font-size: 10px; padding: 2px;"
-        )
-        self.proxy_status_label.setWordWrap(True)
-        proxy_layout.addWidget(self.proxy_status_label)
-
-        lay.addWidget(proxy_group)
-
-        # === Buttons ===
-        btn_box = QDialogButtonBox(
-            QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
-        )
-        btn_box.accepted.connect(self.accept)
-        btn_box.rejected.connect(self.reject)
-        lay.addWidget(btn_box)
-
-        # Custom proxy storage
-        self._custom_proxy = None
-
-    def _browse(self):
-        d = QFileDialog.getExistingDirectory(
-            self, "Select Directory", self.path_edit.text()
-        )
-        if d:
-            self.path_edit.setText(d)
-
-    def _on_proxy_mode_changed(self, index):
-        """Enable/disable custom proxy config based on selection"""
-        is_custom = index == 1  # Custom proxy mode
-        self.proxy_config_btn.setEnabled(is_custom)
-        self.proxy_clear_btn.setEnabled(is_custom and self._custom_proxy is not None)
-
-        if not is_custom:
-            self.proxy_status_label.setText("")
-        elif self._custom_proxy:
-            self._update_proxy_status()
-
-    def _configure_custom_proxy(self):
-        """Open custom proxy configuration dialog"""
-        from ui.download_proxy_dialog import DownloadProxyDialog
-
-        # Get URL for display name
-        url = self.url_edit.text().strip()
-        display_name = os.path.basename(url) if url else "Single Download"
-
-        dlg = DownloadProxyDialog(display_name, self._custom_proxy, self)
-        if dlg.exec():
-            data = dlg.get_data()
-            if data["use_custom"] and data["config"]:
-                self._custom_proxy = data["config"]
-                self.proxy_clear_btn.setEnabled(True)
-                self._update_proxy_status()
-            else:
-                self._custom_proxy = None
-                self.proxy_clear_btn.setEnabled(False)
-                self.proxy_status_label.setText("")
-
-    def _clear_custom_proxy(self):
-        """Clear custom proxy"""
-        self._custom_proxy = None
-        self.proxy_clear_btn.setEnabled(False)
-        self.proxy_status_label.setText("")
-        self.proxy_status_label.setStyleSheet("color: #95a5a6; font-size: 10px;")
-
-    def _update_proxy_status(self):
-        """Update status label with custom proxy info"""
-        if self._custom_proxy and self._custom_proxy.is_valid():
-            self.proxy_status_label.setText(
-                f"✅ Custom: {self._custom_proxy.get_display_string()}"
-            )
-            self.proxy_status_label.setStyleSheet("color: #27ae60; font-size: 10px;")
-        else:
-            self.proxy_status_label.setText("⚠️ Invalid proxy configuration")
-            self.proxy_status_label.setStyleSheet("color: #e74c3c; font-size: 10px;")
-
-    def get_data(self):
-        """Get all dialog data"""
-        proxy_mode = self.proxy_combo.currentIndex()  # 0: global, 1: custom, 2: none
-
-        return {
-            "url": self.url_edit.text().strip(),
-            "path": self.path_edit.text().strip(),
-            "connections": self.conn_spin.value(),
-            "start_immediately": self.start_immediately.isChecked(),
-            "proxy_mode": proxy_mode,
-            "custom_proxy": self._custom_proxy if proxy_mode == 1 else None,
-        }
-
-
-class QueueSettingsDialog(QDialog):
-    def __init__(self, queue: Queue, parent=None):
-        super().__init__(parent)
-        self.setWindowTitle(f"Queue Settings — {queue.name}")
-        self.setMinimumWidth(480)
-
-        lay = QFormLayout(self)
-
-        self.name_edit = QLineEdit(queue.name)
-        lay.addRow("Queue Name:", self.name_edit)
-
-        path_row = QHBoxLayout()
-        self.path_edit = QLineEdit(queue.save_path)
-        path_row.addWidget(self.path_edit)
-        browse = QPushButton(get_icon("folder-open"), "Browse...")
-        browse.clicked.connect(self._browse)
-        path_row.addWidget(browse)
-        lay.addRow("Default Directory:", path_row)
-
-        self.conc_spin = QSpinBox()
-        self.conc_spin.setRange(1, 20)
-        self.conc_spin.setValue(queue.max_concurrent)
-        lay.addRow("Max Concurrent:", self.conc_spin)
-
-        self.sched_cb = QCheckBox("Enable Schedule")
-        self.sched_cb.setChecked(queue.schedule_enabled)
-        lay.addRow(self.sched_cb)
-
-        time_row = QHBoxLayout()
-        self.start_time = QTimeEdit(
-            QTime(queue.schedule_start.hour, queue.schedule_start.minute)
-        )
-        self.end_time = QTimeEdit(
-            QTime(queue.schedule_end.hour, queue.schedule_end.minute)
-        )
-        time_row.addWidget(QLabel("From:"))
-        time_row.addWidget(self.start_time)
-        time_row.addWidget(QLabel("To:"))
-        time_row.addWidget(self.end_time)
-        self.start_time.setDisplayFormat("HH:mm")
-        self.end_time.setDisplayFormat("HH:mm")
-        lay.addRow("Time Window:", time_row)
-
-        days_row = QHBoxLayout()
-        self.day_checks = []
-        for i, d in enumerate(["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]):
-            cb = QCheckBox(d)
-            cb.setChecked(i in queue.days)
-            self.day_checks.append(cb)
-            days_row.addWidget(cb)
-        lay.addRow("Active Days:", days_row)
-
-        speed_group = QGroupBox("Speed Limit")
-        speed_layout = QVBoxLayout(speed_group)
-
-        speed_limit_row = QHBoxLayout()
-        self.queue_speed_enabled = QCheckBox("Enable Speed Limit")
-        self.queue_speed_enabled.setChecked(getattr(queue, "speed_limit", 0) > 0)
-        self.queue_speed_enabled.toggled.connect(self._toggle_queue_speed)
-
-        self.queue_speed_spin = QSpinBox()
-        self.queue_speed_spin.setRange(0, 999999)
-        self.queue_speed_spin.setSuffix(" KB/s")
-        self.queue_speed_spin.setValue(getattr(queue, "speed_limit", 0) or 1024)
-        self.queue_speed_spin.setEnabled(self.queue_speed_enabled.isChecked())
-        self.queue_speed_spin.setMinimumWidth(120)
-
-        speed_limit_row.addWidget(self.queue_speed_enabled)
-        speed_limit_row.addWidget(self.queue_speed_spin)
-        speed_limit_row.addStretch()
-        speed_layout.addLayout(speed_limit_row)
-
-        speed_info = QLabel("💡 0 = unlimited")
-        speed_info.setStyleSheet("color: #95a5a6; font-size: 10px;")
-        speed_layout.addWidget(speed_info)
-
-        lay.addRow(speed_group)
-
-        # Proxy Settings for Queue
-        proxy_group = QGroupBox("Proxy Settings")
-        proxy_layout = QVBoxLayout(proxy_group)
-
-        self.queue_proxy_cb = QCheckBox("Use custom proxy for this queue")
-        self.queue_proxy_cb.setChecked(False)
-        self.queue_proxy_cb.toggled.connect(self._toggle_queue_proxy)
-        proxy_layout.addWidget(self.queue_proxy_cb)
-
-        proxy_config_layout = QHBoxLayout()
-        self.queue_proxy_status = QLabel("Using global proxy")
-        self.queue_proxy_status.setStyleSheet("color: #95a5a6; font-size: 10px;")
-        proxy_config_layout.addWidget(self.queue_proxy_status)
-        proxy_config_layout.addStretch()
-
-        self.queue_proxy_btn = QPushButton("Configure Queue Proxy")
-        self.queue_proxy_btn.clicked.connect(self._configure_queue_proxy)
-        self.queue_proxy_btn.setEnabled(False)
-        proxy_config_layout.addWidget(self.queue_proxy_btn)
-
-        proxy_layout.addLayout(proxy_config_layout)
-        lay.addRow(proxy_group)
-
-        # Load existing proxy config if any
-        self._queue_proxy_config = None
-        self._load_queue_proxy()
-
-        if queue.proxy_config:
-            self._queue_proxy_config = queue.proxy_config
-            self.queue_proxy_cb.setChecked(True)
-            self.queue_proxy_status.setText(
-                f"✅ {queue.proxy_config.get_display_string()}"
-            )
-            self.queue_proxy_status.setStyleSheet("color: #27ae60; font-size: 10px;")
-            self.queue_proxy_btn.setEnabled(True)
-
-        btn_box = QDialogButtonBox(
-            QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
-        )
-        btn_box.accepted.connect(self.accept)
-        btn_box.rejected.connect(self.reject)
-        lay.addRow(btn_box)
-
-    def _browse(self):
-        d = QFileDialog.getExistingDirectory(
-            self, "Select Directory", self.path_edit.text()
-        )
-        if d:
-            self.path_edit.setText(d)
-
-    def get_queue_data(self):
-        """Get queue settings data from dialog"""
-        st, en = self.start_time.time(), self.end_time.time()
-
-        data = {
-            "name": self.name_edit.text().strip(),
-            "save_path": self.path_edit.text().strip(),
-            "max_concurrent": self.conc_spin.value(),
-            "schedule_enabled": self.sched_cb.isChecked(),
-            "schedule_start": dtime(st.hour(), st.minute()),
-            "schedule_end": dtime(en.hour(), en.minute()),
-            "days": [i for i, cb in enumerate(self.day_checks) if cb.isChecked()],
-            "speed_limit": (
-                self.queue_speed_spin.value()
-                if self.queue_speed_enabled.isChecked()
-                else 0
-            ),
-            "proxy_config": None,
-        }
-
-        if hasattr(self, "_queue_proxy_config") and self.queue_proxy_cb.isChecked():
-            data["proxy_config"] = self._queue_proxy_config
-
-        return data
-
-    def _load_queue_proxy(self):
-        """Load proxy config for this queue"""
-        from core.proxy_manager import ProxyManager
-
-        if hasattr(self.parent(), "store"):
-            proxy_mgr = ProxyManager(self.parent().store)
-            queue_proxy = proxy_mgr.get_queue_proxy(self.name_edit.text())
-
-            if queue_proxy and queue_proxy.host:
-                self.queue_proxy_cb.setChecked(True)
-                self.queue_proxy_status.setText(
-                    f"✅ {queue_proxy.get_display_string()}"
-                )
-                self.queue_proxy_status.setStyleSheet(
-                    "color: #27ae60; font-size: 10px;"
-                )
-                self.queue_proxy_btn.setEnabled(True)
-                self._queue_proxy_config = queue_proxy
-            else:
-                self.queue_proxy_cb.setChecked(False)
-                self.queue_proxy_status.setText("Using global proxy")
-                self.queue_proxy_status.setStyleSheet(
-                    "color: #95a5a6; font-size: 10px;"
-                )
-                self.queue_proxy_btn.setEnabled(False)
-                self._queue_proxy_config = None
-
-    def _toggle_queue_proxy(self, checked):
-        self.queue_proxy_btn.setEnabled(checked)
-        if checked:
-            self.queue_proxy_status.setText("Click 'Configure' to set proxy")
-            self.queue_proxy_status.setStyleSheet("color: #f39c12; font-size: 10px;")
-        else:
-            self.queue_proxy_status.setText("Using global proxy")
-            self.queue_proxy_status.setStyleSheet("color: #95a5a6; font-size: 10px;")
-            self._queue_proxy_config = None
-
-    def _configure_queue_proxy(self):
-        from ui.proxy_dialog import ProxyDialog
-        from core.proxy_manager import ProxyConfig
-
-        current = getattr(self, "_queue_proxy_config", None) or ProxyConfig()
-        dlg = ProxyDialog(current, self, f"Queue Proxy: {self.name_edit.text()}")
-
-        if dlg.exec():
-            new_config = dlg.get_proxy_config()
-            self._queue_proxy_config = new_config
-            self.queue_proxy_status.setText(f"✅ {new_config.get_display_string()}")
-            self.queue_proxy_status.setStyleSheet("color: #27ae60; font-size: 10px;")
-
-    def _toggle_queue_speed(self, checked):
-        self.queue_speed_spin.setEnabled(checked)
-
+# ============================================================
+# QuickDownloadDialog
+# ============================================================
 
 class QuickDownloadDialog(QDialog):
     def __init__(self, queues, parent=None):
         super().__init__(parent)
         self.setWindowTitle("Quick Download")
-        self.setMinimumWidth(520)
+        self.setMinimumWidth(600)
+        self.setMinimumHeight(400)
 
-        lay = QVBoxLayout(self)
-        lay.setSpacing(12)
+        self.queues = queues
+        self._custom_proxy = None
 
-        # === URL Group ===
-        url_group = QGroupBox("URLs")
-        url_layout = QVBoxLayout(url_group)
+        main_layout = QVBoxLayout(self)
+        main_layout.setSpacing(8)
+        main_layout.setContentsMargins(16, 12, 16, 16)
+
+        # ===== URLs =====
+        url_acc = AccordionGroup("URLs")
+        url_acc.set_expanded(True)
+
         self.url_edit = QTextEdit()
         self.url_edit.setPlaceholderText("Enter URLs (one per line)...")
-        self.url_edit.setMinimumHeight(80)
-        url_layout.addWidget(self.url_edit)
-        lay.addWidget(url_group)
+        self.url_edit.setMinimumHeight(90)
+        url_acc.addWidget(self.url_edit)
 
-        # === Save Location Group ===
-        path_group = QGroupBox("Save Location")
-        path_layout = QHBoxLayout(path_group)
-        self.path_edit = QLineEdit(os.path.expanduser("~/Downloads"))
-        path_layout.addWidget(self.path_edit)
-        browse = QPushButton(get_icon("folder-open"), "Browse")
-        browse.clicked.connect(self._browse)
-        path_layout.addWidget(browse)
-        lay.addWidget(path_group)
+        main_layout.addWidget(url_acc)
 
-        # === Queue Selection ===
-        queue_group = QGroupBox("Add to Queue")
-        queue_layout = QVBoxLayout(queue_group)
+        # ===== Settings =====
+        settings_acc = AccordionGroup("Settings")
+        settings_acc.set_expanded(True)
+
+        row1 = QHBoxLayout()
+        row1.setSpacing(12)
+
+        queue_widget = QWidget()
+        queue_widget.setMinimumWidth(180)
+        queue_layout = QVBoxLayout(queue_widget)
+        queue_layout.setContentsMargins(0, 0, 0, 0)
+        queue_layout.setSpacing(2)
+        queue_layout.addWidget(QLabel("Queue:"))
         self.queue_combo = QComboBox()
-
-        # Populate queues from parameter
-        self.queue_combo.addItem("Direct Downloads (Quick)", "__direct__")
-        for q in queues:
+        self.queue_combo.addItem("Direct Downloads", "__direct__")
+        for q in self.queues:
             if q.name != "__direct__":
                 self.queue_combo.addItem(q.name, q.name)
-
         queue_layout.addWidget(self.queue_combo)
-        lay.addWidget(queue_group)
+        row1.addWidget(queue_widget)
 
-        # === Options Group ===
-        options_group = QGroupBox("Options")
-        options_layout = QFormLayout(options_group)
-
+        conn_widget = QWidget()
+        conn_widget.setMinimumWidth(120)
+        conn_layout = QVBoxLayout(conn_widget)
+        conn_layout.setContentsMargins(0, 0, 0, 0)
+        conn_layout.setSpacing(2)
+        conn_layout.addWidget(QLabel("Connections:"))
         self.conn_spin = QSpinBox()
         self.conn_spin.setRange(1, 16)
         self.conn_spin.setValue(8)
-        options_layout.addRow("Connections:", self.conn_spin)
+        conn_layout.addWidget(self.conn_spin)
+        row1.addWidget(conn_widget)
 
-        # Start Immediately Checkbox
-        self.start_immediately = QCheckBox("Start download immediately")
-        self.start_immediately.setChecked(True)
-        options_layout.addRow("", self.start_immediately)
+        row1.addStretch()
+        settings_acc.addLayout(row1)
 
-        lay.addWidget(options_group)
+        row2 = QHBoxLayout()
+        row2.setSpacing(6)
+        row2.addWidget(QLabel("Save to:"))
+        self.path_edit = QLineEdit(os.path.expanduser("~/Downloads"))
+        row2.addWidget(self.path_edit)
+        self.browse_btn = QPushButton()
+        self.browse_btn.setIcon(get_icon("folder-open"))
+        self.browse_btn.setFixedSize(28, 28)
+        self.browse_btn.clicked.connect(self._browse)
+        row2.addWidget(self.browse_btn)
+        settings_acc.addLayout(row2)
 
-        # === Proxy Settings Group ===
-        proxy_group = QGroupBox("Proxy Settings")
-        proxy_layout = QVBoxLayout(proxy_group)
+        # ===== حذف چک‌باکس Start Immediately =====
+
+        main_layout.addWidget(settings_acc)
+
+        # ===== Proxy =====
+        proxy_acc = AccordionGroup("Proxy Settings")
+        proxy_acc.set_expanded(False)
 
         self.proxy_combo = QComboBox()
-        self.proxy_combo.addItems(
-            [
-                "Use Global Proxy",
-                "Custom Proxy for this download",
-                "No Proxy (Direct Connection)",
-            ]
-        )
-        self.proxy_combo.setCurrentIndex(0)
+        self.proxy_combo.addItems(["Use Global Proxy", "Custom Proxy", "No Proxy"])
         self.proxy_combo.currentIndexChanged.connect(self._on_proxy_mode_changed)
-        proxy_layout.addWidget(self.proxy_combo)
+        proxy_acc.addWidget(self.proxy_combo)
 
-        # Custom proxy config button
-        proxy_btn_layout = QHBoxLayout()
-        self.proxy_config_btn = QPushButton(
-            get_icon("configure"), "Configure Custom Proxy"
-        )
-        self.proxy_config_btn.clicked.connect(self._configure_custom_proxy)
+        proxy_btn_row = QHBoxLayout()
+        proxy_btn_row.setSpacing(6)
+
+        self.proxy_config_btn = QPushButton(get_icon("configure"), " Configure")
         self.proxy_config_btn.setEnabled(False)
-        proxy_btn_layout.addWidget(self.proxy_config_btn)
+        self.proxy_config_btn.clicked.connect(self._configure_custom_proxy)
+        proxy_btn_row.addWidget(self.proxy_config_btn)
 
-        self.proxy_clear_btn = QPushButton(get_icon("edit-clear"), "Clear")
-        self.proxy_clear_btn.clicked.connect(self._clear_custom_proxy)
+        self.proxy_clear_btn = QPushButton(get_icon("edit-clear"), " Clear")
         self.proxy_clear_btn.setEnabled(False)
-        proxy_btn_layout.addWidget(self.proxy_clear_btn)
-        proxy_btn_layout.addStretch()
-        proxy_layout.addLayout(proxy_btn_layout)
+        self.proxy_clear_btn.clicked.connect(self._clear_custom_proxy)
+        proxy_btn_row.addWidget(self.proxy_clear_btn)
+
+        proxy_btn_row.addStretch()
+        proxy_acc.addLayout(proxy_btn_row)
 
         self.proxy_status_label = QLabel("")
-        self.proxy_status_label.setStyleSheet(
-            "color: #95a5a6; font-size: 10px; padding: 2px;"
-        )
         self.proxy_status_label.setWordWrap(True)
-        proxy_layout.addWidget(self.proxy_status_label)
+        self.proxy_status_label.setStyleSheet("font-size: 11px; padding: 2px;")
+        proxy_acc.addWidget(self.proxy_status_label)
 
-        lay.addWidget(proxy_group)
+        main_layout.addWidget(proxy_acc)
 
-        # === Buttons ===
-        btn_box = QDialogButtonBox(
+        # ===== Buttons =====
+        self.btn_box = QDialogButtonBox(
             QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
         )
-        btn_box.accepted.connect(self.accept)
-        btn_box.rejected.connect(self.reject)
-        lay.addWidget(btn_box)
+        self.btn_box.accepted.connect(self.accept)
+        self.btn_box.rejected.connect(self.reject)
+        main_layout.addWidget(self.btn_box)
 
-        self._custom_proxy = None
+        self._setup_tab_order()
+
+    def _setup_tab_order(self):
+        self.setTabOrder(self.url_edit, self.queue_combo)
+        self.setTabOrder(self.queue_combo, self.conn_spin)
+        self.setTabOrder(self.conn_spin, self.path_edit)
+        self.setTabOrder(self.path_edit, self.browse_btn)
+        self.setTabOrder(self.browse_btn, self.proxy_combo)
+        self.setTabOrder(self.proxy_combo, self.proxy_config_btn)
+        self.setTabOrder(self.proxy_config_btn, self.proxy_clear_btn)
+        self.setTabOrder(self.proxy_clear_btn, self.btn_box)
 
     def _browse(self):
         d = QFileDialog.getExistingDirectory(
@@ -702,7 +464,6 @@ class QuickDownloadDialog(QDialog):
         is_custom = index == 1
         self.proxy_config_btn.setEnabled(is_custom)
         self.proxy_clear_btn.setEnabled(is_custom and self._custom_proxy is not None)
-
         if not is_custom:
             self.proxy_status_label.setText("")
         elif self._custom_proxy:
@@ -712,8 +473,7 @@ class QuickDownloadDialog(QDialog):
         from ui.download_proxy_dialog import DownloadProxyDialog
 
         urls = self._get_urls()
-        display_name = os.path.basename(urls[0]) if urls else "Quick Download"
-
+        display_name = os.path.basename(urls[0]) if urls else "Download"
         dlg = DownloadProxyDialog(display_name, self._custom_proxy, self)
         if dlg.exec():
             data = dlg.get_data()
@@ -721,792 +481,211 @@ class QuickDownloadDialog(QDialog):
                 self._custom_proxy = data["config"]
                 self.proxy_clear_btn.setEnabled(True)
                 self._update_proxy_status()
-            else:
-                self._custom_proxy = None
-                self.proxy_clear_btn.setEnabled(False)
-                self.proxy_status_label.setText("")
 
     def _clear_custom_proxy(self):
         self._custom_proxy = None
         self.proxy_clear_btn.setEnabled(False)
         self.proxy_status_label.setText("")
-        self.proxy_status_label.setStyleSheet("color: #95a5a6; font-size: 10px;")
 
     def _update_proxy_status(self):
         if self._custom_proxy and self._custom_proxy.is_valid():
             self.proxy_status_label.setText(
-                f"✅ Custom: {self._custom_proxy.get_display_string()}"
+                f"✓ {self._custom_proxy.get_display_string()}"
             )
-            self.proxy_status_label.setStyleSheet("color: #27ae60; font-size: 10px;")
-        else:
-            self.proxy_status_label.setText("⚠️ Invalid proxy configuration")
-            self.proxy_status_label.setStyleSheet("color: #e74c3c; font-size: 10px;")
+            self.proxy_status_label.setStyleSheet("color: #27ae60; font-size: 11px;")
 
     def _get_urls(self):
-        raw_text = self.url_edit.toPlainText()
-        return [line.strip() for line in raw_text.split("\n") if line.strip()]
+        raw = self.url_edit.toPlainText()
+        return [line.strip() for line in raw.split("\n") if line.strip()]
 
     def get_data(self):
-        raw = self.url_edit.toPlainText()
-        urls = [l.strip() for l in raw.split("\n") if l.strip()]
+        urls = self._get_urls()
         proxy_mode = self.proxy_combo.currentIndex()
-
         return {
             "urls": urls,
             "path": self.path_edit.text().strip(),
             "connections": self.conn_spin.value(),
             "queue_name": self.queue_combo.currentData(),
+            "proxy_mode": proxy_mode,
+            "custom_proxy": self._custom_proxy if proxy_mode == 1 else None,
+        }
+# ============================================================
+# SingleDownloadDialog
+# ============================================================
+
+class SingleDownloadDialog(QDialog):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Single Download")
+        self.setMinimumWidth(560)
+        self.setMinimumHeight(380)
+
+        self._custom_proxy = None
+
+        main_layout = QVBoxLayout(self)
+        main_layout.setSpacing(8)
+        main_layout.setContentsMargins(16, 12, 16, 16)
+
+        # ===== URL =====
+        url_acc = AccordionGroup("URL")
+        url_acc.set_expanded(True)
+
+        self.url_edit = QLineEdit()
+        self.url_edit.setPlaceholderText("https://example.com/file.zip")
+        url_acc.addWidget(self.url_edit)
+
+        main_layout.addWidget(url_acc)
+
+        # ===== Settings =====
+        settings_acc = AccordionGroup("Settings")
+        settings_acc.set_expanded(True)
+
+        row1 = QHBoxLayout()
+        row1.setSpacing(12)
+
+        conn_widget = QWidget()
+        conn_widget.setMinimumWidth(150)
+        conn_layout = QVBoxLayout(conn_widget)
+        conn_layout.setContentsMargins(0, 0, 0, 0)
+        conn_layout.setSpacing(2)
+        conn_layout.addWidget(QLabel("Connections:"))
+        self.conn_spin = QSpinBox()
+        self.conn_spin.setRange(1, 16)
+        self.conn_spin.setValue(8)
+        conn_layout.addWidget(self.conn_spin)
+        row1.addWidget(conn_widget)
+
+        row1.addStretch()
+        settings_acc.addLayout(row1)
+
+        row2 = QHBoxLayout()
+        row2.setSpacing(6)
+        row2.addWidget(QLabel("Save to:"))
+        self.path_edit = QLineEdit(os.path.expanduser("~/Downloads"))
+        row2.addWidget(self.path_edit)
+        self.browse_btn = QPushButton()
+        self.browse_btn.setIcon(get_icon("folder-open"))
+        self.browse_btn.setFixedSize(28, 28)
+        self.browse_btn.clicked.connect(self._browse)
+        row2.addWidget(self.browse_btn)
+        settings_acc.addLayout(row2)
+
+        self.start_immediately = QCheckBox("Start download immediately")
+        self.start_immediately.setChecked(True)
+        settings_acc.addWidget(self.start_immediately)
+
+        main_layout.addWidget(settings_acc)
+
+        # ===== Proxy =====
+        proxy_acc = AccordionGroup("Proxy Settings")
+        proxy_acc.set_expanded(False)
+
+        self.proxy_combo = QComboBox()
+        self.proxy_combo.addItems(
+            ["Use Global/Queue Proxy", "Custom Proxy", "No Proxy"]
+        )
+        self.proxy_combo.currentIndexChanged.connect(self._on_proxy_mode_changed)
+        proxy_acc.addWidget(self.proxy_combo)
+
+        proxy_btn_row = QHBoxLayout()
+        proxy_btn_row.setSpacing(6)
+
+        self.proxy_config_btn = QPushButton(get_icon("configure"), " Configure")
+        self.proxy_config_btn.setEnabled(False)
+        self.proxy_config_btn.clicked.connect(self._configure_custom_proxy)
+        proxy_btn_row.addWidget(self.proxy_config_btn)
+
+        self.proxy_clear_btn = QPushButton(get_icon("edit-clear"), " Clear")
+        self.proxy_clear_btn.setEnabled(False)
+        self.proxy_clear_btn.clicked.connect(self._clear_custom_proxy)
+        proxy_btn_row.addWidget(self.proxy_clear_btn)
+
+        proxy_btn_row.addStretch()
+        proxy_acc.addLayout(proxy_btn_row)
+
+        self.proxy_status_label = QLabel("")
+        self.proxy_status_label.setWordWrap(True)
+        self.proxy_status_label.setStyleSheet("font-size: 11px; padding: 2px;")
+        proxy_acc.addWidget(self.proxy_status_label)
+
+        main_layout.addWidget(proxy_acc)
+
+        # ===== Buttons =====
+        self.btn_box = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
+        )
+        self.btn_box.accepted.connect(self.accept)
+        self.btn_box.rejected.connect(self.reject)
+        main_layout.addWidget(self.btn_box)
+
+        self._setup_tab_order()
+
+    def _setup_tab_order(self):
+        self.setTabOrder(self.url_edit, self.conn_spin)
+        self.setTabOrder(self.conn_spin, self.path_edit)
+        self.setTabOrder(self.path_edit, self.browse_btn)
+        self.setTabOrder(self.browse_btn, self.start_immediately)
+        self.setTabOrder(self.start_immediately, self.proxy_combo)
+        self.setTabOrder(self.proxy_combo, self.proxy_config_btn)
+        self.setTabOrder(self.proxy_config_btn, self.proxy_clear_btn)
+        self.setTabOrder(self.proxy_clear_btn, self.btn_box)
+
+    def _browse(self):
+        d = QFileDialog.getExistingDirectory(
+            self, "Select Directory", self.path_edit.text()
+        )
+        if d:
+            self.path_edit.setText(d)
+
+    def _on_proxy_mode_changed(self, index):
+        is_custom = index == 1
+        self.proxy_config_btn.setEnabled(is_custom)
+        self.proxy_clear_btn.setEnabled(is_custom and self._custom_proxy is not None)
+        if not is_custom:
+            self.proxy_status_label.setText("")
+        elif self._custom_proxy:
+            self._update_proxy_status()
+
+    def _configure_custom_proxy(self):
+        from ui.download_proxy_dialog import DownloadProxyDialog
+
+        url = self.url_edit.text().strip()
+        display_name = os.path.basename(url) if url else "Download"
+        dlg = DownloadProxyDialog(display_name, self._custom_proxy, self)
+        if dlg.exec():
+            data = dlg.get_data()
+            if data["use_custom"] and data["config"]:
+                self._custom_proxy = data["config"]
+                self.proxy_clear_btn.setEnabled(True)
+                self._update_proxy_status()
+
+    def _clear_custom_proxy(self):
+        self._custom_proxy = None
+        self.proxy_clear_btn.setEnabled(False)
+        self.proxy_status_label.setText("")
+
+    def _update_proxy_status(self):
+        if self._custom_proxy and self._custom_proxy.is_valid():
+            self.proxy_status_label.setText(
+                f"✓ {self._custom_proxy.get_display_string()}"
+            )
+            self.proxy_status_label.setStyleSheet("color: #27ae60; font-size: 11px;")
+
+    def get_data(self):
+        proxy_mode = self.proxy_combo.currentIndex()
+        return {
+            "url": self.url_edit.text().strip(),
+            "path": self.path_edit.text().strip(),
+            "connections": self.conn_spin.value(),
             "start_immediately": self.start_immediately.isChecked(),
             "proxy_mode": proxy_mode,
             "custom_proxy": self._custom_proxy if proxy_mode == 1 else None,
         }
 
 
-class DownloadProgressDialog(QDialog):
-    pause_requested = pyqtSignal(str)
-    resume_requested = pyqtSignal(str)
-    cancel_requested = pyqtSignal(str)
-    cancel_with_delete_requested = pyqtSignal(str)
-
-    def __init__(self, gid, dl_data, parent=None):
-        super().__init__(parent)
-        self.gid = gid
-        self.setWindowTitle("Download Progress")
-        self.setMinimumWidth(480)
-        self.setWindowFlags(
-            Qt.WindowType.Window
-            | Qt.WindowType.WindowCloseButtonHint
-            | Qt.WindowType.WindowMinimizeButtonHint
-            | Qt.WindowType.WindowMaximizeButtonHint
-        )
-        self.setWindowModality(Qt.WindowModality.NonModal)
-        self.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose, True)
-        self.setWindowFlags(
-            self.windowFlags() & ~Qt.WindowType.WindowContextHelpButtonHint
-        )
-
-        lay = QVBoxLayout(self)
-        lay.setSpacing(10)
-
-        self.name_lbl = QLabel(dl_data.get("name", "Unknown"))
-        self.name_lbl.setWordWrap(True)
-        self.name_lbl.setStyleSheet("font-weight: bold; font-size: 13px;")
-        lay.addWidget(self.name_lbl)
-
-        # Progress Bar
-        self.progress_bar = QProgressBar()
-        self.progress_bar.setMinimum(0)
-        self.progress_bar.setMaximum(100)
-        self.progress_bar.setTextVisible(True)
-        lay.addWidget(self.progress_bar)
-
-        # Info Group
-        info_group = QGroupBox("Info")
-        info_lay = QFormLayout(info_group)
-        self.size_lbl = QLabel("—")
-        self.speed_lbl = QLabel("—")
-        self.eta_lbl = QLabel("—")
-        self.conn_lbl = QLabel("—")
-        self.status_lbl = QLabel("—")
-        info_lay.addRow("Size:", self.size_lbl)
-        info_lay.addRow("Speed:", self.speed_lbl)
-        info_lay.addRow("ETA:", self.eta_lbl)
-        info_lay.addRow("Connections:", self.conn_lbl)
-        info_lay.addRow("Status:", self.status_lbl)
-        lay.addWidget(info_group)
-
-        btn_lay = QHBoxLayout()
-
-        self.action_btn = QPushButton()
-        self.action_btn.setIcon(get_icon("media-playback-pause"))
-        self.action_btn.setText(" Pause")
-        self.action_btn.clicked.connect(self._on_action_clicked)
-        btn_lay.addWidget(self.action_btn)
-
-        btn_lay.addStretch()
-
-        self.cancel_btn = QPushButton()
-        self.cancel_btn.setIcon(get_icon("edit-delete"))
-        self.cancel_btn.setText(" Cancel")
-        self.cancel_btn.clicked.connect(self._on_cancel_clicked)
-        btn_lay.addWidget(self.cancel_btn)
-
-        lay.addLayout(btn_lay)
-
-        self._status = "unknown"
-        self._is_complete = False
-        self._file_path = None
-
-        if dl_data:
-            files = dl_data.get("files", [])
-            if files and files[0].get("path"):
-                self._file_path = files[0]["path"]
-
-        self.update_data(dl_data)
-
-    def _on_action_clicked(self):
-        """Handle action button click (Pause/Resume/Open)"""
-        if self._is_complete:
-            if self._file_path and os.path.exists(self._file_path):
-                folder = os.path.dirname(self._file_path)
-                QDesktopServices.openUrl(QUrl.fromLocalFile(folder))
-            else:
-                QMessageBox.warning(self, "Folder Not Found", "Folder not found.")
-            return
-
-        btn_text = self.action_btn.text().strip()
-
-        if btn_text == "Pause":
-            self.pause_requested.emit(self.gid)
-            print(f"⏸️ [Dialog] Pause requested for {self.gid}")
-        elif btn_text in ["Resume", "Start", "Retry"]:
-            self.resume_requested.emit(self.gid)
-            print(f"▶️ [Dialog] Resume requested for {self.gid}")
-        else:
-            print(f"⚠️ [Dialog] Unknown action: {btn_text}")
-
-    def _on_cancel_clicked(self):
-        """Handle cancel button click"""
-        if self._is_complete:
-            self.close()
-            return
-
-        reply = QMessageBox.question(
-            self,
-            "Cancel Download",
-            "Are you sure you want to cancel this download?\n\n"
-            "Do you also want to delete the downloaded files?",
-            QMessageBox.StandardButton.Yes
-            | QMessageBox.StandardButton.No
-            | QMessageBox.StandardButton.Cancel,
-        )
-
-        if reply == QMessageBox.StandardButton.Cancel:
-            return
-        elif reply == QMessageBox.StandardButton.Yes:
-            self.cancel_with_delete_requested.emit(self.gid)
-            self.close()
-        else:
-            self.cancel_requested.emit(self.gid)
-            self.close()
-
-    def update_data(self, dl_data):
-        """Update dialog with new data"""
-        from utils.helpers import format_size, format_speed
-
-        if not dl_data:
-            return
-
-        total = int(dl_data.get("totalLength", 0))
-        completed = int(dl_data.get("completedLength", 0))
-        speed = int(dl_data.get("downloadSpeed", 0))
-        status = dl_data.get("status", "unknown")
-        name = dl_data.get("name", "")
-
-        if status == "complete" and not self._is_complete:
-            self._is_complete = True
-
-            print(f"✅ [Dialog] Download completed! Bringing window to front...")
-
-            self.setWindowFlags(
-                Qt.WindowType.Window
-                | Qt.WindowType.WindowCloseButtonHint
-                | Qt.WindowType.WindowMinimizeButtonHint
-                | Qt.WindowType.WindowMaximizeButtonHint
-                | Qt.WindowType.WindowStaysOnTopHint
-            )
-
-            self.show()
-            self.raise_()
-            self.activateWindow()
-
-            if self.windowState() & Qt.WindowState.WindowMinimized:
-                self.setWindowState(Qt.WindowState.WindowActive)
-
-            self.setWindowTitle("Download Completed!")
-
-            QTimer.singleShot(
-                3000,
-                lambda: self.setWindowFlags(
-                    Qt.WindowType.Window
-                    | Qt.WindowType.WindowCloseButtonHint
-                    | Qt.WindowType.WindowMinimizeButtonHint
-                    | Qt.WindowType.WindowMaximizeButtonHint
-                ),
-            )
-
-        self._status = status
-
-        files = dl_data.get("files", [])
-        if files and files[0].get("path"):
-            self._file_path = files[0]["path"]
-
-        if name:
-            self.name_lbl.setText(name)
-
-        # Progress bar
-        if total > 0:
-            pct = int((completed / total) * 100)
-            self.progress_bar.setValue(min(pct, 100))
-            self.progress_bar.setFormat(f"{pct}%")
-            self.size_lbl.setText(f"{format_size(completed)} / {format_size(total)}")
-        else:
-            self.progress_bar.setValue(0)
-            self.progress_bar.setFormat("—")
-            self.size_lbl.setText(f"{format_size(completed)} / Unknown")
-
-        # Speed & ETA
-        if status == "paused":
-            self.speed_lbl.setText("0 B/s")
-            self.eta_lbl.setText("—")
-        else:
-            self.speed_lbl.setText(format_speed(speed) if speed > 0 else "—")
-            if speed > 0 and total > completed:
-                eta_sec = (total - completed) // speed
-                h, m, s = eta_sec // 3600, (eta_sec % 3600) // 60, eta_sec % 60
-                self.eta_lbl.setText(f"{h:02d}:{m:02d}:{s:02d}")
-            else:
-                self.eta_lbl.setText("—")
-
-        self.conn_lbl.setText(str(dl_data.get("connections", 0)))
-
-        status_map = {
-            "active": "⬇ Downloading",
-            "waiting": "⏳ Waiting",
-            "paused": "⏸ Paused",
-            "complete": "✅ Complete",
-            "error": "❌ Error",
-            "removed": "🗑 Removed",
-        }
-        self.status_lbl.setText(status_map.get(status, status.capitalize()))
-
-        status_colors = {
-            "active": "#3daee9",
-            "waiting": "#95a5a6",
-            "paused": "#f39c12",
-            "complete": "#27ae60",
-            "error": "#e74c3c",
-        }
-        self.status_lbl.setStyleSheet(
-            f"color: {status_colors.get(status, '#95a5a6')}; font-weight: bold;"
-        )
-
-        self._update_buttons(status)
-
-    def _update_buttons(self, status):
-        """Update button states based on download status"""
-        self._status = status
-
-        if status == "complete":
-            self.action_btn.setIcon(get_icon("folder"))
-            self.action_btn.setText(" Open Folder")
-            self.action_btn.setEnabled(True)
-
-            self.cancel_btn.setText(" Close")
-            self.cancel_btn.setIcon(get_icon("window-close"))
-            self.cancel_btn.setEnabled(True)
-
-        elif status == "active":
-            self.action_btn.setIcon(get_icon("media-playback-pause"))
-            self.action_btn.setText(" Pause")
-            self.action_btn.setEnabled(True)
-
-            self.cancel_btn.setText(" Cancel")
-            self.cancel_btn.setIcon(get_icon("edit-delete"))
-            self.cancel_btn.setEnabled(True)
-
-        elif status == "paused":
-            self.action_btn.setIcon(get_icon("media-playback-start"))
-            self.action_btn.setText(" Resume")
-            self.action_btn.setEnabled(True)
-
-            self.cancel_btn.setText(" Cancel")
-            self.cancel_btn.setIcon(get_icon("edit-delete"))
-            self.cancel_btn.setEnabled(True)
-
-        elif status == "waiting":
-            self.action_btn.setIcon(get_icon("media-playback-start"))
-            self.action_btn.setText(" Start")
-            self.action_btn.setEnabled(True)
-
-            self.cancel_btn.setText(" Cancel")
-            self.cancel_btn.setIcon(get_icon("edit-delete"))
-            self.cancel_btn.setEnabled(True)
-
-        elif status == "error":
-            self.action_btn.setIcon(get_icon("media-playback-start"))
-            self.action_btn.setText(" Retry")
-            self.action_btn.setEnabled(True)
-
-            self.cancel_btn.setText(" Cancel")
-            self.cancel_btn.setIcon(get_icon("edit-delete"))
-            self.cancel_btn.setEnabled(True)
-
-        else:
-            self.action_btn.setEnabled(False)
-            self.cancel_btn.setEnabled(False)
-
-
-class SettingsDialog(QDialog):
-    def __init__(self, settings, parent=None):
-        super().__init__(parent)
-        self.setWindowTitle("Settings")
-        self.setMinimumWidth(480)
-        self.settings = settings
-
-        lay = QVBoxLayout(self)
-        lay.setSpacing(12)
-
-        # === aria2 RPC ===
-        rpc_group = QGroupBox("aria2 RPC")
-        rpc_layout = QFormLayout(rpc_group)
-        self.host = QLineEdit(settings.get("aria2_host", "http://localhost"))
-        self.port = QSpinBox()
-        self.port.setRange(1, 65535)
-        self.port.setValue(settings.get("aria2_port", 6800))
-        self.secret = QLineEdit(settings.get("aria2_secret", ""))
-        self.secret.setEchoMode(QLineEdit.EchoMode.Password)
-        rpc_layout.addRow("Host:", self.host)
-        rpc_layout.addRow("Port:", self.port)
-        rpc_layout.addRow("Secret:", self.secret)
-        lay.addWidget(rpc_group)
-
-        # === Download Settings ===
-        dl_group = QGroupBox("Download")
-        dl_layout = QFormLayout(dl_group)
-        self.max_concurrent = QSpinBox()
-        self.max_concurrent.setRange(1, 50)
-        self.max_concurrent.setValue(settings.get("max_concurrent", 5))
-
-        # ===== Max Retry Attempts (جدید) =====
-        self.max_retries = QSpinBox()
-        self.max_retries.setRange(0, 20)
-        self.max_retries.setSpecialValueText("Disabled")
-        self.max_retries.setValue(settings.get("max_retries", 3))
-
-        self.max_tries = QSpinBox()
-        self.max_tries.setRange(0, 100)
-        self.max_tries.setSpecialValueText("Unlimited")
-        self.max_tries.setValue(settings.get("max_tries", 0))
-        self.conns = QSpinBox()
-        self.conns.setRange(1, 16)
-        self.conns.setValue(settings.get("connections", 8))
-
-        dl_layout.addRow("Max Concurrent Downloads:", self.max_concurrent)
-        dl_layout.addRow("Max Retry Attempts:", self.max_retries)  # ===== جدید =====
-        dl_layout.addRow("Max Retry Attempts (aria2):", self.max_tries)
-        dl_layout.addRow("Default Connections:", self.conns)
-        lay.addWidget(dl_group)
-
-        # === Theme ===
-        theme_group = QGroupBox("Appearance")
-        theme_layout = QFormLayout(theme_group)
-        self.theme_combo = QComboBox()
-        self.theme_combo.addItems(["Auto", "Dark", "Light"])
-        current_theme = settings.get("theme", "auto").capitalize()
-        index = self.theme_combo.findText(current_theme)
-        if index >= 0:
-            self.theme_combo.setCurrentIndex(index)
-        theme_layout.addRow("Theme:", self.theme_combo)
-        lay.addWidget(theme_group)
-
-        # === Global Speed Limit ===
-        speed_group = QGroupBox("Global Speed Limit")
-        speed_layout = QVBoxLayout(speed_group)
-
-        speed_limit_row = QHBoxLayout()
-        self.global_speed_enabled = QCheckBox("Enable Global Speed Limit")
-        self.global_speed_enabled.setChecked(settings.get("speed_limit", 0) > 0)
-        self.global_speed_enabled.toggled.connect(self._toggle_global_speed)
-
-        self.global_speed_spin = QSpinBox()
-        self.global_speed_spin.setRange(0, 999999)
-        self.global_speed_spin.setSuffix(" KB/s")
-        self.global_speed_spin.setValue(settings.get("speed_limit", 1024))
-        self.global_speed_spin.setEnabled(self.global_speed_enabled.isChecked())
-        self.global_speed_spin.setMinimumWidth(120)
-
-        speed_limit_row.addWidget(self.global_speed_enabled)
-        speed_limit_row.addWidget(self.global_speed_spin)
-        speed_limit_row.addStretch()
-        speed_layout.addLayout(speed_limit_row)
-
-        speed_info = QLabel("💡 0 = unlimited")
-        speed_info.setStyleSheet("color: #95a5a6; font-size: 10px;")
-        speed_layout.addWidget(speed_info)
-
-        lay.addWidget(speed_group)
-
-        # === Proxy Settings ===
-        proxy_group = QGroupBox("Proxy")
-        proxy_layout = QVBoxLayout(proxy_group)
-
-        proxy_status_layout = QHBoxLayout()
-        self.proxy_status_label = QLabel("⛔ Disabled")
-        self.proxy_status_label.setStyleSheet("color: #95a5a6;")
-        proxy_status_layout.addWidget(self.proxy_status_label)
-        proxy_status_layout.addStretch()
-
-        self.proxy_edit_btn = QPushButton(get_icon("configure"), "Configure Proxy")
-        self.proxy_edit_btn.clicked.connect(self._configure_global_proxy)
-        proxy_status_layout.addWidget(self.proxy_edit_btn)
-
-        proxy_layout.addLayout(proxy_status_layout)
-
-        # Proxy info
-        self.proxy_info_label = QLabel("")
-        self.proxy_info_label.setStyleSheet("color: #95a5a6; font-size: 10px;")
-        proxy_layout.addWidget(self.proxy_info_label)
-
-        lay.addWidget(proxy_group)
-
-        # Update proxy status
-        self._update_proxy_status()
-
-        # === Cleanup ===
-        cleanup_group = QGroupBox("Cleanup")
-        cleanup_layout = QVBoxLayout(cleanup_group)
-        self.auto_clear_completed = QCheckBox("Auto-clear completed downloads")
-        self.auto_clear_completed.setChecked(
-            settings.get("auto_clear_completed", False)
-        )
-        cleanup_layout.addWidget(self.auto_clear_completed)
-        lay.addWidget(cleanup_group)
-
-        # === Service ===
-        service_group = QGroupBox("Service")
-        service_layout = QVBoxLayout(service_group)
-
-        self.run_as_service = QCheckBox(
-            "Run as background service (auto-start on login)"
-        )
-        self.run_as_service.setChecked(settings.get("run_as_service", False))
-        self.run_as_service.toggled.connect(self._on_service_toggle)
-        service_layout.addWidget(self.run_as_service)
-
-        self.service_status = QLabel("")
-        self.service_status.setStyleSheet("color: #95a5a6; font-size: 11px;")
-        service_layout.addWidget(self.service_status)
-
-        lay.addWidget(service_group)
-
-        # Buttons
-        btn_box = QDialogButtonBox(
-            QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
-        )
-        btn_box.accepted.connect(self.accept)
-        btn_box.rejected.connect(self.reject)
-        lay.addWidget(btn_box)
-
-        # Update status on load
-        self._update_service_status()
-
-    def _update_service_status(self):
-        """Update service status label"""
-        if self.run_as_service.isChecked():
-            self.service_status.setText("✅ Service is active")
-            self.service_status.setStyleSheet("color: #27ae60; font-size: 11px;")
-        else:
-            self.service_status.setText("🔹 Service is inactive")
-            self.service_status.setStyleSheet("color: #95a5a6; font-size: 11px;")
-
-    def _on_service_toggle(self, checked):
-        if checked:
-            self.service_status.setText("⏳ Installing service...")
-            self.service_status.setStyleSheet("color: #f39c12; font-size: 11px;")
-            QApplication.processEvents()
-            QTimer.singleShot(100, self._install_service_async)
-        else:
-            self.service_status.setText("⏳ Stopping service...")
-            self.service_status.setStyleSheet("color: #f39c12; font-size: 11px;")
-            QApplication.processEvents()
-            QTimer.singleShot(100, self._stop_service_async)
-
-    def _install_service_async(self):
-        try:
-            result = subprocess.run(
-                ["which", "FelfelDM"], capture_output=True, text=True
-            )
-            exe_path = (
-                result.stdout.strip() if result.returncode == 0 else "/usr/bin/FelfelDM"
-            )
-
-            if not os.path.exists(exe_path):
-                exe_path = "/usr/local/bin/FelfelDM"
-
-            if not os.path.exists(exe_path):
-                exe_path = "/usr/bin/FelfelDM"
-
-            self._free_port(8765)
-
-            service_dir = os.path.expanduser("~/.config/systemd/user")
-            os.makedirs(service_dir, exist_ok=True)
-
-            service_content = f"""[Unit]
-    Description=FelfelDM Download Manager Service
-    After=network.target
-
-    [Service]
-    Type=simple
-    ExecStart={exe_path} --daemon
-    Restart=on-failure
-    RestartSec=10
-    TimeoutStopSec=3
-    WorkingDirectory=/usr/share/felfeldm
-    StandardOutput=journal
-    StandardError=journal
-    KillMode=process
-    KillSignal=SIGTERM
-
-    [Install]
-    WantedBy=default.target
-    """
-
-            service_path = os.path.join(service_dir, "felfeldm.service")
-            with open(service_path, "w") as f:
-                f.write(service_content)
-
-            subprocess.Popen(
-                ["systemctl", "--user", "daemon-reload"],
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-            )
-            time.sleep(0.5)
-
-            subprocess.Popen(
-                ["systemctl", "--user", "enable", "felfeldm.service"],
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-            )
-            time.sleep(0.5)
-
-            subprocess.Popen(
-                ["systemctl", "--user", "start", "felfeldm.service"],
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-            )
-
-            QTimer.singleShot(1500, self._check_service_status)
-
-            self.service_status.setText("✅ Service installed and running")
-            self.service_status.setStyleSheet("color: #27ae60; font-size: 11px;")
-            self.run_as_service.setEnabled(True)
-            self.run_as_service.setChecked(True)
-
-        except Exception as e:
-            self.service_status.setText(f"❌ Failed: {str(e)}")
-            self.service_status.setStyleSheet("color: #e74c3c; font-size: 11px;")
-            self.run_as_service.setEnabled(True)
-            self.run_as_service.setChecked(False)
-
-    def _stop_service_async(self):
-        """فقط سرویس رو متوقف کن، پاک نکن"""
-        try:
-            subprocess.Popen(
-                ["systemctl", "--user", "stop", "felfeldm.service"],
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-            )
-            time.sleep(0.5)
-
-            subprocess.Popen(
-                ["systemctl", "--user", "disable", "felfeldm.service"],
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-            )
-            time.sleep(0.5)
-
-            subprocess.Popen(
-                ["systemctl", "--user", "daemon-reload"],
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-            )
-            time.sleep(0.5)
-
-            subprocess.Popen(
-                ["systemctl", "--user", "reset-failed"],
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-            )
-
-            QTimer.singleShot(1000, self._check_service_status)
-
-            self.service_status.setText("⏸️ Service stopped")
-            self.service_status.setStyleSheet("color: #f39c12; font-size: 11px;")
-            self.run_as_service.setEnabled(True)
-            self.run_as_service.setChecked(False)
-
-        except Exception as e:
-            self.service_status.setText(f"❌ Failed: {str(e)}")
-            self.service_status.setStyleSheet("color: #e74c3c; font-size: 11px;")
-            self.run_as_service.setEnabled(True)
-            self.run_as_service.setChecked(True)
-
-    def _free_port(self, port):
-        try:
-            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            sock.settimeout(1)
-            result = sock.connect_ex(("localhost", port))
-            sock.close()
-
-            if result != 0:
-                return True
-
-            print(f"🔍 Port {port} is in use, trying to free it...")
-
-            try:
-                result = subprocess.run(
-                    ["lsof", "-ti", f":{port}"],
-                    capture_output=True,
-                    text=True,
-                    timeout=2,
-                )
-                pids = result.stdout.strip().split("\n")
-                current_pid = str(os.getpid())
-
-                for pid in pids:
-                    if pid and pid.isdigit() and pid != current_pid:
-                        print(f"🔪 Killing process {pid} on port {port}")
-                        subprocess.Popen(
-                            ["kill", "-9", pid],
-                            stdout=subprocess.DEVNULL,
-                            stderr=subprocess.DEVNULL,
-                        )
-
-                time.sleep(1)
-
-                sock2 = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-                sock2.settimeout(1)
-                result2 = sock2.connect_ex(("localhost", port))
-                sock2.close()
-
-                if result2 == 0:
-                    print(f"⚠️ Port {port} still in use!")
-                    return False
-                else:
-                    print(f"✅ Port {port} is free now")
-                    return True
-
-            except subprocess.TimeoutExpired:
-                print(f"⚠️ Timeout checking port {port}")
-                return False
-
-        except Exception as e:
-            print(f"❌ Error freeing port {port}: {e}")
-            return False
-
-    def _check_service_status(self):
-        try:
-            result = subprocess.run(
-                ["systemctl", "--user", "is-active", "felfeldm.service"],
-                capture_output=True,
-                text=True,
-                timeout=2,
-            )
-            is_active = result.stdout.strip() == "active"
-
-            result2 = subprocess.run(
-                ["systemctl", "--user", "is-enabled", "felfeldm.service"],
-                capture_output=True,
-                text=True,
-                timeout=2,
-            )
-            is_enabled = result2.stdout.strip() == "enabled"
-
-            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            sock.settimeout(1)
-            port_open = sock.connect_ex(("localhost", 8765)) == 0
-            sock.close()
-
-            if is_active and is_enabled and port_open:
-                self.service_status.setText("✅ Service is active")
-                self.service_status.setStyleSheet("color: #27ae60; font-size: 11px;")
-            elif is_active:
-                self.service_status.setText("⚠️ Service is active but not enabled")
-                self.service_status.setStyleSheet("color: #f39c12; font-size: 11px;")
-            else:
-                self.service_status.setText("🔹 Service is stopped")
-                self.service_status.setStyleSheet("color: #95a5a6; font-size: 11px;")
-
-        except:
-            self.service_status.setText("🔹 Service is stopped")
-            self.service_status.setStyleSheet("color: #95a5a6; font-size: 11px;")
-
-    def _toggle_global_speed(self, checked):
-        self.global_speed_spin.setEnabled(checked)
-
-    def _update_proxy_status(self):
-        """Update proxy status display"""
-        from core.proxy_manager import ProxyManager
-
-        proxy_mgr = ProxyManager(
-            self.parent().store if hasattr(self.parent(), "store") else None
-        )
-
-        if (
-            proxy_mgr.global_proxy
-            and proxy_mgr.global_proxy.enabled
-            and proxy_mgr.global_proxy.host
-        ):
-            self.proxy_status_label.setText(
-                f"✅ {proxy_mgr.global_proxy.get_display_string()}"
-            )
-            self.proxy_status_label.setStyleSheet("color: #27ae60;")
-            self.proxy_info_label.setText(
-                f"Type: {proxy_mgr.global_proxy.type.value.upper()} • {proxy_mgr.global_proxy.host}:{proxy_mgr.global_proxy.port}"
-            )
-        else:
-            self.proxy_status_label.setText("⛔ Disabled")
-            self.proxy_status_label.setStyleSheet("color: #95a5a6;")
-            self.proxy_info_label.setText("No global proxy configured")
-
-    def _configure_global_proxy(self):
-        """Open proxy configuration dialog"""
-        from ui.proxy_dialog import ProxyDialog
-        from core.proxy_manager import ProxyManager
-
-        if not hasattr(self.parent(), "store"):
-            QMessageBox.warning(self, "Error", "Data store not available")
-            return
-
-        proxy_mgr = ProxyManager(self.parent().store)
-        current_config = proxy_mgr.global_proxy or ProxyConfig()
-
-        dlg = ProxyDialog(current_config, self, "Global Proxy Settings")
-        if dlg.exec():
-            new_config = dlg.get_proxy_config()
-            proxy_mgr.set_global_proxy(new_config)
-            self._update_proxy_status()
-
-            # Apply to aria2
-            if hasattr(self.parent(), "aria2"):
-                self.parent().aria2.set_global_proxy(new_config)
-
-            QMessageBox.information(self, "Success", "Proxy settings applied!")
-
-    def _update_service_status(self):
-        QTimer.singleShot(100, self._check_service_status)
-
-    def get_settings(self):
-        speed_limit = (
-            self.global_speed_spin.value()
-            if self.global_speed_enabled.isChecked()
-            else 0
-        )
-        return {
-            "aria2_host": self.host.text().strip(),
-            "aria2_port": self.port.value(),
-            "aria2_secret": self.secret.text(),
-            "connections": self.conns.value(),
-            "max_retries": self.max_retries.value(),  # ===== جدید =====
-            "max_tries": self.max_tries.value(),
-            "max_concurrent": self.max_concurrent.value(),
-            "auto_clear_completed": self.auto_clear_completed.isChecked(),
-            "theme": self.theme_combo.currentText().lower(),
-            "run_as_service": self.run_as_service.isChecked(),
-            "speed_limit": speed_limit,
-        }
-
+# ============================================================
+# YouTubeDownloadDialog
+# ============================================================
 
 class YouTubeDownloadDialog(QDialog):
     youtube_download_requested = pyqtSignal(dict)
@@ -1514,142 +693,151 @@ class YouTubeDownloadDialog(QDialog):
     def __init__(self, parent=None, queues=None, default_queue=0):
         super().__init__(parent)
         self.setWindowTitle("YouTube Download")
-        self.setMinimumWidth(550)
+        self.setMinimumWidth(600)
+        self.setMinimumHeight(420)
 
         self.queues = queues or []
         self.default_queue = default_queue
+        self.video_info = None
+        self._custom_proxy = None
+        self._format_map = {}
+        self.worker = None
 
-        lay = QVBoxLayout(self)
-        lay.setSpacing(10)
+        main_layout = QVBoxLayout(self)
+        main_layout.setSpacing(8)
+        main_layout.setContentsMargins(16, 12, 16, 16)
 
-        # URL
-        url_group = QGroupBox("YouTube URL")
-        url_layout = QVBoxLayout(url_group)
+        # ===== Video =====
+        video_acc = AccordionGroup("Video")
+        video_acc.set_expanded(True)
+
+        url_row = QHBoxLayout()
+        url_row.setSpacing(6)
         self.url_edit = QLineEdit()
         self.url_edit.setPlaceholderText("https://www.youtube.com/watch?v=...")
-        url_layout.addWidget(self.url_edit)
+        url_row.addWidget(self.url_edit)
 
-        self.fetch_btn = QPushButton("Get Video Info")
-        self.fetch_btn.setIcon(get_icon("view-refresh"))
+        self.fetch_btn = QPushButton(get_icon("view-refresh"), " Get Info")
+        self.fetch_btn.setFixedHeight(32)
         self.fetch_btn.clicked.connect(self._fetch_info)
-        url_layout.addWidget(self.fetch_btn)
+        url_row.addWidget(self.fetch_btn)
+        video_acc.addLayout(url_row)
 
-        lay.addWidget(url_group)
-
-        # Video Info
         info_group = QGroupBox("Video Info")
         self.info_layout = QFormLayout(info_group)
         self.info_layout.setSpacing(6)
 
-        # Placeholder
-        self.info_placeholder = QLabel("Enter a YouTube URL and click 'Get Video Info'")
+        self.info_placeholder = QLabel("Enter a YouTube URL and click 'Get Info'")
         self.info_placeholder.setStyleSheet("color: #95a5a6; font-size: 11px;")
         self.info_layout.addRow(self.info_placeholder)
 
-        lay.addWidget(info_group)
+        video_acc.addWidget(info_group)
 
-        # Options
-        options_group = QGroupBox("Download Options")
-        options_layout = QFormLayout(options_group)
+        main_layout.addWidget(video_acc)
+
+        # ===== Options =====
+        opts_acc = AccordionGroup("Options")
+        opts_acc.set_expanded(True)
 
         self.format_combo = QComboBox()
         self.format_combo.setEnabled(False)
-        options_layout.addRow("Quality/Format:", self.format_combo)
+        opts_acc.addWidget(self.format_combo)
 
         path_row = QHBoxLayout()
+        path_row.setSpacing(6)
         self.path_edit = QLineEdit(os.path.expanduser("~/Downloads"))
         path_row.addWidget(self.path_edit)
-        browse = QPushButton("Browse")
-        browse.setIcon(get_icon("folder-open"))
-        browse.clicked.connect(self._browse)
-        path_row.addWidget(browse)
-        options_layout.addRow("Save to:", path_row)
+        self.browse_btn = QPushButton()
+        self.browse_btn.setIcon(get_icon("folder-open"))
+        self.browse_btn.setFixedSize(28, 28)
+        self.browse_btn.clicked.connect(self._browse)
+        path_row.addWidget(self.browse_btn)
+        opts_acc.addLayout(path_row)
 
         cookie_row = QHBoxLayout()
+        cookie_row.setSpacing(6)
         self.cookie_edit = QLineEdit()
-        self.cookie_edit.setPlaceholderText("Optional: Path to cookies.txt")
+        self.cookie_edit.setPlaceholderText("Optional: cookies.txt path")
         cookie_row.addWidget(self.cookie_edit)
-        cookie_browse = QPushButton("Browse")
-        cookie_browse.setIcon(get_icon("folder-open"))
-        cookie_browse.clicked.connect(self._browse_cookie)
-        cookie_row.addWidget(cookie_browse)
-        options_layout.addRow("Cookies:", cookie_row)
+        self.cookie_browse = QPushButton()
+        self.cookie_browse.setIcon(get_icon("folder-open"))
+        self.cookie_browse.setFixedSize(28, 28)
+        self.cookie_browse.clicked.connect(self._browse_cookie)
+        cookie_row.addWidget(self.cookie_browse)
+        opts_acc.addLayout(cookie_row)
 
-        queue_row = QHBoxLayout()
         self.queue_combo = QComboBox()
-
         for i, q in enumerate(self.queues):
             if q.name != "__direct__":
                 self.queue_combo.addItem(q.name, i)
-
         if self.default_queue < self.queue_combo.count():
             self.queue_combo.setCurrentIndex(self.default_queue)
+        opts_acc.addWidget(self.queue_combo)
 
-        queue_row.addWidget(self.queue_combo)
-        options_layout.addRow("Add to Queue:", queue_row)
+        main_layout.addWidget(opts_acc)
 
-        lay.addWidget(options_group)
-
-        # === Proxy Settings Group ===
-        proxy_group = QGroupBox("Proxy Settings")
-        proxy_layout = QVBoxLayout(proxy_group)
+        # ===== Proxy =====
+        proxy_acc = AccordionGroup("Proxy Settings")
+        proxy_acc.set_expanded(False)
 
         self.proxy_combo = QComboBox()
-        self.proxy_combo.addItems(
-            [
-                "Use Global Proxy",
-                "Custom Proxy for this download",
-                "No Proxy (Direct Connection)",
-            ]
-        )
-        self.proxy_combo.setCurrentIndex(0)
+        self.proxy_combo.addItems(["Use Global Proxy", "Custom Proxy", "No Proxy"])
         self.proxy_combo.currentIndexChanged.connect(self._on_proxy_mode_changed)
-        proxy_layout.addWidget(self.proxy_combo)
+        proxy_acc.addWidget(self.proxy_combo)
 
-        # Custom proxy config button
-        proxy_btn_layout = QHBoxLayout()
-        self.proxy_config_btn = QPushButton(
-            get_icon("configure"), "Configure Custom Proxy"
-        )
-        self.proxy_config_btn.clicked.connect(self._configure_custom_proxy)
+        proxy_btn_row = QHBoxLayout()
+        proxy_btn_row.setSpacing(6)
+
+        self.proxy_config_btn = QPushButton(get_icon("configure"), " Configure")
         self.proxy_config_btn.setEnabled(False)
-        proxy_btn_layout.addWidget(self.proxy_config_btn)
+        self.proxy_config_btn.clicked.connect(self._configure_custom_proxy)
+        proxy_btn_row.addWidget(self.proxy_config_btn)
 
-        self.proxy_clear_btn = QPushButton(get_icon("edit-clear"), "Clear")
-        self.proxy_clear_btn.clicked.connect(self._clear_custom_proxy)
+        self.proxy_clear_btn = QPushButton(get_icon("edit-clear"), " Clear")
         self.proxy_clear_btn.setEnabled(False)
-        proxy_btn_layout.addWidget(self.proxy_clear_btn)
-        proxy_btn_layout.addStretch()
-        proxy_layout.addLayout(proxy_btn_layout)
+        self.proxy_clear_btn.clicked.connect(self._clear_custom_proxy)
+        proxy_btn_row.addWidget(self.proxy_clear_btn)
+
+        proxy_btn_row.addStretch()
+        proxy_acc.addLayout(proxy_btn_row)
 
         self.proxy_status_label = QLabel("")
-        self.proxy_status_label.setStyleSheet(
-            "color: #95a5a6; font-size: 10px; padding: 2px;"
-        )
         self.proxy_status_label.setWordWrap(True)
-        proxy_layout.addWidget(self.proxy_status_label)
+        self.proxy_status_label.setStyleSheet("font-size: 11px; padding: 2px;")
+        proxy_acc.addWidget(self.proxy_status_label)
 
-        lay.addWidget(proxy_group)
+        main_layout.addWidget(proxy_acc)
 
-        # Buttons
-        btn_box = QDialogButtonBox()
-        self.download_btn = btn_box.addButton(
+        # ===== Buttons =====
+        self.btn_box = QDialogButtonBox()
+        self.download_btn = self.btn_box.addButton(
             "Add to Queue", QDialogButtonBox.ButtonRole.AcceptRole
         )
         self.download_btn.setIcon(get_icon("download"))
         self.download_btn.setEnabled(False)
         self.download_btn.clicked.connect(self._on_add_to_queue)
 
-        cancel_btn = btn_box.addButton("Cancel", QDialogButtonBox.ButtonRole.RejectRole)
-        cancel_btn.setIcon(get_icon("dialog-cancel"))
-        cancel_btn.clicked.connect(self.reject)
+        self.cancel_btn = self.btn_box.addButton("Cancel", QDialogButtonBox.ButtonRole.RejectRole)
+        self.cancel_btn.setIcon(get_icon("dialog-cancel"))
+        self.cancel_btn.clicked.connect(self.reject)
 
-        lay.addWidget(btn_box)
+        main_layout.addWidget(self.btn_box)
 
-        self.video_info = None
-        self._custom_proxy = None
-        self._format_map = {}
-        self.worker = None
+        self._setup_tab_order()
+
+    def _setup_tab_order(self):
+        self.setTabOrder(self.url_edit, self.fetch_btn)
+        self.setTabOrder(self.fetch_btn, self.format_combo)
+        self.setTabOrder(self.format_combo, self.path_edit)
+        self.setTabOrder(self.path_edit, self.browse_btn)
+        self.setTabOrder(self.browse_btn, self.cookie_edit)
+        self.setTabOrder(self.cookie_edit, self.cookie_browse)
+        self.setTabOrder(self.cookie_browse, self.queue_combo)
+        self.setTabOrder(self.queue_combo, self.proxy_combo)
+        self.setTabOrder(self.proxy_combo, self.proxy_config_btn)
+        self.setTabOrder(self.proxy_config_btn, self.proxy_clear_btn)
+        self.setTabOrder(self.proxy_clear_btn, self.download_btn)
+        self.setTabOrder(self.download_btn, self.cancel_btn)
 
     def _browse(self):
         d = QFileDialog.getExistingDirectory(
@@ -1666,23 +854,19 @@ class YouTubeDownloadDialog(QDialog):
             self.cookie_edit.setText(file_path)
 
     def _on_proxy_mode_changed(self, index):
-        """Enable/disable custom proxy config based on selection"""
         is_custom = index == 1
         self.proxy_config_btn.setEnabled(is_custom)
         self.proxy_clear_btn.setEnabled(is_custom and self._custom_proxy is not None)
-
         if not is_custom:
             self.proxy_status_label.setText("")
         elif self._custom_proxy:
             self._update_proxy_status()
 
     def _configure_custom_proxy(self):
-        """Open custom proxy configuration dialog"""
         from ui.download_proxy_dialog import SimpleProxyDialog
 
         url = self.url_edit.text().strip()
         display_name = os.path.basename(url) if url else "YouTube Download"
-
         dlg = SimpleProxyDialog(display_name, self._custom_proxy, self)
         if dlg.exec():
             new_config = dlg.get_proxy_config()
@@ -1691,39 +875,30 @@ class YouTubeDownloadDialog(QDialog):
             self._update_proxy_status()
 
     def _clear_custom_proxy(self):
-        """Clear custom proxy"""
         self._custom_proxy = None
         self.proxy_clear_btn.setEnabled(False)
         self.proxy_status_label.setText("")
-        self.proxy_status_label.setStyleSheet("color: #95a5a6; font-size: 10px;")
 
     def _update_proxy_status(self):
-        """Update status label with custom proxy info"""
         if self._custom_proxy and self._custom_proxy.is_valid():
             self.proxy_status_label.setText(
-                f"✅ Custom: {self._custom_proxy.get_display_string()}"
+                f"✓ {self._custom_proxy.get_display_string()}"
             )
-            self.proxy_status_label.setStyleSheet("color: #27ae60; font-size: 10px;")
-        else:
-            self.proxy_status_label.setText("⚠️ Invalid proxy configuration")
-            self.proxy_status_label.setStyleSheet("color: #e74c3c; font-size: 10px;")
+            self.proxy_status_label.setStyleSheet("color: #27ae60; font-size: 11px;")
 
     def _get_proxy_url(self):
-        """Get proxy URL based on selection"""
         proxy_mode = self.proxy_combo.currentIndex()
-
-        if proxy_mode == 0:  # Use Global Proxy
+        if proxy_mode == 0:
             if hasattr(self.parent(), "proxy_manager"):
                 proxy = self.parent().proxy_manager.get_proxy_for_queue(None)
                 if proxy and proxy.is_valid():
                     return proxy._build_proxy_url()
-        elif proxy_mode == 1:  # Custom Proxy
+        elif proxy_mode == 1:
             if self._custom_proxy and self._custom_proxy.is_valid():
                 return self._custom_proxy._build_proxy_url()
         return None
 
     def clear_info_layout(self):
-        """Clear all widgets from info layout"""
         while self.info_layout.rowCount() > 0:
             self.info_layout.removeRow(self.info_layout.rowCount() - 1)
 
@@ -1736,7 +911,6 @@ class YouTubeDownloadDialog(QDialog):
         self.fetch_btn.setEnabled(False)
         self.fetch_btn.setText("Fetching...")
 
-        # Clear previous info
         self.clear_info_layout()
         self.info_placeholder = QLabel("Getting video info...")
         self.info_placeholder.setStyleSheet("color: #3daee9; font-size: 11px;")
@@ -1760,34 +934,27 @@ class YouTubeDownloadDialog(QDialog):
             self.info_placeholder.setStyleSheet("color: #e74c3c; font-size: 11px;")
             self.info_layout.addRow(self.info_placeholder)
             self.fetch_btn.setEnabled(True)
-            self.fetch_btn.setText("Get Video Info")
+            self.fetch_btn.setText("Get Info")
 
     def _on_info_fetched(self, info):
-        """When video info is fetched"""
         self.video_info = info
-
-        # Clear previous info
         self.clear_info_layout()
 
-        # Title
         title = info.get("title", "Unknown")
         title_label = QLabel(title)
         title_label.setWordWrap(True)
         title_label.setStyleSheet("font-weight: 600;")
         self.info_layout.addRow("Title:", title_label)
 
-        # Channel
         uploader = info.get("uploader", "Unknown")
         self.info_layout.addRow("Channel:", QLabel(uploader))
 
-        # Duration
         duration = info.get("duration", 0)
         minutes = duration // 60
         seconds = duration % 60
         self.info_layout.addRow("Duration:", QLabel(f"{minutes}:{seconds:02d}"))
 
         formats = info.get("formats", [])
-
         self.format_combo.clear()
         self._format_map = {}
 
@@ -1842,17 +1009,16 @@ class YouTubeDownloadDialog(QDialog):
                 self._format_map[format_id] = f
 
         if video_formats:
-            self.format_combo.insertItem(0, "Best Quality (Auto)", "best")
+            self.format_combo.insertItem(0, "Best Quality", "best")
 
         self.format_combo.setCurrentIndex(0)
 
         if video_formats:
             quality_labels = [
-                f"{f[2].get('resolution', 'Unknown')}" for f in video_formats[:5]
+                f[2].get("resolution", "Unknown") for f in video_formats[:5]
             ]
             self.info_layout.addRow("Qualities:", QLabel(", ".join(quality_labels)))
 
-        # File size
         filesize = info.get("filesize")
         if filesize:
             from utils.helpers import format_size
@@ -1861,12 +1027,10 @@ class YouTubeDownloadDialog(QDialog):
 
         self.format_combo.setEnabled(True)
         self.download_btn.setEnabled(True)
-        self.download_btn.setText("Add to Queue")
         self.fetch_btn.setEnabled(True)
-        self.fetch_btn.setText("Get Video Info")
+        self.fetch_btn.setText("Get Info")
 
     def _on_info_fetch_finished(self, success, message):
-        """When info fetch is finished"""
         if not success:
             self.clear_info_layout()
             self.info_placeholder = QLabel(f"Error: {message}")
@@ -1875,23 +1039,18 @@ class YouTubeDownloadDialog(QDialog):
             self.download_btn.setEnabled(False)
 
         self.fetch_btn.setEnabled(True)
-        self.fetch_btn.setText("Get Video Info")
+        self.fetch_btn.setText("Get Info")
 
     def _on_add_to_queue(self):
-        """افزودن دانلود به صف"""
         data = self.get_data()
-
         if not data["url"]:
             QMessageBox.warning(self, "Error", "Please enter a valid YouTube URL")
             return
 
-        queue_index = self.queue_combo.currentData()
-        queue_name = self.queue_combo.currentText()
-
         download_data = {
             "url": data["url"],
             "save_path": data["path"],
-            "queue_id": queue_name,
+            "queue_id": data["queue_name"],
             "download_type": "youtube",
             "yt_options": {
                 "quality": data.get("quality", "best"),
@@ -1909,9 +1068,7 @@ class YouTubeDownloadDialog(QDialog):
         self.accept()
 
     def get_data(self):
-        """Get all dialog data"""
         proxy_mode = self.proxy_combo.currentIndex()
-
         selected_format_id = self.format_combo.currentData()
         format_type = "video"
         quality = "best"
@@ -1921,12 +1078,9 @@ class YouTubeDownloadDialog(QDialog):
             format_type = "video"
         else:
             format_info = self._format_map.get(selected_format_id, {})
-            ext = format_info.get("ext", "mp4")
-            resolution = format_info.get("resolution", "")
-
             if format_info.get("vcodec") and format_info.get("vcodec") != "none":
                 format_type = "video"
-                quality = resolution or "best"
+                quality = format_info.get("resolution", "best")
             else:
                 format_type = "audio"
                 quality = format_info.get("abr", "best")
@@ -1943,10 +1097,968 @@ class YouTubeDownloadDialog(QDialog):
             "proxy_mode": proxy_mode,
             "custom_proxy": self._custom_proxy if proxy_mode == 1 else None,
             "proxy_url": self._get_proxy_url(),
-            "queue_index": self.queue_combo.currentData(),
             "queue_name": self.queue_combo.currentText(),
         }
 
+
+# ============================================================
+# QueueSettingsDialog (تب‌بندی)
+# ============================================================
+
+class QueueSettingsDialog(QDialog):
+    def __init__(self, queue: Queue, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle(f"Queue Settings — {queue.name}")
+        self.setMinimumWidth(540)
+        self.setMinimumHeight(440)
+
+        self.queue = queue
+        self._queue_proxy_config = None
+
+        main_layout = QVBoxLayout(self)
+        main_layout.setSpacing(10)
+        main_layout.setContentsMargins(16, 12, 16, 16)
+
+        tabs = QTabWidget()
+
+        # ---- General ----
+        general_tab = QWidget()
+        general_layout = QFormLayout(general_tab)
+        general_layout.setSpacing(10)
+        general_layout.setContentsMargins(12, 12, 12, 12)
+
+        self.name_edit = QLineEdit(queue.name)
+        general_layout.addRow("Queue Name:", self.name_edit)
+
+        path_row = QHBoxLayout()
+        path_row.setSpacing(6)
+        self.path_edit = QLineEdit(queue.save_path)
+        path_row.addWidget(self.path_edit)
+        browse = QPushButton()
+        browse.setIcon(get_icon("folder-open"))
+        browse.setFixedSize(28, 28)
+        browse.clicked.connect(self._browse)
+        path_row.addWidget(browse)
+        general_layout.addRow("Save Directory:", path_row)
+
+        self.conc_spin = QSpinBox()
+        self.conc_spin.setRange(1, 20)
+        self.conc_spin.setValue(queue.max_concurrent)
+        general_layout.addRow("Max Concurrent:", self.conc_spin)
+
+        tabs.addTab(general_tab, get_icon("configure"), "General")
+
+        # ---- Schedule ----
+        sched_tab = QWidget()
+        sched_layout = QVBoxLayout(sched_tab)
+        sched_layout.setSpacing(10)
+        sched_layout.setContentsMargins(12, 12, 12, 12)
+
+        self.sched_cb = QCheckBox("Enable Schedule")
+        self.sched_cb.setChecked(queue.schedule_enabled)
+        sched_layout.addWidget(self.sched_cb)
+
+        time_row = QHBoxLayout()
+        time_row.setSpacing(6)
+
+        self.start_time = QTimeEdit(
+            QTime(queue.schedule_start.hour, queue.schedule_start.minute)
+        )
+        self.end_time = QTimeEdit(
+            QTime(queue.schedule_end.hour, queue.schedule_end.minute)
+        )
+        self.start_time.setDisplayFormat("HH:mm")
+        self.end_time.setDisplayFormat("HH:mm")
+
+        time_row.addWidget(QLabel("From:"))
+        time_row.addWidget(self.start_time)
+        time_row.addWidget(QLabel("To:"))
+        time_row.addWidget(self.end_time)
+        time_row.addStretch()
+        sched_layout.addLayout(time_row)
+
+        days_row = QHBoxLayout()
+        days_row.setSpacing(4)
+        self.day_checks = []
+        for i, d in enumerate(["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]):
+            cb = QCheckBox(d)
+            cb.setChecked(i in queue.days)
+            self.day_checks.append(cb)
+            days_row.addWidget(cb)
+        days_row.addStretch()
+        sched_layout.addLayout(days_row)
+
+        sched_layout.addStretch()
+        tabs.addTab(sched_tab, get_icon("alarm-clock"), "Schedule")
+
+        # ---- Speed ----
+        speed_tab = QWidget()
+        speed_layout = QVBoxLayout(speed_tab)
+        speed_layout.setSpacing(10)
+        speed_layout.setContentsMargins(12, 12, 12, 12)
+
+        speed_row = QHBoxLayout()
+        speed_row.setSpacing(6)
+
+        self.queue_speed_enabled = QCheckBox("Enable Speed Limit")
+        self.queue_speed_enabled.setChecked(getattr(queue, "speed_limit", 0) > 0)
+        self.queue_speed_enabled.toggled.connect(self._toggle_queue_speed)
+
+        self.queue_speed_spin = QSpinBox()
+        self.queue_speed_spin.setRange(0, 999999)
+        self.queue_speed_spin.setSuffix(" KB/s")
+        self.queue_speed_spin.setValue(getattr(queue, "speed_limit", 0) or 1024)
+        self.queue_speed_spin.setEnabled(self.queue_speed_enabled.isChecked())
+        self.queue_speed_spin.setMinimumWidth(120)
+
+        speed_row.addWidget(self.queue_speed_enabled)
+        speed_row.addWidget(self.queue_speed_spin)
+        speed_row.addStretch()
+
+        speed_layout.addLayout(speed_row)
+
+        speed_info = QLabel("0 = unlimited")
+        speed_info.setStyleSheet("color: #95a5a6; font-size: 11px;")
+        speed_layout.addWidget(speed_info)
+
+        speed_layout.addStretch()
+        tabs.addTab(speed_tab, get_icon("preferences-system-speed"), "Speed")
+
+        # ---- Proxy ----
+        proxy_tab = QWidget()
+        proxy_layout = QVBoxLayout(proxy_tab)
+        proxy_layout.setSpacing(10)
+        proxy_layout.setContentsMargins(12, 12, 12, 12)
+
+        self.queue_proxy_cb = QCheckBox("Use custom proxy for this queue")
+        self.queue_proxy_cb.toggled.connect(self._toggle_queue_proxy)
+        proxy_layout.addWidget(self.queue_proxy_cb)
+
+        proxy_row = QHBoxLayout()
+        proxy_row.setSpacing(6)
+
+        self.queue_proxy_status = QLabel("Using global proxy")
+        proxy_row.addWidget(self.queue_proxy_status)
+        proxy_row.addStretch()
+
+        self.queue_proxy_btn = QPushButton(get_icon("configure"), " Configure")
+        self.queue_proxy_btn.setEnabled(False)
+        self.queue_proxy_btn.clicked.connect(self._configure_queue_proxy)
+        proxy_row.addWidget(self.queue_proxy_btn)
+
+        proxy_layout.addLayout(proxy_row)
+        proxy_layout.addStretch()
+        tabs.addTab(proxy_tab, get_icon("network-vpn"), "Proxy")
+
+        main_layout.addWidget(tabs)
+
+        self._load_queue_proxy()
+
+        btn_box = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
+        )
+        btn_box.accepted.connect(self.accept)
+        btn_box.rejected.connect(self.reject)
+        main_layout.addWidget(btn_box)
+
+    def _browse(self):
+        d = QFileDialog.getExistingDirectory(
+            self, "Select Directory", self.path_edit.text()
+        )
+        if d:
+            self.path_edit.setText(d)
+
+    def _toggle_queue_speed(self, checked):
+        self.queue_speed_spin.setEnabled(checked)
+
+    def _toggle_queue_proxy(self, checked):
+        self.queue_proxy_btn.setEnabled(checked)
+        if checked:
+            self.queue_proxy_status.setText("Click 'Configure' to set proxy")
+            self.queue_proxy_status.setStyleSheet("color: #f39c12; font-size: 11px;")
+        else:
+            self.queue_proxy_status.setText("Using global proxy")
+            self.queue_proxy_status.setStyleSheet("color: #95a5a6; font-size: 11px;")
+            self._queue_proxy_config = None
+
+    def _load_queue_proxy(self):
+        from core.proxy_manager import ProxyManager
+
+        if hasattr(self.parent(), "store"):
+            proxy_mgr = ProxyManager(self.parent().store)
+            queue_proxy = proxy_mgr.get_queue_proxy(self.name_edit.text())
+            if queue_proxy and queue_proxy.host:
+                self.queue_proxy_cb.setChecked(True)
+                self.queue_proxy_status.setText(f"✓ {queue_proxy.get_display_string()}")
+                self.queue_proxy_status.setStyleSheet(
+                    "color: #27ae60; font-size: 11px;"
+                )
+                self.queue_proxy_btn.setEnabled(True)
+                self._queue_proxy_config = queue_proxy
+
+    def _configure_queue_proxy(self):
+        from ui.proxy_dialog import ProxyDialog
+        from core.proxy_manager import ProxyConfig
+
+        current = getattr(self, "_queue_proxy_config", None) or ProxyConfig()
+        dlg = ProxyDialog(current, self, f"Queue Proxy: {self.name_edit.text()}")
+        if dlg.exec():
+            new_config = dlg.get_proxy_config()
+            self._queue_proxy_config = new_config
+            self.queue_proxy_status.setText(f"✓ {new_config.get_display_string()}")
+            self.queue_proxy_status.setStyleSheet("color: #27ae60; font-size: 11px;")
+
+    def get_queue_data(self):
+        st, en = self.start_time.time(), self.end_time.time()
+        data = {
+            "name": self.name_edit.text().strip(),
+            "save_path": self.path_edit.text().strip(),
+            "max_concurrent": self.conc_spin.value(),
+            "schedule_enabled": self.sched_cb.isChecked(),
+            "schedule_start": dtime(st.hour(), st.minute()),
+            "schedule_end": dtime(en.hour(), en.minute()),
+            "days": [i for i, cb in enumerate(self.day_checks) if cb.isChecked()],
+            "speed_limit": (
+                self.queue_speed_spin.value()
+                if self.queue_speed_enabled.isChecked()
+                else 0
+            ),
+            "proxy_config": None,
+        }
+        if hasattr(self, "_queue_proxy_config") and self.queue_proxy_cb.isChecked():
+            data["proxy_config"] = self._queue_proxy_config
+        return data
+
+
+# ============================================================
+# SettingsDialog (تب‌بندی)
+# ============================================================
+
+class SettingsDialog(QDialog):
+    def __init__(self, settings, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Settings")
+        self.setMinimumWidth(540)
+        self.setMinimumHeight(460)
+
+        self.settings = settings
+
+        main_layout = QVBoxLayout(self)
+        main_layout.setSpacing(10)
+        main_layout.setContentsMargins(16, 12, 16, 16)
+
+        tabs = QTabWidget()
+
+        # ---- General ----
+        general_tab = QWidget()
+        general_layout = QVBoxLayout(general_tab)
+        general_layout.setSpacing(10)
+        general_layout.setContentsMargins(12, 12, 12, 12)
+
+        rpc_group = QGroupBox("aria2 RPC")
+        rpc_layout = QFormLayout(rpc_group)
+        rpc_layout.setSpacing(6)
+
+        self.host = QLineEdit(settings.get("aria2_host", "http://localhost"))
+        self.port = QSpinBox()
+        self.port.setRange(1, 65535)
+        self.port.setValue(settings.get("aria2_port", 6800))
+        self.secret = QLineEdit(settings.get("aria2_secret", ""))
+        self.secret.setEchoMode(QLineEdit.EchoMode.Password)
+
+        rpc_layout.addRow("Host:", self.host)
+        rpc_layout.addRow("Port:", self.port)
+        rpc_layout.addRow("Secret:", self.secret)
+        general_layout.addWidget(rpc_group)
+
+        dl_group = QGroupBox("Download")
+        dl_layout = QFormLayout(dl_group)
+        dl_layout.setSpacing(6)
+
+        self.max_concurrent = QSpinBox()
+        self.max_concurrent.setRange(1, 50)
+        self.max_concurrent.setValue(settings.get("max_concurrent", 5))
+
+        self.max_retries = QSpinBox()
+        self.max_retries.setRange(0, 20)
+        self.max_retries.setSpecialValueText("Disabled")
+        self.max_retries.setValue(settings.get("max_retries", 3))
+
+        self.max_tries = QSpinBox()
+        self.max_tries.setRange(0, 100)
+        self.max_tries.setSpecialValueText("Unlimited")
+        self.max_tries.setValue(settings.get("max_tries", 0))
+
+        self.conns = QSpinBox()
+        self.conns.setRange(1, 16)
+        self.conns.setValue(settings.get("connections", 8))
+
+        dl_layout.addRow("Max Concurrent:", self.max_concurrent)
+        dl_layout.addRow("Max Retry Attempts:", self.max_retries)
+        dl_layout.addRow("Max Tries (aria2):", self.max_tries)
+        dl_layout.addRow("Default Connections:", self.conns)
+        general_layout.addWidget(dl_group)
+
+        cleanup_group = QGroupBox("Cleanup")
+        cleanup_layout = QVBoxLayout(cleanup_group)
+        self.auto_clear_completed = QCheckBox("Auto-clear completed downloads")
+        self.auto_clear_completed.setChecked(
+            settings.get("auto_clear_completed", False)
+        )
+        cleanup_layout.addWidget(self.auto_clear_completed)
+        general_layout.addWidget(cleanup_group)
+
+        general_layout.addStretch()
+        tabs.addTab(general_tab, get_icon("configure"), "General")
+
+        # ---- Appearance ----
+        appearance_tab = QWidget()
+        appearance_layout = QVBoxLayout(appearance_tab)
+        appearance_layout.setSpacing(10)
+        appearance_layout.setContentsMargins(12, 12, 12, 12)
+
+        theme_group = QGroupBox("Theme")
+        theme_layout = QFormLayout(theme_group)
+        theme_layout.setSpacing(6)
+
+        self.theme_combo = QComboBox()
+        self.theme_combo.addItems(["Auto", "Dark", "Light"])
+        current_theme = settings.get("theme", "auto").capitalize()
+        index = self.theme_combo.findText(current_theme)
+        if index >= 0:
+            self.theme_combo.setCurrentIndex(index)
+        theme_layout.addRow("Theme:", self.theme_combo)
+        appearance_layout.addWidget(theme_group)
+
+        appearance_layout.addStretch()
+        tabs.addTab(appearance_tab, get_icon("preferences-desktop-theme"), "Appearance")
+
+        # ---- Speed ----
+        speed_tab = QWidget()
+        speed_layout = QVBoxLayout(speed_tab)
+        speed_layout.setSpacing(10)
+        speed_layout.setContentsMargins(12, 12, 12, 12)
+
+        speed_group = QGroupBox("Global Speed Limit")
+        speed_group_layout = QVBoxLayout(speed_group)
+
+        speed_row = QHBoxLayout()
+        speed_row.setSpacing(6)
+
+        self.global_speed_enabled = QCheckBox("Enable Speed Limit")
+        self.global_speed_enabled.setChecked(settings.get("speed_limit", 0) > 0)
+        self.global_speed_enabled.toggled.connect(self._toggle_global_speed)
+
+        self.global_speed_spin = QSpinBox()
+        self.global_speed_spin.setRange(0, 999999)
+        self.global_speed_spin.setSuffix(" KB/s")
+        self.global_speed_spin.setValue(settings.get("speed_limit", 1024))
+        self.global_speed_spin.setEnabled(self.global_speed_enabled.isChecked())
+        self.global_speed_spin.setMinimumWidth(120)
+
+        speed_row.addWidget(self.global_speed_enabled)
+        speed_row.addWidget(self.global_speed_spin)
+        speed_row.addStretch()
+
+        speed_group_layout.addLayout(speed_row)
+
+        speed_info = QLabel("0 = unlimited")
+        speed_info.setStyleSheet("color: #95a5a6; font-size: 11px;")
+        speed_group_layout.addWidget(speed_info)
+
+        speed_layout.addWidget(speed_group)
+        speed_layout.addStretch()
+        tabs.addTab(speed_tab, get_icon("preferences-system-speed"), "Speed")
+
+        # ---- Proxy ----
+        proxy_tab = QWidget()
+        proxy_layout = QVBoxLayout(proxy_tab)
+        proxy_layout.setSpacing(10)
+        proxy_layout.setContentsMargins(12, 12, 12, 12)
+
+        proxy_group = QGroupBox("Global Proxy")
+        proxy_group_layout = QVBoxLayout(proxy_group)
+
+        proxy_status_row = QHBoxLayout()
+        proxy_status_row.setSpacing(6)
+
+        self.proxy_status_label = QLabel("Disabled")
+        proxy_status_row.addWidget(self.proxy_status_label)
+        proxy_status_row.addStretch()
+
+        self.proxy_edit_btn = QPushButton(get_icon("configure"), " Configure")
+        self.proxy_edit_btn.clicked.connect(self._configure_global_proxy)
+        proxy_status_row.addWidget(self.proxy_edit_btn)
+
+        proxy_group_layout.addLayout(proxy_status_row)
+
+        self.proxy_info_label = QLabel("")
+        self.proxy_info_label.setStyleSheet("color: #95a5a6; font-size: 11px;")
+        proxy_group_layout.addWidget(self.proxy_info_label)
+
+        proxy_layout.addWidget(proxy_group)
+        proxy_layout.addStretch()
+        tabs.addTab(proxy_tab, get_icon("network-vpn"), "Proxy")
+
+        # ---- Service ----
+        service_tab = QWidget()
+        service_layout = QVBoxLayout(service_tab)
+        service_layout.setSpacing(10)
+        service_layout.setContentsMargins(12, 12, 12, 12)
+
+        service_group = QGroupBox("Background Service")
+        service_group_layout = QVBoxLayout(service_group)
+
+        self.run_as_service = QCheckBox(
+            "Run as background service (auto-start on login)"
+        )
+        self.run_as_service.setChecked(settings.get("run_as_service", False))
+        self.run_as_service.toggled.connect(self._on_service_toggle)
+        service_group_layout.addWidget(self.run_as_service)
+
+        self.service_status = QLabel("")
+        self.service_status.setStyleSheet("color: #95a5a6; font-size: 11px;")
+        service_group_layout.addWidget(self.service_status)
+
+        service_layout.addWidget(service_group)
+        service_layout.addStretch()
+        tabs.addTab(service_tab, get_icon("applications-system"), "Service")
+
+        main_layout.addWidget(tabs)
+
+        btn_box = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
+        )
+        btn_box.accepted.connect(self.accept)
+        btn_box.rejected.connect(self.reject)
+        main_layout.addWidget(btn_box)
+
+        self._update_proxy_status()
+        self._update_service_status()
+
+    def _toggle_global_speed(self, checked):
+        self.global_speed_spin.setEnabled(checked)
+
+    def _update_proxy_status(self):
+        from core.proxy_manager import ProxyManager
+
+        proxy_mgr = ProxyManager(
+            self.parent().store if hasattr(self.parent(), "store") else None
+        )
+
+        if (
+            proxy_mgr.global_proxy
+            and proxy_mgr.global_proxy.enabled
+            and proxy_mgr.global_proxy.host
+        ):
+            self.proxy_status_label.setText(
+                f"✓ {proxy_mgr.global_proxy.get_display_string()}"
+            )
+            self.proxy_status_label.setStyleSheet("color: #27ae60;")
+            self.proxy_info_label.setText(
+                f"{proxy_mgr.global_proxy.type.value.upper()} • {proxy_mgr.global_proxy.host}:{proxy_mgr.global_proxy.port}"
+            )
+        else:
+            self.proxy_status_label.setText("Disabled")
+            self.proxy_status_label.setStyleSheet("color: #95a5a6;")
+            self.proxy_info_label.setText("No global proxy configured")
+
+    def _configure_global_proxy(self):
+        from ui.proxy_dialog import ProxyDialog
+        from core.proxy_manager import ProxyManager, ProxyConfig
+
+        if not hasattr(self.parent(), "store"):
+            QMessageBox.warning(self, "Error", "Data store not available")
+            return
+
+        proxy_mgr = ProxyManager(self.parent().store)
+        current_config = proxy_mgr.global_proxy or ProxyConfig()
+
+        dlg = ProxyDialog(current_config, self, "Global Proxy Settings")
+        if dlg.exec():
+            new_config = dlg.get_proxy_config()
+            proxy_mgr.set_global_proxy(new_config)
+            self._update_proxy_status()
+
+            if hasattr(self.parent(), "aria2"):
+                self.parent().aria2.set_global_proxy(new_config)
+
+            QMessageBox.information(self, "Success", "Proxy settings applied!")
+
+    def _update_service_status(self):
+        QTimer.singleShot(100, self._check_service_status)
+
+    def _check_service_status(self):
+        try:
+            result = subprocess.run(
+                ["systemctl", "--user", "is-active", "felfeldm.service"],
+                capture_output=True,
+                text=True,
+                timeout=2,
+            )
+            is_active = result.stdout.strip() == "active"
+
+            result2 = subprocess.run(
+                ["systemctl", "--user", "is-enabled", "felfeldm.service"],
+                capture_output=True,
+                text=True,
+                timeout=2,
+            )
+            is_enabled = result2.stdout.strip() == "enabled"
+
+            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            sock.settimeout(1)
+            port_open = sock.connect_ex(("localhost", 8765)) == 0
+            sock.close()
+
+            if is_active and is_enabled and port_open:
+                self.service_status.setText("✓ Service is active")
+                self.service_status.setStyleSheet("color: #27ae60; font-size: 11px;")
+            elif is_active:
+                self.service_status.setText("Service is active but not enabled")
+                self.service_status.setStyleSheet("color: #f39c12; font-size: 11px;")
+            else:
+                self.service_status.setText("Service is stopped")
+                self.service_status.setStyleSheet("color: #95a5a6; font-size: 11px;")
+        except:
+            self.service_status.setText("Service is stopped")
+            self.service_status.setStyleSheet("color: #95a5a6; font-size: 11px;")
+
+    def _on_service_toggle(self, checked):
+        if checked:
+            self.service_status.setText("Installing service...")
+            self.service_status.setStyleSheet("color: #f39c12; font-size: 11px;")
+            QApplication.processEvents()
+            QTimer.singleShot(100, self._install_service_async)
+        else:
+            self.service_status.setText("Stopping service...")
+            self.service_status.setStyleSheet("color: #f39c12; font-size: 11px;")
+            QApplication.processEvents()
+            QTimer.singleShot(100, self._stop_service_async)
+
+    def _install_service_async(self):
+        try:
+            result = subprocess.run(
+                ["which", "FelfelDM"], capture_output=True, text=True
+            )
+            exe_path = (
+                result.stdout.strip() if result.returncode == 0 else "/usr/bin/FelfelDM"
+            )
+
+            if not os.path.exists(exe_path):
+                exe_path = "/usr/local/bin/FelfelDM"
+            if not os.path.exists(exe_path):
+                exe_path = "/usr/bin/FelfelDM"
+
+            self._free_port(8765)
+
+            service_dir = os.path.expanduser("~/.config/systemd/user")
+            os.makedirs(service_dir, exist_ok=True)
+
+            service_content = f"""[Unit]
+Description=FelfelDM Download Manager Service
+After=network.target
+
+[Service]
+Type=simple
+ExecStart={exe_path} --daemon
+Restart=on-failure
+RestartSec=10
+TimeoutStopSec=3
+WorkingDirectory=/usr/share/felfeldm
+StandardOutput=journal
+StandardError=journal
+KillMode=process
+KillSignal=SIGTERM
+
+[Install]
+WantedBy=default.target
+"""
+
+            service_path = os.path.join(service_dir, "felfeldm.service")
+            with open(service_path, "w") as f:
+                f.write(service_content)
+
+            subprocess.Popen(
+                ["systemctl", "--user", "daemon-reload"],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+            time.sleep(0.5)
+            subprocess.Popen(
+                ["systemctl", "--user", "enable", "felfeldm.service"],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+            time.sleep(0.5)
+            subprocess.Popen(
+                ["systemctl", "--user", "start", "felfeldm.service"],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+
+            QTimer.singleShot(1500, self._check_service_status)
+            self.service_status.setText("✓ Service installed and running")
+            self.service_status.setStyleSheet("color: #27ae60; font-size: 11px;")
+            self.run_as_service.setEnabled(True)
+            self.run_as_service.setChecked(True)
+
+        except Exception as e:
+            self.service_status.setText(f"Failed: {str(e)}")
+            self.service_status.setStyleSheet("color: #e74c3c; font-size: 11px;")
+            self.run_as_service.setEnabled(True)
+            self.run_as_service.setChecked(False)
+
+    def _stop_service_async(self):
+        try:
+            subprocess.Popen(
+                ["systemctl", "--user", "stop", "felfeldm.service"],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+            time.sleep(0.5)
+            subprocess.Popen(
+                ["systemctl", "--user", "disable", "felfeldm.service"],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+            time.sleep(0.5)
+            subprocess.Popen(
+                ["systemctl", "--user", "daemon-reload"],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+            time.sleep(0.5)
+            subprocess.Popen(
+                ["systemctl", "--user", "reset-failed"],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+
+            QTimer.singleShot(1000, self._check_service_status)
+            self.service_status.setText("Service stopped")
+            self.service_status.setStyleSheet("color: #f39c12; font-size: 11px;")
+            self.run_as_service.setEnabled(True)
+            self.run_as_service.setChecked(False)
+
+        except Exception as e:
+            self.service_status.setText(f"Failed: {str(e)}")
+            self.service_status.setStyleSheet("color: #e74c3c; font-size: 11px;")
+            self.run_as_service.setEnabled(True)
+            self.run_as_service.setChecked(True)
+
+    def _free_port(self, port):
+        try:
+            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            sock.settimeout(1)
+            result = sock.connect_ex(("localhost", port))
+            sock.close()
+
+            if result != 0:
+                return True
+
+            try:
+                result = subprocess.run(
+                    ["lsof", "-ti", f":{port}"],
+                    capture_output=True,
+                    text=True,
+                    timeout=2,
+                )
+                pids = result.stdout.strip().split("\n")
+                current_pid = str(os.getpid())
+
+                for pid in pids:
+                    if pid and pid.isdigit() and pid != current_pid:
+                        subprocess.Popen(
+                            ["kill", "-9", pid],
+                            stdout=subprocess.DEVNULL,
+                            stderr=subprocess.DEVNULL,
+                        )
+
+                time.sleep(1)
+                return True
+            except:
+                return False
+        except:
+            return False
+
+    def get_settings(self):
+        speed_limit = (
+            self.global_speed_spin.value()
+            if self.global_speed_enabled.isChecked()
+            else 0
+        )
+        return {
+            "aria2_host": self.host.text().strip(),
+            "aria2_port": self.port.value(),
+            "aria2_secret": self.secret.text(),
+            "connections": self.conns.value(),
+            "max_retries": self.max_retries.value(),
+            "max_tries": self.max_tries.value(),
+            "max_concurrent": self.max_concurrent.value(),
+            "auto_clear_completed": self.auto_clear_completed.isChecked(),
+            "theme": self.theme_combo.currentText().lower(),
+            "run_as_service": self.run_as_service.isChecked(),
+            "speed_limit": speed_limit,
+        }
+
+
+# ============================================================
+# DownloadProgressDialog
+# ============================================================
+class DownloadProgressDialog(QDialog):
+    pause_requested = pyqtSignal(str)
+    resume_requested = pyqtSignal(str)
+    cancel_requested = pyqtSignal(str)
+    cancel_with_delete_requested = pyqtSignal(str)
+
+    def __init__(self, gid, dl_data, parent=None):
+        super().__init__(parent)
+        self.gid = gid
+        self.setWindowTitle("Download Progress")
+        self.setMinimumWidth(480)
+        self.setWindowFlags(
+            Qt.WindowType.Window |
+            Qt.WindowType.WindowCloseButtonHint |
+            Qt.WindowType.WindowMinimizeButtonHint |
+            Qt.WindowType.WindowMaximizeButtonHint
+        )
+        self.setWindowModality(Qt.WindowModality.NonModal)
+        self.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose, True)
+
+        self._status = "unknown"
+        self._is_complete = False
+        self._file_path = None
+
+        main_layout = QVBoxLayout(self)
+        main_layout.setSpacing(4)
+        main_layout.setContentsMargins(20, 16, 20, 20)
+
+        # Title
+        self.name_lbl = QLabel(dl_data.get("name", "Unknown"))
+        self.name_lbl.setWordWrap(True)
+        self.name_lbl.setStyleSheet("font-weight: bold; font-size: 14px;")
+        main_layout.addWidget(self.name_lbl)
+
+        # Progress
+        self.progress_bar = QProgressBar()
+        self.progress_bar.setMinimum(0)
+        self.progress_bar.setMaximum(100)
+        self.progress_bar.setTextVisible(True)
+        main_layout.addWidget(self.progress_bar)
+
+        # Info Grid با آیکون Papirus
+        info_group = QGroupBox("Details")
+        info_group.setStyleSheet("QGroupBox { font-weight: 600; }")
+        info_layout = QGridLayout(info_group)
+        info_layout.setSpacing(6)
+        info_layout.setHorizontalSpacing(10)
+
+        items = [
+            ("document-open", "Size:", "size"),
+            ("media-playback-start", "Speed:", "speed"),
+            ("alarm-clock", "ETA:", "eta"),
+            ("network-transmit", "Connections:", "connections"),
+            ("dialog-information", "Status:", "status"),
+        ]
+
+        self.info_labels = {}
+        for i, (icon_name, label, key) in enumerate(items):
+            icon_lbl = QLabel()
+            icon_lbl.setPixmap(get_icon(icon_name).pixmap(16, 16))
+            info_layout.addWidget(icon_lbl, i, 0)
+
+            lbl = QLabel(label)
+            lbl.setStyleSheet("color: #a6adc8;")
+            info_layout.addWidget(lbl, i, 1)
+
+            val_lbl = QLabel("—")
+            val_lbl.setStyleSheet("color: #cdd6f4; font-weight: 500;")
+            info_layout.addWidget(val_lbl, i, 2)
+            self.info_labels[key] = val_lbl
+
+        main_layout.addWidget(info_group)
+
+        # ===== Spacer برای فاصله بیشتر بین Info و دکمه‌ها =====
+        main_layout.addSpacing(8)  # فاصله اضافه
+
+        # Buttons
+        btn_row = QHBoxLayout()
+        btn_row.setSpacing(10)
+
+        self.action_btn = QPushButton()
+        self.action_btn.setIcon(get_icon("media-playback-pause"))
+        self.action_btn.setText("Pause")
+        self.action_btn.setMinimumWidth(100)
+        self.action_btn.clicked.connect(self._on_action_clicked)
+        btn_row.addWidget(self.action_btn)
+
+        btn_row.addStretch()
+
+        self.cancel_btn = QPushButton()
+        self.cancel_btn.setIcon(get_icon("edit-delete"))
+        self.cancel_btn.setText("Cancel")
+        self.cancel_btn.setMinimumWidth(100)
+        self.cancel_btn.clicked.connect(self._on_cancel_clicked)
+        btn_row.addWidget(self.cancel_btn)
+
+        main_layout.addLayout(btn_row)
+
+        if dl_data:
+            files = dl_data.get("files", [])
+            if files and files[0].get("path"):
+                self._file_path = files[0]["path"]
+            self.update_data(dl_data)
+
+    def _on_action_clicked(self):
+        if self._is_complete:
+            if self._file_path and os.path.exists(self._file_path):
+                folder = os.path.dirname(self._file_path)
+                QDesktopServices.openUrl(QUrl.fromLocalFile(folder))
+            else:
+                QMessageBox.warning(self, "Folder Not Found", "Folder not found.")
+            return
+
+        btn_text = self.action_btn.text().strip()
+        if btn_text == "Pause":
+            self.pause_requested.emit(self.gid)
+        elif btn_text in ["Resume", "Start", "Retry"]:
+            self.resume_requested.emit(self.gid)
+
+    def _on_cancel_clicked(self):
+        if self._is_complete:
+            self.close()
+            return
+
+        reply = QMessageBox.question(
+            self,
+            "Cancel Download",
+            "Cancel this download?\n\nDo you also want to delete downloaded files?",
+            QMessageBox.StandardButton.Yes |
+            QMessageBox.StandardButton.No |
+            QMessageBox.StandardButton.Cancel,
+        )
+        if reply == QMessageBox.StandardButton.Cancel:
+            return
+        elif reply == QMessageBox.StandardButton.Yes:
+            self.cancel_with_delete_requested.emit(self.gid)
+            self.close()
+        else:
+            self.cancel_requested.emit(self.gid)
+            self.close()
+
+    def update_data(self, dl_data):
+        from utils.helpers import format_size, format_speed
+
+        if not dl_data:
+            return
+
+        total = int(dl_data.get("totalLength", 0))
+        completed = int(dl_data.get("completedLength", 0))
+        speed = int(dl_data.get("downloadSpeed", 0))
+        status = dl_data.get("status", "unknown")
+        name = dl_data.get("name", "")
+
+        if status == "complete" and not self._is_complete:
+            self._is_complete = True
+            self.setWindowTitle("Download Completed!")
+            self.setWindowFlags(
+                Qt.WindowType.Window |
+                Qt.WindowType.WindowCloseButtonHint |
+                Qt.WindowType.WindowMinimizeButtonHint |
+                Qt.WindowType.WindowMaximizeButtonHint |
+                Qt.WindowType.WindowStaysOnTopHint
+            )
+            self.show()
+            self.raise_()
+            self.activateWindow()
+
+        if name:
+            self.name_lbl.setText(name)
+
+        if total > 0:
+            pct = int((completed / total) * 100)
+            self.progress_bar.setValue(min(pct, 100))
+            self.progress_bar.setFormat(f"{pct}%")
+            self.info_labels["size"].setText(f"{format_size(completed)} / {format_size(total)}")
+        else:
+            self.progress_bar.setValue(0)
+            self.progress_bar.setFormat("—")
+            self.info_labels["size"].setText(f"{format_size(completed)} / Unknown")
+
+        if status == "paused":
+            self.info_labels["speed"].setText("0 B/s")
+        elif status == "complete":
+            self.info_labels["speed"].setText("Done")
+        elif status == "error":
+            self.info_labels["speed"].setText("Error")
+        else:
+            self.info_labels["speed"].setText(format_speed(speed) if speed > 0 else "—")
+
+        if status in ["paused", "complete", "error"]:
+            self.info_labels["eta"].setText("—")
+        elif speed > 0 and total > completed:
+            eta_sec = (total - completed) // speed
+            h, m, s = eta_sec // 3600, (eta_sec % 3600) // 60, eta_sec % 60
+            self.info_labels["eta"].setText(f"{h:02d}:{m:02d}:{s:02d}")
+        else:
+            self.info_labels["eta"].setText("—")
+
+        self.info_labels["connections"].setText(str(dl_data.get("connections", 0)))
+
+        status_map = {
+            "active": {"text": "Downloading", "color": "#89b4fa"},
+            "downloading": {"text": "Downloading", "color": "#89b4fa"},
+            "waiting": {"text": "Waiting", "color": "#a6adc8"},
+            "paused": {"text": "Paused", "color": "#f9e2af"},
+            "complete": {"text": "Complete", "color": "#a6e3a1"},
+            "completed": {"text": "Complete", "color": "#a6e3a1"},
+            "error": {"text": "Error", "color": "#f38ba8"},
+            "removed": {"text": "Removed", "color": "#6c7086"},
+        }
+        
+        info = status_map.get(status, {"text": status.capitalize(), "color": "#a6adc8"})
+        self.info_labels["status"].setText(info["text"])
+        self.info_labels["status"].setStyleSheet(f"color: {info['color']}; font-weight: 600;")
+
+        self._status = status
+        self._update_buttons(status)
+
+    def _update_buttons(self, status):
+        if status == "complete":
+            self.action_btn.setIcon(get_icon("folder"))
+            self.action_btn.setText("Open Folder")
+            self.action_btn.setEnabled(True)
+            self.cancel_btn.setText("Close")
+            self.cancel_btn.setIcon(get_icon("window-close"))
+            self.cancel_btn.setEnabled(True)
+        elif status == "active":
+            self.action_btn.setIcon(get_icon("media-playback-pause"))
+            self.action_btn.setText("Pause")
+            self.action_btn.setEnabled(True)
+            self.cancel_btn.setText("Cancel")
+            self.cancel_btn.setIcon(get_icon("edit-delete"))
+            self.cancel_btn.setEnabled(True)
+        elif status in ["paused", "waiting"]:
+            self.action_btn.setIcon(get_icon("media-playback-start"))
+            self.action_btn.setText("Resume")
+            self.action_btn.setEnabled(True)
+            self.cancel_btn.setText("Cancel")
+            self.cancel_btn.setIcon(get_icon("edit-delete"))
+            self.cancel_btn.setEnabled(True)
+        elif status == "error":
+            self.action_btn.setIcon(get_icon("media-playback-start"))
+            self.action_btn.setText("Retry")
+            self.action_btn.setEnabled(True)
+            self.cancel_btn.setText("Cancel")
+            self.cancel_btn.setIcon(get_icon("edit-delete"))
+            self.cancel_btn.setEnabled(True)
+        else:
+            self.action_btn.setEnabled(False)
+            self.cancel_btn.setEnabled(False)
+# ============================================================
+# ProxyDialog
+# ============================================================
 
 class ProxyDialog(QDialog):
     def __init__(
@@ -1955,84 +2067,69 @@ class ProxyDialog(QDialog):
         super().__init__(parent)
         self.setWindowTitle(title)
         self.setMinimumWidth(450)
+        self.setMinimumHeight(350)
 
         self.proxy_config = proxy_config or ProxyConfig()
 
-        lay = QVBoxLayout(self)
-        lay.setSpacing(10)
+        main_layout = QVBoxLayout(self)
+        main_layout.setSpacing(10)
+        main_layout.setContentsMargins(16, 12, 16, 16)
 
-        # Enable/Disable
         self.enable_cb = QCheckBox("Enable Proxy")
         self.enable_cb.setChecked(self.proxy_config.enabled)
         self.enable_cb.toggled.connect(self._toggle_enable)
-        lay.addWidget(self.enable_cb)
+        main_layout.addWidget(self.enable_cb)
 
-        # Main form
         form_group = QGroupBox("Proxy Configuration")
-        form_lay = QFormLayout(form_group)
+        form_layout = QFormLayout(form_group)
+        form_layout.setSpacing(6)
 
-        # Type
         self.type_combo = QComboBox()
         self.type_combo.addItems([t.value.upper() for t in ProxyType])
         current_type = self.proxy_config.type.value.upper()
         index = self.type_combo.findText(current_type)
         if index >= 0:
             self.type_combo.setCurrentIndex(index)
-        form_lay.addRow("Type:", self.type_combo)
+        form_layout.addRow("Type:", self.type_combo)
 
-        # Host
         self.host_edit = QLineEdit(self.proxy_config.host)
         self.host_edit.setPlaceholderText("proxy.example.com or 127.0.0.1")
-        form_lay.addRow("Host:", self.host_edit)
+        form_layout.addRow("Host:", self.host_edit)
 
-        # Port
         self.port_spin = QSpinBox()
         self.port_spin.setRange(1, 65535)
         self.port_spin.setValue(self.proxy_config.port)
-        form_lay.addRow("Port:", self.port_spin)
+        form_layout.addRow("Port:", self.port_spin)
 
-        # Auth separator
         auth_label = QLabel("Authentication (optional)")
-        auth_label.setStyleSheet("font-weight: bold; margin-top: 8px;")
-        form_lay.addRow(auth_label)
+        auth_label.setStyleSheet("font-weight: 500; margin-top: 4px;")
+        form_layout.addRow(auth_label)
 
-        # Username
         self.username_edit = QLineEdit(self.proxy_config.username or "")
         self.username_edit.setPlaceholderText("Username")
-        form_lay.addRow("Username:", self.username_edit)
+        form_layout.addRow("Username:", self.username_edit)
 
-        # Password
         self.password_edit = QLineEdit(self.proxy_config.password or "")
         self.password_edit.setEchoMode(QLineEdit.EchoMode.Password)
         self.password_edit.setPlaceholderText("Password")
-        form_lay.addRow("Password:", self.password_edit)
+        form_layout.addRow("Password:", self.password_edit)
 
-        # Show/Hide password
-        show_pwd = QPushButton(get_icon("view-show"), "")
-        show_pwd.setFixedWidth(30)
-        show_pwd.setToolTip("Show/Hide Password")
-        show_pwd.clicked.connect(lambda: self._toggle_password_visibility())
-        form_lay.addRow("", show_pwd)
+        main_layout.addWidget(form_group)
 
-        lay.addWidget(form_group)
-
-        # Test button
         test_btn = QPushButton(get_icon("view-refresh"), "Test Proxy Connection")
         test_btn.clicked.connect(self._test_proxy)
-        lay.addWidget(test_btn)
+        main_layout.addWidget(test_btn)
 
-        # Status label
         self.status_label = QLabel("")
         self.status_label.setStyleSheet("font-size: 11px; padding: 4px;")
-        lay.addWidget(self.status_label)
+        main_layout.addWidget(self.status_label)
 
-        # Buttons
         btn_box = QDialogButtonBox(
             QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
         )
         btn_box.accepted.connect(self.accept)
         btn_box.rejected.connect(self.reject)
-        lay.addWidget(btn_box)
+        main_layout.addWidget(btn_box)
 
         self._toggle_enable(self.proxy_config.enabled)
 
@@ -2043,16 +2140,10 @@ class ProxyDialog(QDialog):
         self.username_edit.setEnabled(checked)
         self.password_edit.setEnabled(checked)
 
-    def _toggle_password_visibility(self):
-        if self.password_edit.echoMode() == QLineEdit.EchoMode.Password:
-            self.password_edit.setEchoMode(QLineEdit.EchoMode.Normal)
-        else:
-            self.password_edit.setEchoMode(QLineEdit.EchoMode.Password)
-
     def _test_proxy(self):
         config = self.get_proxy_config()
         if not config.is_valid():
-            self.status_label.setText("❌ Invalid proxy configuration")
+            self.status_label.setText("Invalid proxy configuration")
             self.status_label.setStyleSheet("color: #e74c3c; font-size: 11px;")
             return
 
@@ -2062,7 +2153,7 @@ class ProxyDialog(QDialog):
             proxy_url = config._build_proxy_url()
             proxies = {"http": proxy_url, "https": proxy_url}
 
-            self.status_label.setText("⏳ Testing connection...")
+            self.status_label.setText("Testing connection...")
             self.status_label.setStyleSheet("color: #f39c12; font-size: 11px;")
             QApplication.processEvents()
 
@@ -2071,22 +2162,20 @@ class ProxyDialog(QDialog):
             )
 
             if response.status_code == 200:
-                self.status_label.setText("✅ Proxy is working!")
+                self.status_label.setText("Proxy is working!")
                 self.status_label.setStyleSheet("color: #27ae60; font-size: 11px;")
             else:
-                self.status_label.setText(
-                    f"⚠️ Proxy returned status: {response.status_code}"
-                )
+                self.status_label.setText(f"Status: {response.status_code}")
                 self.status_label.setStyleSheet("color: #f39c12; font-size: 11px;")
 
         except requests.exceptions.Timeout:
-            self.status_label.setText("❌ Connection timeout")
+            self.status_label.setText("Connection timeout")
             self.status_label.setStyleSheet("color: #e74c3c; font-size: 11px;")
-        except requests.exceptions.ConnectionError as e:
-            self.status_label.setText(f"❌ Connection failed: {str(e)[:50]}")
+        except requests.exceptions.ConnectionError:
+            self.status_label.setText("Connection failed")
             self.status_label.setStyleSheet("color: #e74c3c; font-size: 11px;")
         except Exception as e:
-            self.status_label.setText(f"❌ Error: {str(e)[:50]}")
+            self.status_label.setText(f"Error: {str(e)[:50]}")
             self.status_label.setStyleSheet("color: #e74c3c; font-size: 11px;")
 
     def get_proxy_config(self) -> ProxyConfig:
@@ -2103,10 +2192,14 @@ class ProxyDialog(QDialog):
         )
 
 
+# ============================================================
+# ShutdownCountdownDialog
+# ============================================================
+
 class ShutdownCountdownDialog(QDialog):
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.setWindowTitle("🛑 System Shutdown")
+        self.setWindowTitle("System Shutdown")
         self.setModal(True)
         self.setWindowFlags(
             Qt.WindowType.Window
@@ -2114,38 +2207,39 @@ class ShutdownCountdownDialog(QDialog):
             | Qt.WindowType.FramelessWindowHint
         )
         self.setMinimumWidth(400)
-
-        layout = QVBoxLayout(self)
-        layout.setSpacing(15)
-        layout.setContentsMargins(25, 25, 25, 25)
-
-        title = QLabel("⚠️ System Shutdown")
-        title.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        title.setStyleSheet("font-size: 18px; font-weight: bold;")
-        layout.addWidget(title)
-
-        msg = QLabel("All downloads are complete!\nThe system will shut down in:")
-        msg.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        layout.addWidget(msg)
-
-        self.countdown_lbl = QLabel("20")
-        self.countdown_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.countdown_lbl.setStyleSheet("font-size: 42px; font-weight: bold;")
-        layout.addWidget(self.countdown_lbl)
-
-        # Progress bar
-        self.progress_bar = QProgressBar()
-        self.progress_bar.setMaximum(20)
-        self.progress_bar.setValue(20)
-        layout.addWidget(self.progress_bar)
-
-        self.cancel_btn = QPushButton("Cancel Shutdown")
-        self.cancel_btn.clicked.connect(self._on_cancel)
-        layout.addWidget(self.cancel_btn)
+        self.setMinimumHeight(250)
 
         self._countdown = 20
         self._timer = None
         self._cancelled = False
+
+        main_layout = QVBoxLayout(self)
+        main_layout.setSpacing(12)
+        main_layout.setContentsMargins(25, 25, 25, 25)
+
+        title = QLabel("System Shutdown")
+        title.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        title.setStyleSheet("font-size: 18px; font-weight: bold;")
+        main_layout.addWidget(title)
+
+        msg = QLabel("All downloads are complete!\nThe system will shut down in:")
+        msg.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        main_layout.addWidget(msg)
+
+        self.countdown_lbl = QLabel("20")
+        self.countdown_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.countdown_lbl.setStyleSheet("font-size: 42px; font-weight: bold;")
+        main_layout.addWidget(self.countdown_lbl)
+
+        self.progress_bar = QProgressBar()
+        self.progress_bar.setMaximum(20)
+        self.progress_bar.setValue(20)
+        main_layout.addWidget(self.progress_bar)
+
+        self.cancel_btn = QPushButton("Cancel Shutdown")
+        self.cancel_btn.setFixedHeight(36)
+        self.cancel_btn.clicked.connect(self._on_cancel)
+        main_layout.addWidget(self.cancel_btn)
 
     def start_countdown(self):
         self._countdown = 20
@@ -2158,9 +2252,7 @@ class ShutdownCountdownDialog(QDialog):
         self._timer.start(1000)
 
     def _update_countdown(self):
-        """به‌روزرسانی شمارش معکوس"""
         self._countdown -= 1
-
         self.countdown_lbl.setText(str(self._countdown))
         self.progress_bar.setValue(self._countdown)
 
@@ -2170,7 +2262,6 @@ class ShutdownCountdownDialog(QDialog):
             self.accept()
 
     def _on_cancel(self):
-        """کنسل کردن خاموشی"""
         self._cancelled = True
         if self._timer:
             self._timer.stop()
@@ -2178,11 +2269,9 @@ class ShutdownCountdownDialog(QDialog):
         self.reject()
 
     def is_cancelled(self):
-        """بررسی اینکه کاربر کنسل کرده یا نه"""
         return self._cancelled
 
     def closeEvent(self, event):
-        """وقتی دیالوگ بسته میشه"""
         if self._timer:
             self._timer.stop()
             self._timer = None

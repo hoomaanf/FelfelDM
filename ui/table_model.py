@@ -35,9 +35,18 @@ class DownloadTableModel(QAbstractTableModel):
         row = self.rows[index.row()]
         col = index.column()
 
+        # ===== تنظیم تراز متن =====
+        if role == Qt.ItemDataRole.TextAlignmentRole:
+            if col == 0:  # ستون Name - چپ‌چین
+                return int(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+            else:  # بقیه ستون‌ها - وسط‌چین
+                return int(Qt.AlignmentFlag.AlignCenter)
+
+        # Safely get values from the runtime download dictionary
         download_type = row.get("download_type", "normal")
         status = row.get("status", "—")
-
+        
+        # Ensure status is a string
         if isinstance(status, dict):
             status = str(status)
         if not isinstance(status, str):
@@ -105,6 +114,9 @@ class DownloadTableModel(QAbstractTableModel):
                 return "0%"
 
             if col == 3:  # Speed
+                if status == "paused":
+                    return "—"
+                 
                 speed = row.get("downloadSpeed", 0)
                 if isinstance(speed, dict):
                     speed = 0
@@ -123,6 +135,9 @@ class DownloadTableModel(QAbstractTableModel):
                 return format_speed(speed) if speed > 0 else "0 B/s"
 
             if col == 4:  # ETA
+                if status == "paused":
+                    return "—"
+                
                 if download_type == "youtube":
                     eta = row.get("eta", "")
                     if eta and isinstance(eta, str):
@@ -165,6 +180,8 @@ class DownloadTableModel(QAbstractTableModel):
                     "pending": "⏳ Pending",
                     "downloading": "⬇ Downloading",
                     "cancelled": "🗑 Cancelled",
+                    "stopped": "⏸ Stopped",
+                    "retrying": "🔄 Retrying...",
                 }
 
                 if download_type == "youtube":
@@ -178,6 +195,8 @@ class DownloadTableModel(QAbstractTableModel):
                         return "✅ Complete"
                     elif status == "error":
                         return "❌ Error"
+                    elif status == "cancelled":
+                        return "🗑 Cancelled"
 
                 if not isinstance(status, str):
                     status = str(status)
@@ -273,6 +292,8 @@ class DownloadTableModel(QAbstractTableModel):
                     return QColor("#f39c12")
                 if status == "pending":
                     return QColor("#3498db")
+                if status == "cancelled":
+                    return QColor("#95a5a6")
 
             if status == "complete" or status == "completed":
                 return QColor("#27ae60")
@@ -280,9 +301,13 @@ class DownloadTableModel(QAbstractTableModel):
                 return QColor("#e74c3c")
             if status == "active" or status == "downloading":
                 return QColor("#3daee9")
-            if status == "paused":
+            if status == "paused" or status == "stopped":
                 return QColor("#f39c12")
             if status == "waiting" or status == "pending":
+                return QColor("#95a5a6")
+            if status == "retrying":
+                return QColor("#f39c12")
+            if status == "cancelled":
                 return QColor("#95a5a6")
 
         if role == Qt.ItemDataRole.BackgroundRole:
@@ -292,12 +317,14 @@ class DownloadTableModel(QAbstractTableModel):
         return None
 
     def update_rows(self, new_rows):
+        """Update the model with new runtime data"""
         if len(self.rows) == 0 and len(new_rows) == 0:
             return
 
         sort_col = self.sort_column
         sort_order = self.sort_order
 
+        # Update rows with the new runtime data
         if len(self.rows) != len(new_rows):
             self.beginResetModel()
             self.rows = new_rows
@@ -313,15 +340,19 @@ class DownloadTableModel(QAbstractTableModel):
             self.sort(sort_col, sort_order)
 
     def get_gid(self, row_idx):
-        return self.rows[row_idx].get("gid") if 0 <= row_idx < len(self.rows) else None
+        """Get GID from a specific row"""
+        if 0 <= row_idx < len(self.rows):
+            return self.rows[row_idx].get("gid")
+        return None
 
     def get_download_type(self, row_idx):
-        """دریافت نوع دانلود (normal یا youtube)"""
+        """Get download type (normal or youtube)"""
         if 0 <= row_idx < len(self.rows):
             return self.rows[row_idx].get("download_type", "normal")
         return "normal"
 
     def sort(self, column, order=Qt.SortOrder.AscendingOrder):
+        """Sort rows by the specified column"""
         if column < 0 or column >= len(self.COLS):
             return
 
@@ -347,6 +378,7 @@ class DownloadTableModel(QAbstractTableModel):
         self.layoutChanged.emit()
 
     def _get_progress_value(self, row):
+        """Get progress value for sorting"""
         total = row.get("totalLength", 0)
         completed = row.get("completedLength", 0)
 
@@ -376,6 +408,7 @@ class DownloadTableModel(QAbstractTableModel):
         return 0
 
     def _get_eta_value(self, row):
+        """Get ETA value for sorting (in seconds)"""
         total = row.get("totalLength", 0)
         completed = row.get("completedLength", 0)
         speed = row.get("downloadSpeed", 0)

@@ -52,10 +52,34 @@ class Queue:
             else:
                 proxy_dict = self.proxy_config
 
+        # Only save download IDs and their persisted info
         downloads_info = {}
         for gid in self.downloads:
             if gid in self.downloads_info:
-                downloads_info[gid] = self.downloads_info[gid]
+                # Save only the persisted fields, not runtime state
+                info = self.downloads_info[gid]
+                persisted_info = {
+                    "url": info.get("url", ""),
+                    "name": info.get("name", "Unknown"),
+                    "totalLength": info.get("totalLength", 0),
+                    "completedLength": info.get("completedLength", 0),
+                    "files": info.get("files", []),
+                    "category": info.get("category", "📁 Other"),
+                    "download_type": info.get("download_type", "normal"),
+                }
+                # Keep any other persistence-only fields
+                if "error_count" in info:
+                    persisted_info["error_count"] = info.get("error_count", 0)
+                if "errorMessage" in info:
+                    persisted_info["errorMessage"] = info.get("errorMessage", "")
+                if "size_fetch_attempts" in info:
+                    persisted_info["size_fetch_attempts"] = info.get("size_fetch_attempts", 0)
+                if "real_path" in info:
+                    persisted_info["real_path"] = info.get("real_path", "")
+                if "yt_options" in info:
+                    persisted_info["yt_options"] = info.get("yt_options", {})
+                
+                downloads_info[gid] = persisted_info
 
         return {
             "name": self.name,
@@ -104,7 +128,6 @@ class Queue:
         return q
 
     def is_scheduled_now(self):
-
         if not self.schedule_enabled:
             return True
         now = datetime.now()
@@ -119,7 +142,6 @@ class Queue:
             return t >= start or t <= end
 
     def get_next_schedule_time(self):
-
         if not self.schedule_enabled:
             return None
 
@@ -232,7 +254,6 @@ class DataStore:
         self._load_youtube_downloads()
 
     def _load_youtube_downloads(self):
-
         if not self.youtube_downloads_file.exists():
             print("📁 No YouTube downloads file found")
             self.youtube_downloads = {}
@@ -248,7 +269,6 @@ class DataStore:
             self.youtube_downloads = {}
 
     def _save_youtube_downloads(self):
-
         try:
             temp_file = self.youtube_downloads_file.with_suffix(".tmp")
 
@@ -339,6 +359,7 @@ class DataStore:
         self._save_youtube_downloads()
 
     def add_youtube_download(self, download_data: dict) -> str:
+        """Persist a YouTube download to storage"""
         download_id = download_data.get("id")
         if not download_id:
             import uuid
@@ -351,25 +372,25 @@ class DataStore:
         return download_id
 
     def get_youtube_download(self, download_id: str) -> Optional[dict]:
-
+        """Retrieve a YouTube download from storage"""
         return self.youtube_downloads.get(download_id)
 
     def get_all_youtube_downloads(self) -> List[dict]:
-
+        """Get all YouTube downloads from storage"""
         return list(self.youtube_downloads.values())
 
     def get_youtube_downloads_by_status(self, status: str) -> List[dict]:
-
+        """Get YouTube downloads by status from storage"""
         return [d for d in self.youtube_downloads.values() if d.get("status") == status]
 
     def get_youtube_downloads_by_queue(self, queue_id: str) -> List[dict]:
-
+        """Get YouTube downloads by queue from storage"""
         return [
             d for d in self.youtube_downloads.values() if d.get("queue_id") == queue_id
         ]
 
     def update_youtube_download(self, download_id: str, updates: dict) -> bool:
-
+        """Update a YouTube download in storage"""
         if download_id not in self.youtube_downloads:
             return False
 
@@ -378,15 +399,15 @@ class DataStore:
         return True
 
     def update_youtube_status(self, download_id: str, status: str) -> bool:
-
+        """Update YouTube download status in storage"""
         return self.update_youtube_download(download_id, {"status": status})
 
     def update_youtube_progress(self, download_id: str, progress: int) -> bool:
-
+        """Update YouTube download progress in storage"""
         return self.update_youtube_download(download_id, {"progress": progress})
 
     def delete_youtube_download(self, download_id: str) -> bool:
-
+        """Delete a YouTube download from storage"""
         if download_id not in self.youtube_downloads:
             return False
 
@@ -395,7 +416,7 @@ class DataStore:
         return True
 
     def clear_completed_youtube_downloads(self) -> int:
-
+        """Clear completed YouTube downloads from storage"""
         completed_ids = [
             d_id
             for d_id, d in self.youtube_downloads.items()
@@ -411,15 +432,15 @@ class DataStore:
         return len(completed_ids)
 
     def get_youtube_downloads_count(self) -> int:
-
+        """Get total YouTube downloads count from storage"""
         return len(self.youtube_downloads)
 
     def get_youtube_downloads_count_by_status(self, status: str) -> int:
-
+        """Get YouTube downloads count by status from storage"""
         return len(self.get_youtube_downloads_by_status(status))
 
     def get_youtube_downloads_info_for_display(self) -> List[dict]:
-
+        """Get YouTube downloads for display (read-only, from storage)"""
         display_list = []
         for d_id, d in self.youtube_downloads.items():
             display_list.append(

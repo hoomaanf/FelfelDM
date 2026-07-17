@@ -1,11 +1,12 @@
 # core/worker.py
 
 from PyQt6.QtCore import QThread, pyqtSignal, QTimer
-from typing import Dict, Optional, List
+from typing import Dict, Optional, List, Set
 import threading
 import uuid
 from datetime import datetime
 import os
+import time
 
 from core.youtube_worker import YouTubeWorker
 from core.data_store import DataStore
@@ -20,26 +21,34 @@ class BackendWorker(QThread):
     youtube_status = pyqtSignal(str, str)  # download_id, status
     youtube_speed = pyqtSignal(str, str, str)  # download_id, speed, eta
     youtube_finished = pyqtSignal(str, bool, str)  # download_id, success, message
-    youtube_size_fetched = pyqtSignal(str, int)  # ===== download_id, size =====
+    youtube_size_fetched = pyqtSignal(str, int)  # download_id, size
 
     def __init__(self, aria2, store: DataStore):
         super().__init__()
         self.aria2 = aria2
         self.store = store
         self.running = True
-        self._fetching_sizes = set()
-        self._fetched_sizes = set()
-
-        self.youtube_workers: Dict[str, YouTubeWorker] = {}  # download_id -> worker
-        self.youtube_downloads: Dict[str, dict] = {}  # download_id -> info
+        
+        # Track size fetching state
+        self._fetching_sizes: Set[str] = set()
+        self._fetched_sizes: Set[str] = set()
+        
+        # YouTube download management
+        self.youtube_workers: Dict[str, YouTubeWorker] = {}
+        self.youtube_downloads: Dict[str, dict] = {}
         self.youtube_lock = threading.Lock()
-        self.youtube_gids = set()
+        self.youtube_gids: Set[str] = set()
         self._size_workers: Dict[str, YouTubeWorker] = {}
-
+        
+        # Cache for aria2 download states
+        self._download_cache: Dict[str, dict] = {}
+        self._last_update_time: Dict[str, float] = {}
+        self._CACHE_TTL = 0.1
+        
         self._load_youtube_downloads()
 
     def _load_youtube_downloads(self):
-        """بارگذاری دانلودهای یوتیوب از دیتاستور"""
+        """Load YouTube downloads from datastore"""
         try:
             youtube_items = self.store.get_all_youtube_downloads()
             for item in youtube_items:
@@ -49,9 +58,7 @@ class BackendWorker(QThread):
                     self.youtube_gids.add(download_id)
 
                     status = item.get("status", "")
-                    print(
-                        f"📁 Loading YouTube download: {download_id} - status: {status}"
-                    )
+                    print(f"📁 Loading YouTube download: {download_id} - status: {status}")
 
                     if status in ["completed", "cancelled"]:
                         self.store.delete_youtube_download(download_id)
@@ -72,11 +79,10 @@ class BackendWorker(QThread):
         except Exception as e:
             print(f"Error loading YouTube downloads: {e}")
             import traceback
-
             traceback.print_exc()
 
     def _cleanup_completed_downloads(self):
-        """پاک کردن دانلودهای کامل و کنسل شده از دیتاستور"""
+        """Clean up completed and cancelled downloads from datastore"""
         try:
             all_downloads = self.store.get_all_youtube_downloads()
             for item in all_downloads:
@@ -89,7 +95,7 @@ class BackendWorker(QThread):
             print(f"Error cleaning up downloads: {e}")
 
     def cancel_youtube_download_without_delete(self, download_id: str):
-        """لغو دانلود یوتیوب بدون پاک کردن فایل‌ها"""
+        """Cancel YouTube download without deleting files"""
         print(f"🗑️ [Worker] Cancelling YouTube download without delete: {download_id}")
 
         worker = None
@@ -120,111 +126,170 @@ class BackendWorker(QThread):
         print(f"🗑️ [Worker] YouTube download cancelled (files kept): {download_id}")
 
     def run(self):
-        loop_count = 0
-
+        """Main polling loop - builds complete runtime snapshot of all downloads"""
         while self.running:
-            loop_count += 1
-
             try:
+                # Ensure aria2 is connected
                 if not self.aria2.is_connected():
                     if not self.aria2.start_aria2():
                         self.stats_updated.emit({"connected": False})
-                        self.msleep(2000)
+                        self.msleep(100)
                         continue
 
-                stat = self.aria2.get_global_stat() or {}
-                active = self.aria2.tell_active() or []
-                waiting = self.aria2.tell_waiting() or []
-                stopped = self.aria2.tell_stopped(0, 300) or []
-
-                downloads = active + waiting + stopped
-
-                for d in downloads:
-                    gid = d.get("gid")
-                    if not gid:
-                        continue
-
-                    if gid in self.youtube_gids:
-                        continue
-
-                    if gid in self._fetching_sizes:
-                        continue
-
-                    total = int(d.get("totalLength", 0))
-                    status = d.get("status", "")
-
-                    if total == 0 and status in ("active", "waiting", "paused"):
-                        files = d.get("files", [])
-                        url = None
-                        if files and files[0].get("uris"):
-                            uris = files[0].get("uris", [])
-                            if uris and uris[0].get("uri"):
-                                url = uris[0].get("uri")
-
-                        if url:
-                            self._fetching_sizes.add(gid)
-                            self._fetch_size_for_gid(gid, url)
-
-                for d in list(downloads)[:25]:
-                    gid = d.get("gid")
-                    if gid and d.get("status") in ("active", "waiting"):
-                        if gid in self.youtube_gids:
-                            continue
-                        full = self.aria2.tell_status(gid)
-                        if full:
-                            for i, item in enumerate(downloads):
-                                if item.get("gid") == gid:
-                                    downloads[i] = full
-                                    break
-
-                try:
-                    youtube_status = self._get_youtube_status()
-                    if not isinstance(youtube_status, list):
-                        youtube_status = []
-                except Exception as e:
-                    print(f"⚠️ [Worker] Error getting youtube status: {e}")
-                    youtube_status = []
-
-                self.stats_updated.emit(
-                    {
-                        "connected": True,
-                        "stat": stat,
-                        "downloads": downloads,
-                        "active": active,
-                        "waiting": waiting,
-                        "stopped": stopped,
-                        "youtube_downloads": youtube_status,
-                    }
-                )
+                # Build complete runtime snapshot
+                snapshot = self._build_runtime_snapshot()
+                
+                # Emit the complete snapshot
+                self.stats_updated.emit(snapshot)
 
             except Exception as e:
                 self.aria2_error.emit(str(e))
                 self.stats_updated.emit({"connected": False})
 
-            self.msleep(1000)
+            self.msleep(100)
+
+    def _build_runtime_snapshot(self) -> dict:
+        """Build complete runtime snapshot of all aria2 downloads"""
+        # Get all downloads from aria2
+        active = self.aria2.tell_active() or []
+        waiting = self.aria2.tell_waiting() or []
+        stopped = self.aria2.tell_stopped(0, 300) or []
+        
+        # Combine all downloads
+        all_downloads = active + waiting + stopped
+        
+        # Build the complete download list with full details
+        downloads_snapshot = []
+        seen_gids = set()
+        
+        # Process each download
+        for download in all_downloads:
+            gid = download.get("gid")
+            if not gid or gid in seen_gids:
+                continue
+            seen_gids.add(gid)
+            
+            # Get complete download info
+            complete_info = self._get_complete_download_info(gid, download)
+            if complete_info:
+                downloads_snapshot.append(complete_info)
+        
+        # Get YouTube status
+        try:
+            youtube_status = self._get_youtube_status()
+            if not isinstance(youtube_status, list):
+                youtube_status = []
+        except Exception as e:
+            print(f"⚠️ [Worker] Error getting youtube status: {e}")
+            youtube_status = []
+        
+        # Build complete snapshot
+        snapshot = {
+            "connected": True,
+            "stat": self.aria2.get_global_stat() or {},
+            "downloads": downloads_snapshot,
+            "active": active,
+            "waiting": waiting,
+            "stopped": stopped,
+            "youtube_downloads": youtube_status,
+        }
+        
+        return snapshot
+
+    def _get_complete_download_info(self, gid: str, partial_info: dict) -> Optional[dict]:
+        """Get complete download information for a single gid"""
+        # Check cache first
+        current_time = time.time()
+        if gid in self._download_cache and (current_time - self._last_update_time.get(gid, 0)) < self._CACHE_TTL:
+            cached = self._download_cache[gid].copy()
+            # Update status if it changed
+            if partial_info.get("status") != cached.get("status"):
+                cached["status"] = partial_info.get("status")
+            return cached
+        
+        try:
+            # Get full status from aria2
+            full_info = self.aria2.tell_status(gid)
+            if not full_info:
+                # Use partial info as fallback
+                full_info = partial_info
+            
+            # Ensure all required fields are present
+            complete_info = {
+                "gid": gid,
+                "status": full_info.get("status", "unknown"),
+                "totalLength": full_info.get("totalLength", "0"),
+                "completedLength": full_info.get("completedLength", "0"),
+                "downloadSpeed": full_info.get("downloadSpeed", "0"),
+                "files": full_info.get("files", []),
+                "connections": full_info.get("connections", "0"),
+                "errorMessage": full_info.get("errorMessage", ""),
+            }
+            
+            # Add optional fields that might be useful
+            optional_fields = [
+                "uploadLength", "uploadSpeed", "bitfield",
+                "bittorrent", "verifiedLength", "verifyIntegrityPending",
+                "seeder", "numSeeders", "pieceLength", "totalPieces",
+                "dir", "infoHash", "numPieces"
+            ]
+            for field in optional_fields:
+                if field in full_info:
+                    complete_info[field] = full_info[field]
+            
+            # Store in cache
+            self._download_cache[gid] = complete_info
+            self._last_update_time[gid] = time.time()
+            
+            # Trigger size fetch if needed
+            if complete_info.get("totalLength") == "0" and complete_info.get("status") in ("active", "waiting", "paused"):
+                if gid not in self.youtube_gids and gid not in self._fetching_sizes and gid not in self._fetched_sizes:
+                    files = complete_info.get("files", [])
+                    url = None
+                    if files and files[0].get("uris"):
+                        uris = files[0].get("uris", [])
+                        if uris and uris[0].get("uri"):
+                            url = uris[0].get("uri")
+                    if url:
+                        self._fetching_sizes.add(gid)
+                        self._fetch_size_for_gid(gid, url)
+            
+            return complete_info
+            
+        except Exception as e:
+            print(f"⚠️ Error getting complete info for {gid}: {e}")
+            # Return basic info
+            return {
+                "gid": gid,
+                "status": partial_info.get("status", "unknown"),
+                "totalLength": partial_info.get("totalLength", "0"),
+                "completedLength": partial_info.get("completedLength", "0"),
+                "downloadSpeed": partial_info.get("downloadSpeed", "0"),
+                "files": partial_info.get("files", []),
+                "connections": partial_info.get("connections", "0"),
+                "errorMessage": partial_info.get("errorMessage", ""),
+            }
 
     def _get_youtube_status(self) -> List[dict]:
-        """گرفتن وضعیت دانلودهای یوتیوب"""
+        """Get status of YouTube downloads"""
         status_list = []
         try:
             with self.youtube_lock:
                 for download_id, info in self.youtube_downloads.items():
-                    status_list.append(
-                        {
-                            "id": download_id,
-                            "url": info.get("url", ""),
-                            "title": info.get("yt_options", {}).get("title", ""),
-                            "status": info.get("status", "pending"),
-                            "progress": info.get("progress", 0),
-                            "speed": info.get("speed", ""),
-                            "eta": info.get("eta", ""),
-                            "total_size": info.get("total_size", 0),
-                        }
-                    )
+                    status_list.append({
+                        "id": download_id,
+                        "url": info.get("url", ""),
+                        "title": info.get("yt_options", {}).get("title", ""),
+                        "status": info.get("status", "pending"),
+                        "progress": info.get("progress", 0),
+                        "speed": info.get("speed", ""),
+                        "eta": info.get("eta", ""),
+                        "total_size": info.get("total_size", 0),
+                    })
         except Exception as e:
             print(f"⚠️ [Worker] Error getting youtube status: {e}")
             return []
-
+        
         return status_list
 
     def stop(self):
@@ -235,7 +300,7 @@ class BackendWorker(QThread):
             self.terminate()
 
     def _stop_all_size_workers(self):
-        """توقف همه workerهای گرفتن حجم"""
+        """Stop all size fetching workers"""
         for download_id, worker in list(self._size_workers.items()):
             try:
                 if worker.isRunning():
@@ -298,7 +363,7 @@ class BackendWorker(QThread):
         return download_id
 
     def _fetch_youtube_size(self, download_id: str):
-        """گرفتن حجم دانلود یوتیوب با yt-dlp"""
+        """Fetch YouTube download size using yt-dlp"""
         print(f"📏📏📏 _fetch_youtube_size CALLED")
         print(f"📏📏📏 download_id: {download_id}")
 
@@ -343,18 +408,16 @@ class BackendWorker(QThread):
         print(f"📏 [SIZE] Worker started for: {download_id}")
 
     def _on_youtube_size_fetched(self, download_id: str, size: int):
-        """دریافت حجم دانلود یوتیوب"""
+        """Handle YouTube size fetch completion"""
         print(f"📏 [SIZE] Received size for {download_id}: {size} bytes")
 
         with self.youtube_lock:
             if download_id in self.youtube_downloads:
                 self.youtube_downloads[download_id]["total_size"] = size
-                self.youtube_downloads[download_id][
-                    "status"
-                ] = "paused"  # ===== changed =====
+                self.youtube_downloads[download_id]["status"] = "paused"
                 self.store.update_youtube_download(
                     download_id,
-                    {"total_size": size, "status": "paused"},  # ===== changed =====
+                    {"total_size": size, "status": "paused"},
                 )
                 print(f"📏 [SIZE] Updated store: {size} bytes, status: paused")
 
@@ -372,7 +435,7 @@ class BackendWorker(QThread):
             print(f"📏 [SIZE] Cleaned up worker")
 
     def _start_youtube_download(self, download_id: str):
-        """شروع واقعی دانلود یوتیوب (بعد از گرفتن حجم)"""
+        """Start actual YouTube download (after size is fetched)"""
         print(f"🎬🎬🎬 _start_youtube_download CALLED for: {download_id}")
 
         with self.youtube_lock:
@@ -432,7 +495,7 @@ class BackendWorker(QThread):
         print(f"🎬 YouTube download started: {download_id}")
 
     def _resume_youtube_download(self, item: dict):
-        """ادامه دانلود یوتیوب بعد از راه‌اندازی مجدد"""
+        """Resume YouTube download after restart"""
         download_id = item["id"]
         worker = YouTubeWorker(
             url=item["url"],
@@ -456,7 +519,7 @@ class BackendWorker(QThread):
         print(f"🎬 YouTube download resumed: {download_id}")
 
     def pause_youtube_download(self, download_id: str):
-        """توقف موقت دانلود یوتیوب"""
+        """Pause YouTube download"""
         print(f"⏸️ [Worker] Pausing: {download_id}")
 
         worker = None
@@ -474,7 +537,7 @@ class BackendWorker(QThread):
             print(f"⏸️ [Worker] Paused and signal sent: {download_id}")
 
     def resume_youtube_download(self, download_id: str):
-        """ادامه دانلود یوتیوب"""
+        """Resume YouTube download"""
         print(f"▶️ [Worker] Resuming: {download_id}")
 
         worker = None
@@ -492,7 +555,7 @@ class BackendWorker(QThread):
             print(f"▶️ [Worker] Resumed and signal sent: {download_id}")
 
     def cancel_youtube_download(self, download_id: str):
-        """لغو دانلود یوتیوب و پاک کردن فایل‌های ناقص"""
+        """Cancel YouTube download and delete incomplete files"""
         print(f"🗑️ [Worker] Cancelling YouTube download: {download_id}")
 
         worker = None
@@ -511,7 +574,6 @@ class BackendWorker(QThread):
                 ext = "mp4" if format_type == "video" else "mp3"
 
                 import re
-
                 filename = re.sub(r'[<>:"/\\|?*]', "_", title)
                 full_filename = f"{filename}.{ext}"
 
@@ -540,12 +602,10 @@ class BackendWorker(QThread):
                     pass
                 del self._size_workers[download_id]
 
-        print(
-            f"🗑️ [Worker] YouTube download cancelled and files deleted: {download_id}"
-        )
+        print(f"🗑️ [Worker] YouTube download cancelled and files deleted: {download_id}")
 
     def _delete_youtube_files(self, file_path: str, save_path: str, title: str):
-        """پاک کردن فایل‌های دانلود یوتیوب (کامل و ناقص)"""
+        """Delete YouTube download files (complete and partial)"""
         try:
             import glob
             import re
@@ -594,7 +654,7 @@ class BackendWorker(QThread):
             print(f"⚠️ Error deleting files: {e}")
 
     def _on_youtube_progress(self, download_id: str, progress: int):
-        """دریافت پیشرفت دانلود یوتیوب"""
+        """Handle YouTube download progress"""
         with self.youtube_lock:
             if download_id in self.youtube_downloads:
                 self.youtube_downloads[download_id]["progress"] = progress
@@ -603,7 +663,7 @@ class BackendWorker(QThread):
         self.youtube_progress.emit(download_id, progress)
 
     def _on_youtube_status(self, download_id: str, status: str):
-        """دریافت وضعیت دانلود یوتیوب"""
+        """Handle YouTube download status"""
         with self.youtube_lock:
             if download_id in self.youtube_downloads:
                 self.youtube_downloads[download_id]["status_text"] = status
@@ -611,7 +671,7 @@ class BackendWorker(QThread):
         self.youtube_status.emit(download_id, status)
 
     def _on_youtube_speed(self, download_id: str, speed: str, eta: str):
-        """دریافت سرعت و زمان باقیمانده"""
+        """Handle YouTube download speed and ETA"""
         with self.youtube_lock:
             if download_id in self.youtube_downloads:
                 self.youtube_downloads[download_id]["speed"] = speed
@@ -620,10 +680,8 @@ class BackendWorker(QThread):
         self.youtube_speed.emit(download_id, speed, eta)
 
     def _on_youtube_finished(self, download_id: str, success: bool, message: str):
-        """پایان دانلود یوتیوب"""
-        print(
-            f"🎬 [Worker] YouTube download finished: {download_id} - Success: {success} - Message: {message}"
-        )
+        """Handle YouTube download completion"""
+        print(f"🎬 [Worker] YouTube download finished: {download_id} - Success: {success} - Message: {message}")
 
         if "cancelled" in message.lower() or "cancel" in message.lower():
             with self.youtube_lock:
@@ -632,9 +690,7 @@ class BackendWorker(QThread):
                 if download_id in self.youtube_workers:
                     del self.youtube_workers[download_id]
                 self.youtube_gids.discard(download_id)
-            print(
-                f"🗑️ [Worker] YouTube download cancelled and cleaned up: {download_id}"
-            )
+            print(f"🗑️ [Worker] YouTube download cancelled and cleaned up: {download_id}")
             return
 
         with self.youtube_lock:
@@ -656,7 +712,7 @@ class BackendWorker(QThread):
         self.youtube_finished.emit(download_id, success, message)
 
     def _stop_all_youtube_downloads(self):
-        """توقف همه دانلودهای یوتیوب"""
+        """Stop all YouTube downloads"""
         with self.youtube_lock:
             for download_id, worker in list(self.youtube_workers.items()):
                 if worker.is_running():
@@ -668,7 +724,7 @@ class BackendWorker(QThread):
             print("🛑 All YouTube downloads stopped")
 
     def _fetch_size_for_gid(self, gid: str, url: str):
-        """دریافت حجم و کتگوری برای یک دانلود مشخص (فقط برای aria2)"""
+        """Fetch size for a specific download (aria2 only)"""
         if gid in self.youtube_gids:
             return
 
@@ -699,7 +755,6 @@ class BackendWorker(QThread):
 
         except Exception as e:
             import traceback
-
             traceback.print_exc()
         finally:
             self._fetching_sizes.discard(gid)
