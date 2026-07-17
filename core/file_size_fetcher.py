@@ -9,7 +9,7 @@ from urllib.parse import urlparse, unquote
 
 class FileSizeFetcher:
 
-    DEFAULT_TIMEOUT = 10
+    DEFAULT_TIMEOUT = 30
     DEFAULT_USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
 
     def __init__(
@@ -43,27 +43,40 @@ class FileSizeFetcher:
             self._session.verify = self.verify_ssl
         return self._session
 
+    def _fix_negative_size(self, size: int) -> int:
+        """Convert negative size to positive unsigned 32-bit"""
+        if size < 0:
+            # ===== تبدیل عدد منفی به unsigned 32-bit =====
+            return size & 0xFFFFFFFF
+        return size
+
     def get_size(self, url: str) -> Optional[int]:
+        """Get file size using multiple methods"""
+        # HEAD method first
         size = self._head_method(url)
-        if size is not None:
-            return size
+        if size is not None and size > 0:
+            return self._fix_negative_size(size)
 
+        # RANGE method as fallback
         size = self._range_method(url)
-        if size is not None:
-            return size
+        if size is not None and size > 0:
+            return self._fix_negative_size(size)
 
+        # STREAM method as last resort
         size = self._stream_method(url)
-        if size is not None:
-            return size
+        if size is not None and size > 0:
+            return self._fix_negative_size(size)
 
+        # YouTube specific
         if self._is_youtube_url(url):
             size = self._youtube_method(url)
-            if size is not None:
-                return size
+            if size is not None and size > 0:
+                return self._fix_negative_size(size)
 
         return None
 
     def _head_method(self, url: str) -> Optional[int]:
+        """Get size using HEAD request"""
         try:
             response = self.session.head(
                 url,
@@ -73,8 +86,15 @@ class FileSizeFetcher:
 
             if response.status_code == 200:
                 content_length = response.headers.get("content-length")
-                if content_length and content_length.isdigit():
-                    return int(content_length)
+                if content_length:
+                    try:
+                        size = int(content_length)
+                        # ===== تبدیل عدد منفی =====
+                        size = self._fix_negative_size(size)
+                        if size > 0:
+                            return size
+                    except ValueError:
+                        pass
 
         except Exception as e:
             pass
@@ -82,6 +102,7 @@ class FileSizeFetcher:
         return None
 
     def _range_method(self, url: str) -> Optional[int]:
+        """Get size using Range request"""
         try:
             response = self.session.get(
                 url,
@@ -92,15 +113,26 @@ class FileSizeFetcher:
             )
 
             if response.status_code in (200, 206):
+                # Check Content-Range header
                 content_range = response.headers.get("content-range", "")
                 if content_range:
                     match = re.search(r"/(\d+)$", content_range)
                     if match:
-                        return int(match.group(1))
+                        size = int(match.group(1))
+                        size = self._fix_negative_size(size)
+                        if size > 0:
+                            return size
 
+                # Fallback to Content-Length
                 content_length = response.headers.get("content-length")
-                if content_length and content_length.isdigit():
-                    return int(content_length)
+                if content_length:
+                    try:
+                        size = int(content_length)
+                        size = self._fix_negative_size(size)
+                        if size > 0:
+                            return size
+                    except ValueError:
+                        pass
 
         except Exception as e:
             pass
@@ -108,6 +140,7 @@ class FileSizeFetcher:
         return None
 
     def _stream_method(self, url: str) -> Optional[int]:
+        """Get size using streaming GET request"""
         try:
             response = self.session.get(
                 url,
@@ -118,20 +151,13 @@ class FileSizeFetcher:
 
             if response.status_code == 200:
                 content_length = response.headers.get("content-length")
-                if content_length and content_length.isdigit():
-                    return int(content_length)
-
-                transfer_encoding = response.headers.get("transfer-encoding")
-                if transfer_encoding == "chunked":
+                if content_length:
                     try:
-                        chunk = response.raw.read(64)
-                        if chunk:
-                            hex_str = chunk.split(b"\r\n")[0]
-                            if hex_str:
-                                chunk_size = int(hex_str, 16)
-                                if chunk_size > 0:
-                                    return chunk_size
-                    except:
+                        size = int(content_length)
+                        size = self._fix_negative_size(size)
+                        if size > 0:
+                            return size
+                    except ValueError:
                         pass
 
         except Exception as e:
@@ -140,6 +166,7 @@ class FileSizeFetcher:
         return None
 
     def _youtube_method(self, url: str) -> Optional[int]:
+        """Get size from YouTube using yt-dlp"""
         try:
             import subprocess
             import json
@@ -170,7 +197,10 @@ class FileSizeFetcher:
                 data = json.loads(result.stdout)
                 filesize = data.get("filesize") or data.get("filesize_approx")
                 if filesize:
-                    return int(filesize)
+                    size = int(filesize)
+                    size = self._fix_negative_size(size)
+                    if size > 0:
+                        return size
 
         except Exception as e:
             pass
@@ -178,6 +208,7 @@ class FileSizeFetcher:
         return None
 
     def _is_youtube_url(self, url: str) -> bool:
+        """Check if URL is a YouTube link"""
         youtube_patterns = [
             r"youtube\.com/watch",
             r"youtu\.be/",
@@ -191,6 +222,7 @@ class FileSizeFetcher:
         return False
 
     def close(self):
+        """Close the session"""
         if self._session:
             self._session.close()
             self._session = None
@@ -203,11 +235,24 @@ class FileSizeFetcher:
 
 
 def get_file_size(
-    url: str, timeout: int = 10, proxy: Optional[Dict[str, str]] = None
+    url: str, timeout: int = 30, proxy: Optional[Dict[str, str]] = None
 ) -> Optional[int]:
+    """
+    Get file size from URL.
+    
+    Args:
+        url: The URL to fetch
+        timeout: Timeout in seconds (default 30)
+        proxy: Proxy configuration
+    
+    Returns:
+        File size in bytes, or None if failed
+    """
     fetcher = FileSizeFetcher(timeout=timeout, proxy=proxy)
     try:
         result = fetcher.get_size(url)
-        return result
+        if result is not None and result > 0:
+            return result
+        return None
     finally:
         fetcher.close()

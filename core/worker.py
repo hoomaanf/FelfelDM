@@ -724,7 +724,7 @@ class BackendWorker(QThread):
             print("🛑 All YouTube downloads stopped")
 
     def _fetch_size_for_gid(self, gid: str, url: str):
-        """Fetch size for a specific download (aria2 only)"""
+        """دریافت حجم و کتگوری برای یک دانلود مشخص (فقط برای aria2)"""
         if gid in self.youtube_gids:
             return
 
@@ -736,6 +736,11 @@ class BackendWorker(QThread):
             from utils.helpers import get_category_from_filename
 
             size = get_file_size(url, timeout=10)
+            
+            if size is not None and size < 0:
+                size = size & 0xFFFFFFFF
+                print(f"🔄 [Size] Converted negative to unsigned: {size}")
+            
             if size and size > 0:
                 self._fetched_sizes.add(gid)
 
@@ -749,7 +754,9 @@ class BackendWorker(QThread):
                     filename = url.split("/")[-1].split("?")[0]
 
                 category = get_category_from_filename(filename)
+                
                 self.size_fetched.emit(gid, size, category)
+                print(f"✅ [BackendWorker] Size fetched for {gid}: {size} bytes ({size/1024/1024/1024:.2f} GB)")
             else:
                 print(f"⚠️⚠️⚠️ [BackendWorker] Could not fetch size for {gid}")
 
