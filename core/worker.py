@@ -540,7 +540,9 @@ class BackendWorker(QThread):
                     pass
                 del self._size_workers[download_id]
 
-        print(f"🗑️ [Worker] YouTube download cancelled and files deleted: {download_id}")
+        print(
+            f"🗑️ [Worker] YouTube download cancelled and files deleted: {download_id}"
+        )
 
     def _delete_youtube_files(self, file_path: str, save_path: str, title: str):
         """پاک کردن فایل‌های دانلود یوتیوب (کامل و ناقص)"""
