@@ -1,21 +1,4 @@
 # core/data_store.py
-"""
-Persistent data store for felfelDM.
-
-Architecture:
-  * Two independent, never-nested locks: `_lock` (queues/settings/proxies)
-    and `_yt_lock` (youtube_downloads). No method holds both at once, so
-    there is no lock-ordering deadlock to reason about.
-  * Hot, high-frequency updates (YouTube progress ticks) are coalesced by
-    a background flush thread instead of hitting disk synchronously.
-    Meaningful state transitions (add/delete/status change) flush
-    immediately so a crash never loses something that actually mattered.
-  * All getters return deep copies — callers can never mutate internal
-    state by holding onto a returned dict.
-  * All writes are atomic (temp file + fsync + os.replace + best-effort
-    directory fsync). There is no "best effort" non-atomic fallback path,
-    because a torn write is worse than a stale-but-valid file.
-"""
 
 import os
 import json
@@ -41,20 +24,10 @@ from core.proxy_manager import ProxyConfig
 KEYRING_SERVICE = "felfelDM"
 KEYRING_KEY = "aria2_secret"
 
-# How long we coalesce rapid youtube-download updates (progress ticks, etc.)
-# before actually touching disk.
 YT_FLUSH_INTERVAL = 1.5  # seconds
 
-# Keep disk usage bounded even if the app runs for weeks and repeatedly
-# hits a corrupted-config code path.
 MAX_CORRUPTED_BACKUPS = 5
 
-# Fields that belong on disk for a download record. Everything else
-# (in-memory-only runtime fields the UI attaches, like `downloadSpeed`
-# computed each poll, or `gid`) is intentionally dropped on save.
-# NOTE: "status" MUST be in this list — main_window.py writes
-# `q.downloads_info[gid]["status"] = ...` in dozens of places and relies
-# on it surviving a save/load cycle to resume correctly after a restart.
 _PERSISTED_DOWNLOAD_FIELDS = (
     "url",
     "name",
@@ -115,7 +88,7 @@ class Queue:
         paused=True,
         proxy_config=None,
         speed_limit=0,
-        manually_paused = False
+        manually_paused=False,
     ):
         self.name = name
         self.max_concurrent = max_concurrent
@@ -235,13 +208,7 @@ class Queue:
         return False
 
     def get_next_schedule_time(self) -> Optional[datetime]:
-        """
-        Return the next datetime this schedule will (re-)activate, or None
-        if the schedule is disabled. If the window is active right now,
-        returns None — "next start" isn't a meaningful concept while
-        already inside the window; callers should check `is_scheduled_now()`
-        first if they need to distinguish "active" from "waiting".
-        """
+
         if not self.schedule_enabled:
             return None
         if self.is_scheduled_now():
@@ -286,9 +253,7 @@ class DataStore:
         self.download_proxies: Dict[str, Any] = {}
         self.youtube_downloads: Dict[str, dict] = {}
 
-        # Must exist before load(), because load() can call save() (e.g. on
-        # a fresh install with no config file yet), and save() calls
-        # flush(), which touches these.
+        self._main_dirty = False
         self._yt_dirty = threading.Event()
         self._yt_stop = threading.Event()
 
@@ -316,13 +281,20 @@ class DataStore:
             "proxy_settings": {"global": None, "queues": {}},
         }
 
-    # ------------------------------------------------------------------
-    # Load
-    # ------------------------------------------------------------------
+    def _mark_main_dirty(self) -> None:
+        """Mark main data as dirty (needs save)"""
+        with self._lock:
+            self._main_dirty = True
+
+    def _mark_yt_dirty(self) -> None:
+        """Mark YouTube data as dirty"""
+        self._yt_dirty.set()
+
     def load(self) -> None:
         if not self.data_file.exists():
             print("📁 No config file found, using defaults")
             self.queues = [Queue("Default", paused=True)]
+            self._mark_main_dirty()
             self.save()
         else:
             try:
@@ -348,6 +320,8 @@ class DataStore:
                     self.settings = settings
                     self.download_proxies = data.get("download_proxies", {})
 
+                    self._main_dirty = False
+
             except json.JSONDecodeError as e:
                 print(f"⚠️ Config file corrupted: {e}")
                 self._backup_corrupted_file()
@@ -355,6 +329,7 @@ class DataStore:
                     self.queues = [Queue("Default", paused=True)]
                     self.settings = self._get_default_settings()
                     self.download_proxies = {}
+                    self._mark_main_dirty()
                 self.save()
 
             except Exception as e:
@@ -370,6 +345,7 @@ class DataStore:
         with self._lock:
             if not self.queues:
                 self.queues = [Queue("Default", paused=True)]
+                self._mark_main_dirty()
 
         self._load_youtube_downloads()
 
@@ -396,13 +372,7 @@ class DataStore:
                 print(f"⚠️ Could not read fallback secret file: {e}")
 
     def _save_secret(self, secret: str) -> bool:
-        """
-        Save the secret via keyring, falling back to a chmod-600 plaintext
-        file whenever keyring is unavailable OR fails. The fallback must
-        run in both cases — attempting it only when keyring already
-        failed, and never otherwise, means the secret is silently lost
-        forever on any machine without a working keyring backend.
-        """
+
         if not secret:
             return False
 
@@ -444,11 +414,12 @@ class DataStore:
         except Exception as e:
             print(f"⚠️ Could not prune old corrupted backups: {e}")
 
-    # ------------------------------------------------------------------
-    # Main config save
-    # ------------------------------------------------------------------
     def save(self) -> None:
+        """Save main data ONLY if dirty"""
         with self._lock:
+            if not self._main_dirty:
+                return
+
             secret = self.settings.pop("aria2_secret", "")
             payload = {
                 "queues": [q.to_dict() for q in self.queues],
@@ -462,12 +433,18 @@ class DataStore:
 
         try:
             _atomic_write_json(self.data_file, payload)
+            with self._lock:
+                self._main_dirty = False
         except Exception as e:
-            # No non-atomic fallback: a torn write would corrupt the last
-            # known-good config, which is worse than leaving it stale.
             print(f"⚠️ Error saving data (previous config on disk is unchanged): {e}")
 
-        self.flush()
+        # YouTube saves are handled by the background thread
+
+    def force_save(self) -> None:
+        """Force save regardless of dirty state (for shutdown)"""
+        with self._lock:
+            self._main_dirty = True
+        self.save()
 
     # ------------------------------------------------------------------
     # YouTube downloads: hot path, background-flushed
@@ -488,21 +465,24 @@ class DataStore:
             self.youtube_downloads = {}
 
     def _flush_youtube_downloads(self) -> None:
+        """Flush YouTube data ONLY if dirty"""
+        if not self._yt_dirty.is_set():
+            return
+
         with self._yt_lock:
             snapshot = deepcopy(self.youtube_downloads)
         try:
             _atomic_write_json(
                 self.youtube_downloads_file, {"downloads": snapshot}, indent=None
             )
+            self._yt_dirty.clear()
         except Exception as e:
             print(f"⚠️ Error saving YouTube downloads: {e}")
 
     def _yt_flush_loop(self) -> None:
         while True:
             stop_requested = self._yt_stop.wait(YT_FLUSH_INTERVAL)
-            if self._yt_dirty.is_set():
-                self._yt_dirty.clear()
-                self._flush_youtube_downloads()
+            self._flush_youtube_downloads()
             if stop_requested:
                 break
 
@@ -515,7 +495,12 @@ class DataStore:
         """Stop the background writer deterministically and flush pending state."""
         self._yt_stop.set()
         self._yt_thread.join(timeout=timeout)
+
+        self.force_save()
         self._flush_youtube_downloads()
+
+    # Note: These methods maintain backward compatibility.
+    # The caller doesn't need to know about dirty flags.
 
     def add_youtube_download(self, download_data: dict) -> str:
         download_id = download_data.get("id") or str(uuid.uuid4())
@@ -523,6 +508,7 @@ class DataStore:
         record["id"] = download_id
         with self._yt_lock:
             self.youtube_downloads[download_id] = record
+        self._mark_yt_dirty()
         self._flush_youtube_downloads()
         return download_id
 
@@ -559,9 +545,10 @@ class DataStore:
                 return False
             self.youtube_downloads[download_id].update(deepcopy(updates))
         if flush:
+            self._mark_yt_dirty()
             self._flush_youtube_downloads()
         else:
-            self._yt_dirty.set()
+            self._mark_yt_dirty()
         return True
 
     def update_youtube_status(self, download_id: str, status: str) -> bool:
@@ -579,6 +566,7 @@ class DataStore:
             if download_id not in self.youtube_downloads:
                 return False
             del self.youtube_downloads[download_id]
+        self._mark_yt_dirty()
         self._flush_youtube_downloads()
         return True
 
@@ -592,6 +580,7 @@ class DataStore:
             for d_id in completed_ids:
                 del self.youtube_downloads[d_id]
         if completed_ids:
+            self._mark_yt_dirty()
             self._flush_youtube_downloads()
         return len(completed_ids)
 
