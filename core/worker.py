@@ -15,7 +15,7 @@ from core.data_store import DataStore
 class BackendWorker(QThread):
     stats_updated = pyqtSignal(dict)
     aria2_error = pyqtSignal(str)
-    size_fetched = pyqtSignal(str, int, str)
+    size_fetched = pyqtSignal(str, object, str)
 
     youtube_progress = pyqtSignal(str, int)  # download_id, progress
     youtube_status = pyqtSignal(str, str)  # download_id, status
