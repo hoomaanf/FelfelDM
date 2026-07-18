@@ -2185,116 +2185,62 @@ class MainWindow(QMainWindow):
         removed = 0
 
         for gid in gids_to_remove:
-            # ===== Get file info BEFORE removing from queues =====
-            file_path = None
-            save_path = None
-            name = None
-            download_type = None
-            
-            # Find in queues first
-            for q in self.store.queues:
-                if gid in q.downloads_info:
-                    info = q.downloads_info[gid]
-                    save_path = q.save_path
-                    name = info.get("name", "")
-                    download_type = info.get("download_type", "normal")
-                    files = info.get("files", [])
-                    if files and files[0].get("path"):
-                        file_path = files[0]["path"]
-                    break
-            
-            # If not found in downloads_info, check _all_downloads
-            if not file_path and gid in self._all_downloads:
-                dl = self._all_downloads[gid]
-                name = dl.get("name", name)
-                download_type = dl.get("download_type", download_type)
-                files = dl.get("files", [])
-                if files and files[0].get("path"):
-                    file_path = files[0]["path"]
-            
-            # Try to find file in save_path
-            if (delete_files and not file_path) or (delete_files and file_path and not os.path.exists(file_path)):
-                if save_path and name:
-                    possible_path = os.path.join(save_path, name)
-                    if os.path.exists(possible_path):
-                        file_path = possible_path
-                elif save_path and os.path.exists(save_path):
-                    # Search by GID
-                    for f in os.listdir(save_path):
-                        if gid in f:
-                            file_path = os.path.join(save_path, f)
-                            break
-                    # Search by name pattern
-                    if not file_path and name:
-                        for f in os.listdir(save_path):
-                            if name in f and not any(ext in f for ext in [".aria2", ".part", ".temp"]):
-                                file_path = os.path.join(save_path, f)
-                                break
-
-            # ===== Remove from aria2 (skip if download is complete) =====
-            # Check if download is complete
-            is_complete = False
-            if gid in self._all_downloads:
-                status = self._all_downloads[gid].get("status", "")
-                if status in ["complete", "completed"]:
-                    is_complete = True
-                    print(f"ℹ️ Download {gid} is complete, skipping aria2 removal")
-            
-            if not is_complete:
-                try:
-                    self.aria2.remove(gid)
-                    print(f"🗑 Removed GID {gid} from aria2")
-                except Exception as e:
-                    print(f"⚠ Could not remove GID {gid} from aria2: {e}")
+            # ===== First remove from aria2 =====
+            try:
+                self.aria2.remove(gid)
+                print(f"🗑 Removed GID {gid} from aria2")
+            except Exception as e:
+                print(f"⚠ Could not remove GID {gid} from aria2: {e}")
 
             try:
                 self.aria2._call("aria2.removeDownloadResult", [gid])
             except Exception:
                 pass
 
-            # ===== Delete files =====
-            if delete_files:
-                # Delete main file
-                if file_path and os.path.exists(file_path):
-                    try:
-                        if os.path.isfile(file_path):
-                            os.remove(file_path)
-                            print(f"🗑️ DELETED FILE: {file_path}")
-                        elif os.path.isdir(file_path):
-                            import shutil
-                            shutil.rmtree(file_path)
-                            print(f"🗑️ DELETED FOLDER: {file_path}")
-                    except Exception as e:
-                        print(f"⚠️ Could not delete {file_path}: {e}")
-                
-                # Delete .aria2 file
-                if file_path:
-                    aria2_file = file_path + ".aria2"
-                    if os.path.exists(aria2_file):
-                        try:
-                            os.remove(aria2_file)
-                            print(f"🗑️ DELETED .aria2: {aria2_file}")
-                        except Exception as e:
-                            print(f"⚠️ Could not delete .aria2: {e}")
-                    
-                    # Delete temp files
-                    dir_path = os.path.dirname(file_path)
-                    base_name = os.path.basename(file_path)
-                    if dir_path and os.path.exists(dir_path):
-                        for f in os.listdir(dir_path):
-                            if (base_name in f and any(ext in f for ext in [".part", ".temp", ".download"])) or (gid in f and any(ext in f for ext in [".part", ".temp", ".download"])):
-                                temp_file = os.path.join(dir_path, f)
-                                try:
-                                    os.remove(temp_file)
-                                    print(f"🗑️ DELETED TEMP: {temp_file}")
-                                except Exception:
-                                    pass
-
             # ===== Remove from queues =====
             for q in self.store.queues:
                 if gid in q.downloads:
                     q.downloads.remove(gid)
                 if gid in q.downloads_info:
+                    # Store path before deleting info
+                    if delete_files:
+                        info = q.downloads_info[gid]
+                        save_path = q.save_path
+                        name = info.get("name", "")
+                        file_path = None
+                        
+                        # Try to get file path from info
+                        files = info.get("files", [])
+                        if files and files[0].get("path"):
+                            file_path = files[0]["path"]
+                        
+                        # Fallback: construct from save_path and name
+                        if not file_path and name and save_path:
+                            file_path = os.path.join(save_path, name)
+                        
+                        # Fallback: search in save_path by GID
+                        if not file_path and save_path and os.path.exists(save_path):
+                            for f in os.listdir(save_path):
+                                if gid in f:
+                                    file_path = os.path.join(save_path, f)
+                                    break
+                        
+                        if file_path and os.path.exists(file_path):
+                            try:
+                                os.remove(file_path)
+                                print(f"🗑️ DELETED FILE: {file_path}")
+                            except Exception as e:
+                                print(f"⚠️ Could not delete file {file_path}: {e}")
+                            
+                            # Delete .aria2 file
+                            aria2_file = file_path + ".aria2"
+                            if os.path.exists(aria2_file):
+                                try:
+                                    os.remove(aria2_file)
+                                    print(f"🗑️ DELETED .aria2: {aria2_file}")
+                                except Exception as e:
+                                    print(f"⚠️ Could not delete .aria2: {e}")
+                    
                     del q.downloads_info[gid]
 
             # ===== Remove from _all_downloads =====
@@ -4435,8 +4381,6 @@ class MainWindow(QMainWindow):
         dialog = ShutdownCountdownDialog(self)
         dialog.accepted.connect(self._shutdown_system)
         dialog.rejected.connect(self._cancel_shutdown)
-
-        dialog.show()
         dialog.start_countdown()
 
         self._shutdown_dialog = dialog

@@ -97,6 +97,7 @@ class AccordionGroup(QWidget):
 # AddDownloadDialog
 # ============================================================
 
+
 class AddDownloadDialog(QDialog):
     def __init__(self, queues, default_queue=0, parent=None):
         super().__init__(parent)
@@ -324,6 +325,7 @@ class AddDownloadDialog(QDialog):
 # QuickDownloadDialog
 # ============================================================
 
+
 class QuickDownloadDialog(QDialog):
     def __init__(self, queues, parent=None):
         super().__init__(parent)
@@ -509,9 +511,12 @@ class QuickDownloadDialog(QDialog):
             "proxy_mode": proxy_mode,
             "custom_proxy": self._custom_proxy if proxy_mode == 1 else None,
         }
+
+
 # ============================================================
 # SingleDownloadDialog
 # ============================================================
+
 
 class SingleDownloadDialog(QDialog):
     def __init__(self, parent=None):
@@ -687,6 +692,7 @@ class SingleDownloadDialog(QDialog):
 # YouTubeDownloadDialog
 # ============================================================
 
+
 class YouTubeDownloadDialog(QDialog):
     youtube_download_requested = pyqtSignal(dict)
 
@@ -817,7 +823,9 @@ class YouTubeDownloadDialog(QDialog):
         self.download_btn.setEnabled(False)
         self.download_btn.clicked.connect(self._on_add_to_queue)
 
-        self.cancel_btn = self.btn_box.addButton("Cancel", QDialogButtonBox.ButtonRole.RejectRole)
+        self.cancel_btn = self.btn_box.addButton(
+            "Cancel", QDialogButtonBox.ButtonRole.RejectRole
+        )
         self.cancel_btn.setIcon(get_icon("dialog-cancel"))
         self.cancel_btn.clicked.connect(self.reject)
 
@@ -1105,6 +1113,7 @@ class YouTubeDownloadDialog(QDialog):
 # QueueSettingsDialog (تب‌بندی)
 # ============================================================
 
+
 class QueueSettingsDialog(QDialog):
     def __init__(self, queue: Queue, parent=None):
         super().__init__(parent)
@@ -1333,6 +1342,7 @@ class QueueSettingsDialog(QDialog):
 # ============================================================
 # SettingsDialog (تب‌بندی)
 # ============================================================
+
 
 class SettingsDialog(QDialog):
     def __init__(self, settings, parent=None):
@@ -1818,10 +1828,10 @@ class DownloadProgressDialog(QDialog):
         self.setWindowTitle("Download Progress")
         self.setMinimumWidth(480)
         self.setWindowFlags(
-            Qt.WindowType.Window |
-            Qt.WindowType.WindowCloseButtonHint |
-            Qt.WindowType.WindowMinimizeButtonHint |
-            Qt.WindowType.WindowMaximizeButtonHint
+            Qt.WindowType.Window
+            | Qt.WindowType.WindowCloseButtonHint
+            | Qt.WindowType.WindowMinimizeButtonHint
+            | Qt.WindowType.WindowMaximizeButtonHint
         )
         self.setWindowModality(Qt.WindowModality.NonModal)
         self.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose, True)
@@ -1934,9 +1944,9 @@ class DownloadProgressDialog(QDialog):
             self,
             "Cancel Download",
             "Cancel this download?\n\nDo you also want to delete downloaded files?",
-            QMessageBox.StandardButton.Yes |
-            QMessageBox.StandardButton.No |
-            QMessageBox.StandardButton.Cancel,
+            QMessageBox.StandardButton.Yes
+            | QMessageBox.StandardButton.No
+            | QMessageBox.StandardButton.Cancel,
         )
         if reply == QMessageBox.StandardButton.Cancel:
             return
@@ -1963,11 +1973,11 @@ class DownloadProgressDialog(QDialog):
             self._is_complete = True
             self.setWindowTitle("Download Completed!")
             self.setWindowFlags(
-                Qt.WindowType.Window |
-                Qt.WindowType.WindowCloseButtonHint |
-                Qt.WindowType.WindowMinimizeButtonHint |
-                Qt.WindowType.WindowMaximizeButtonHint |
-                Qt.WindowType.WindowStaysOnTopHint
+                Qt.WindowType.Window
+                | Qt.WindowType.WindowCloseButtonHint
+                | Qt.WindowType.WindowMinimizeButtonHint
+                | Qt.WindowType.WindowMaximizeButtonHint
+                | Qt.WindowType.WindowStaysOnTopHint
             )
             self.show()
             self.raise_()
@@ -1980,7 +1990,9 @@ class DownloadProgressDialog(QDialog):
             pct = int((completed / total) * 100)
             self.progress_bar.setValue(min(pct, 100))
             self.progress_bar.setFormat(f"{pct}%")
-            self.info_labels["size"].setText(f"{format_size(completed)} / {format_size(total)}")
+            self.info_labels["size"].setText(
+                f"{format_size(completed)} / {format_size(total)}"
+            )
         else:
             self.progress_bar.setValue(0)
             self.progress_bar.setFormat("—")
@@ -2016,10 +2028,12 @@ class DownloadProgressDialog(QDialog):
             "error": {"text": "Error", "color": "#f38ba8"},
             "removed": {"text": "Removed", "color": "#6c7086"},
         }
-        
+
         info = status_map.get(status, {"text": status.capitalize(), "color": "#a6adc8"})
         self.info_labels["status"].setText(info["text"])
-        self.info_labels["status"].setStyleSheet(f"color: {info['color']}; font-weight: 600;")
+        self.info_labels["status"].setStyleSheet(
+            f"color: {info['color']}; font-weight: 600;"
+        )
 
         self._status = status
         self._update_buttons(status)
@@ -2056,9 +2070,12 @@ class DownloadProgressDialog(QDialog):
         else:
             self.action_btn.setEnabled(False)
             self.cancel_btn.setEnabled(False)
+
+
 # ============================================================
 # ProxyDialog
 # ============================================================
+
 
 class ProxyDialog(QDialog):
     def __init__(
@@ -2195,66 +2212,63 @@ class ProxyDialog(QDialog):
 # ============================================================
 # ShutdownCountdownDialog
 # ============================================================
-
 class ShutdownCountdownDialog(QDialog):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setWindowTitle("System Shutdown")
         self.setModal(True)
         self.setWindowFlags(
-            Qt.WindowType.Window
+            Qt.WindowType.Dialog
+            | Qt.WindowType.WindowCloseButtonHint
             | Qt.WindowType.WindowStaysOnTopHint
             | Qt.WindowType.FramelessWindowHint
         )
-        self.setMinimumWidth(400)
-        self.setMinimumHeight(250)
+        self.setMinimumWidth(380)
+        self.setMinimumHeight(220)
 
         self._countdown = 20
         self._timer = None
         self._cancelled = False
 
         main_layout = QVBoxLayout(self)
-        main_layout.setSpacing(12)
-        main_layout.setContentsMargins(25, 25, 25, 25)
+        main_layout.setSpacing(8)
+        main_layout.setContentsMargins(25, 20, 25, 20)
 
-        title = QLabel("System Shutdown")
+        title = QLabel("⚠️ System Shutdown")
         title.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        title.setStyleSheet("font-size: 18px; font-weight: bold;")
+        title.setStyleSheet("font-size: 18px; font-weight: bold; ")
         main_layout.addWidget(title)
 
         msg = QLabel("All downloads are complete!\nThe system will shut down in:")
         msg.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        msg.setStyleSheet("font-size: 13px; ")
         main_layout.addWidget(msg)
 
         self.countdown_lbl = QLabel("20")
         self.countdown_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.countdown_lbl.setStyleSheet("font-size: 42px; font-weight: bold;")
+        self.countdown_lbl.setStyleSheet("font-size: 52px; font-weight: bold;")
         main_layout.addWidget(self.countdown_lbl)
-
-        self.progress_bar = QProgressBar()
-        self.progress_bar.setMaximum(20)
-        self.progress_bar.setValue(20)
-        main_layout.addWidget(self.progress_bar)
 
         self.cancel_btn = QPushButton("Cancel Shutdown")
         self.cancel_btn.setFixedHeight(36)
+
         self.cancel_btn.clicked.connect(self._on_cancel)
         main_layout.addWidget(self.cancel_btn)
 
     def start_countdown(self):
         self._countdown = 20
         self.countdown_lbl.setText("20")
-        self.progress_bar.setValue(20)
         self._cancelled = False
 
         self._timer = QTimer(self)
         self._timer.timeout.connect(self._update_countdown)
         self._timer.start(1000)
 
+        self.exec()
+
     def _update_countdown(self):
         self._countdown -= 1
         self.countdown_lbl.setText(str(self._countdown))
-        self.progress_bar.setValue(self._countdown)
 
         if self._countdown <= 0:
             self._timer.stop()
