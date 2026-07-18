@@ -532,12 +532,11 @@ class MainWindow(QMainWindow):
                 QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
             )
             if reply == QMessageBox.StandardButton.Yes:
-                self._pause_all_downloads()
                 self.hide()
                 self.tray.showMessage(
                     "FelfelDM",
                     "Downloads are running in the background.\n"
-                    "Double-click the tray icon to show the main window.",
+                    "Right-click the tray icon to show the main window.",
                     QSystemTrayIcon.MessageIcon.Information,
                     3000,
                 )
