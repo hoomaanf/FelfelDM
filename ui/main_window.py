@@ -1,3 +1,5 @@
+# ui/main_window.py
+
 import os
 import time
 import subprocess
@@ -601,6 +603,10 @@ class MainWindow(QMainWindow):
         if hasattr(self, "worker"):
             self.worker.terminate()
 
+        # ===== Shutdown DataStore to flush pending writes =====
+        if hasattr(self.store, "shutdown"):
+            self.store.shutdown()
+
         try:
             self.aria2.shutdown()
         except Exception:
@@ -852,8 +858,13 @@ class MainWindow(QMainWindow):
         self.queue_list.blockSignals(True)
         self.queue_list.clear()
 
+        something_changed = False
+
         for q in self.store.queues:
             if len(q.downloads) == 0:
+                # Only mark as changed if it wasn't already empty
+                if q.paused != True or q.manually_paused != False:
+                    something_changed = True
                 q.paused = True
                 q.manually_paused = False
                 self._cleared_gids.clear()
@@ -888,7 +899,10 @@ class MainWindow(QMainWindow):
         self.queue_list.blockSignals(False)
         self._update_queue_status()
         self._update_queue_buttons()
-        self.store.save()
+
+        # Only save if something changed
+        if something_changed:
+            self.store.save()
 
     def _update_queue_status(self) -> None:
         q = self._current_queue()
@@ -1092,10 +1106,10 @@ class MainWindow(QMainWindow):
                 )
             return
 
+        # ===== Validation phase (no mutations) =====
         for gid in q.downloads:
             if gid in self._all_downloads:
                 total = self._all_downloads[gid].get("totalLength", 0)
-                self._all_downloads[gid]["error_count"] = 0
                 status = self._all_downloads[gid].get("status", "")
                 if total == 0 and status in ["waiting", "paused"]:
                     QMessageBox.warning(
@@ -1107,6 +1121,7 @@ class MainWindow(QMainWindow):
                     )
                     return
 
+        # ===== Mutation phase =====
         q.manually_paused = False
         self._apply_settings_to_aria2()
         q.paused = False
@@ -1118,6 +1133,8 @@ class MainWindow(QMainWindow):
             download_type = "normal"
             if gid in self._all_downloads:
                 download_type = self._all_downloads[gid].get("download_type", "normal")
+                # Reset error count now that we're committed
+                self._all_downloads[gid]["error_count"] = 0
 
             if download_type == "youtube":
                 real_status = self._all_downloads[gid].get("status", "")
@@ -2040,8 +2057,8 @@ class MainWindow(QMainWindow):
                 2000,
             )
 
-    def _re_add_download(self, gid: str) -> None:
-        """Re-add a download to aria2 if it was lost"""
+    def _re_add_download(self, gid: str) -> Optional[str]:
+        """Re-add a download to aria2 if it was lost, returns new gid or None"""
         print(f"🔄 Re-adding download to aria2: {gid}")
 
         url = None
@@ -2058,7 +2075,7 @@ class MainWindow(QMainWindow):
 
         if not url or not save_path:
             print(f"❌ Cannot re-add: missing url or save_path for {gid}")
-            return
+            return None
 
         options = {
             "dir": save_path,
@@ -2096,6 +2113,9 @@ class MainWindow(QMainWindow):
             self._refresh_table()
             self._refresh_queue_list()
             self._update_queue_buttons()
+            return new_gid
+        else:
+            return None
 
     def _remove_selected(self) -> None:
         selected = self.table.selectionModel().selectedRows()
@@ -2165,60 +2185,121 @@ class MainWindow(QMainWindow):
         removed = 0
 
         for gid in gids_to_remove:
-            file_paths = []
-            download_path = None
-
+            # ===== Get file info BEFORE removing from queues =====
+            file_path = None
+            save_path = None
+            name = None
+            download_type = None
+            
+            # Find in queues first
             for q in self.store.queues:
                 if gid in q.downloads_info:
                     info = q.downloads_info[gid]
-                    download_path = q.save_path
+                    save_path = q.save_path
                     name = info.get("name", "")
+                    download_type = info.get("download_type", "normal")
                     files = info.get("files", [])
-                    for f in files:
-                        if f.get("path"):
-                            file_paths.append(f["path"])
-                    if not file_paths and name and download_path:
-                        possible_path = os.path.join(download_path, name)
-                        if os.path.exists(possible_path):
-                            file_paths.append(possible_path)
+                    if files and files[0].get("path"):
+                        file_path = files[0]["path"]
                     break
-
-            if not file_paths and gid in self._all_downloads:
+            
+            # If not found in downloads_info, check _all_downloads
+            if not file_path and gid in self._all_downloads:
                 dl = self._all_downloads[gid]
-                name = dl.get("name", "")
+                name = dl.get("name", name)
+                download_type = dl.get("download_type", download_type)
                 files = dl.get("files", [])
-                for f in files:
-                    if f.get("path"):
-                        file_paths.append(f["path"])
-                if not file_paths and name:
-                    for q in self.store.queues:
-                        if gid in q.downloads:
-                            possible_path = os.path.join(q.save_path, name)
-                            if os.path.exists(possible_path):
-                                file_paths.append(possible_path)
+                if files and files[0].get("path"):
+                    file_path = files[0]["path"]
+            
+            # Try to find file in save_path
+            if (delete_files and not file_path) or (delete_files and file_path and not os.path.exists(file_path)):
+                if save_path and name:
+                    possible_path = os.path.join(save_path, name)
+                    if os.path.exists(possible_path):
+                        file_path = possible_path
+                elif save_path and os.path.exists(save_path):
+                    # Search by GID
+                    for f in os.listdir(save_path):
+                        if gid in f:
+                            file_path = os.path.join(save_path, f)
                             break
+                    # Search by name pattern
+                    if not file_path and name:
+                        for f in os.listdir(save_path):
+                            if name in f and not any(ext in f for ext in [".aria2", ".part", ".temp"]):
+                                file_path = os.path.join(save_path, f)
+                                break
 
-            try:
-                self.aria2.remove(gid)
-            except Exception:
-                pass
+            # ===== Remove from aria2 (skip if download is complete) =====
+            # Check if download is complete
+            is_complete = False
+            if gid in self._all_downloads:
+                status = self._all_downloads[gid].get("status", "")
+                if status in ["complete", "completed"]:
+                    is_complete = True
+                    print(f"ℹ️ Download {gid} is complete, skipping aria2 removal")
+            
+            if not is_complete:
+                try:
+                    self.aria2.remove(gid)
+                    print(f"🗑 Removed GID {gid} from aria2")
+                except Exception as e:
+                    print(f"⚠ Could not remove GID {gid} from aria2: {e}")
 
             try:
                 self.aria2._call("aria2.removeDownloadResult", [gid])
             except Exception:
                 pass
 
+            # ===== Delete files =====
+            if delete_files:
+                # Delete main file
+                if file_path and os.path.exists(file_path):
+                    try:
+                        if os.path.isfile(file_path):
+                            os.remove(file_path)
+                            print(f"🗑️ DELETED FILE: {file_path}")
+                        elif os.path.isdir(file_path):
+                            import shutil
+                            shutil.rmtree(file_path)
+                            print(f"🗑️ DELETED FOLDER: {file_path}")
+                    except Exception as e:
+                        print(f"⚠️ Could not delete {file_path}: {e}")
+                
+                # Delete .aria2 file
+                if file_path:
+                    aria2_file = file_path + ".aria2"
+                    if os.path.exists(aria2_file):
+                        try:
+                            os.remove(aria2_file)
+                            print(f"🗑️ DELETED .aria2: {aria2_file}")
+                        except Exception as e:
+                            print(f"⚠️ Could not delete .aria2: {e}")
+                    
+                    # Delete temp files
+                    dir_path = os.path.dirname(file_path)
+                    base_name = os.path.basename(file_path)
+                    if dir_path and os.path.exists(dir_path):
+                        for f in os.listdir(dir_path):
+                            if (base_name in f and any(ext in f for ext in [".part", ".temp", ".download"])) or (gid in f and any(ext in f for ext in [".part", ".temp", ".download"])):
+                                temp_file = os.path.join(dir_path, f)
+                                try:
+                                    os.remove(temp_file)
+                                    print(f"🗑️ DELETED TEMP: {temp_file}")
+                                except Exception:
+                                    pass
+
+            # ===== Remove from queues =====
             for q in self.store.queues:
                 if gid in q.downloads:
                     q.downloads.remove(gid)
                 if gid in q.downloads_info:
                     del q.downloads_info[gid]
 
+            # ===== Remove from _all_downloads =====
             if gid in self._all_downloads:
                 del self._all_downloads[gid]
-
-            if delete_files:
-                self._delete_download_files(gid)
 
             removed += 1
 
@@ -2230,11 +2311,10 @@ class MainWindow(QMainWindow):
         if removed > 0:
             msg_text = f"Removed {removed} download(s)"
             if delete_files:
-                msg_text += " (files and .aria2 files deleted)"
+                msg_text += " (files deleted)"
             self.tray.showMessage(
                 "FelfelDM", msg_text, QSystemTrayIcon.MessageIcon.Information, 2000
             )
-
     def _delete_download_files(self, gid: str) -> None:
         file_paths = []
         save_path = None
@@ -2437,10 +2517,8 @@ class MainWindow(QMainWindow):
         dl_data = self._all_downloads.get(gid, {})
         download_type = dl_data.get("download_type", "normal")
 
-        if download_type == "youtube":
-            real_status = dl_data.get("status", "")
-        else:
-            real_status = dl_data.get("status", "")
+        # Unified status - both branches were identical
+        real_status = dl_data.get("status", "")
 
         menu = QMenu(self)
 
@@ -2608,10 +2686,8 @@ class MainWindow(QMainWindow):
 
         download_type = self._all_downloads.get(gid, {}).get("download_type", "normal")
 
-        if download_type == "youtube":
-            real_status = self._all_downloads.get(gid, {}).get("status", "")
-        else:
-            real_status = self._all_downloads.get(gid, {}).get("status", "")
+        # Unified status - both branches were identical
+        real_status = self._all_downloads.get(gid, {}).get("status", "")
 
         if not real_status:
             self.btn_toggle.setEnabled(False)
@@ -2638,6 +2714,88 @@ class MainWindow(QMainWindow):
 
         if not checked and self._shutdown_dialog:
             self._shutdown_dialog.reject()
+            self._shutdown_dialog = None
+            self._shutdown_dialog_shown = False
+            if hasattr(self, "_shutdown_timer") and self._shutdown_timer:
+                self._shutdown_timer.stop()
+                self._shutdown_timer = None
+            self.tray.showMessage(
+                "FelfelDM",
+                "✅ Shutdown cancelled.",
+                QSystemTrayIcon.MessageIcon.Information,
+                2000,
+            )
+        elif checked:
+            self.tray.showMessage(
+                "FelfelDM",
+                "🛑 Shutdown will trigger when all downloads complete.",
+                QSystemTrayIcon.MessageIcon.Information,
+                2000,
+            )
+            # Immediately check if all downloads are already complete
+            self._check_already_complete()
+
+    def _check_already_complete(self) -> None:
+        """Check if all downloads are already complete when shutdown is enabled"""
+        if not self.shutdown_cb.isChecked():
+            return
+        
+        if self._shutdown_dialog_shown:
+            return
+        
+        # Check aria2 active downloads
+        try:
+            stat = self.aria2.get_global_stat() or {}
+            total_active = int(stat.get("numActive", 0))
+            total_waiting = int(stat.get("numWaiting", 0))
+            
+            if total_active > 0 or total_waiting > 0:
+                return
+        except:
+            pass
+        
+        # Check internal state
+        has_active = False
+        for q in self.store.queues:
+            for gid in q.downloads:
+                if gid in self._all_downloads:
+                    status = self._all_downloads[gid].get("status", "")
+                    if status in ["active", "waiting", "downloading"]:
+                        has_active = True
+                        break
+            if has_active:
+                break
+        
+        if has_active:
+            return
+        
+        # Check if any downloads exist and all are complete
+        has_any = False
+        all_complete = True
+        for q in self.store.queues:
+            if q.downloads:
+                has_any = True
+                for gid in q.downloads:
+                    if gid in self._all_downloads:
+                        status = self._all_downloads[gid].get("status", "")
+                        if status not in ["complete", "completed", "error", "removed"]:
+                            all_complete = False
+                            break
+                    else:
+                        all_complete = False
+                        break
+                if not all_complete:
+                    break
+        
+        if has_any and all_complete and not self._shutdown_dialog_shown:
+            self._shutdown_dialog_shown = True
+            self.tray.showMessage(
+                "🌶️ FelfelDM",
+                "✅ All downloads completed!\n🛑 System will shut down in 20 seconds.",
+                QSystemTrayIcon.MessageIcon.Information,
+                5000,
+            )
+            self._show_shutdown_countdown()
 
     def _apply_global_speed_limit(self) -> None:
         limit = self.store.settings.get("speed_limit", 0)
@@ -2776,22 +2934,15 @@ class MainWindow(QMainWindow):
 
             if total_active == 0 and total_waiting == 0:
                 has_any_download = any(q.downloads for q in self.store.queues)
-                if has_any_download:
-                    all_done = all(
-                        self._all_downloads.get(gid, {}).get("status", "")
-                        in ["complete", "error", "removed"]
-                        for q in self.store.queues
-                        for gid in q.downloads
+                if has_any_download and not self._shutdown_dialog_shown:
+                    self._shutdown_dialog_shown = True
+                    self.tray.showMessage(
+                        "🌶️ FelfelDM",
+                        "✅ All downloads completed!\n🛑 System will shut down in 20 seconds.",
+                        QSystemTrayIcon.MessageIcon.Information,
+                        5000,
                     )
-                    if all_done and not self._shutdown_dialog_shown:
-                        self._shutdown_dialog_shown = True
-                        self.tray.showMessage(
-                            "🌶️ FelfelDM",
-                            "✅ All downloads completed!\n🛑 System will shut down in 20 seconds.",
-                            QSystemTrayIcon.MessageIcon.Information,
-                            5000,
-                        )
-                        self._show_shutdown_countdown()
+                    self._show_shutdown_countdown()
 
         downloads_list = result.get("downloads", [])
 
@@ -2878,7 +3029,8 @@ class MainWindow(QMainWindow):
 
         self.store.save()
 
-        max_retries = self.store.settings.get("max_retries", 3)
+        # Use max_tries from settings (not max_retries)
+        max_retries = self.store.settings.get("max_tries", 5)
         for gid, data in self._all_downloads.items():
             if data.get("download_type") == "youtube":
                 continue
@@ -2925,7 +3077,7 @@ class MainWindow(QMainWindow):
         self._update_toggle_button()
 
     def _update_speed_display(self):
-        """به‌روزرسانی سرعت با میانگین متحرک (مثل IDM)"""
+        """Update speed with moving average (like IDM)"""
         now = time.time()
 
         self._last_speed_update = now
@@ -3437,42 +3589,12 @@ class MainWindow(QMainWindow):
         if real_status in ["paused", "error"]:
             try:
                 if real_status == "error":
-                    info = None
-                    url = None
-                    save_path = None
-                    for q in self.store.queues:
-                        if gid in q.downloads_info:
-                            info = q.downloads_info[gid]
-                            url = info.get("url")
-                            save_path = q.save_path
-                            break
-
-                    if url and save_path:
-                        self.aria2.remove(gid)
-
-                        options = {
-                            "dir": save_path,
-                            "split": "8",
-                            "max-connection-per-server": "8",
-                            "continue": "true",
-                            "always-resume": "true",
-                        }
-                        new_gid = self.aria2.add_url(url, options)
-                        if new_gid:
-                            for q in self.store.queues:
-                                if gid in q.downloads:
-                                    idx = q.downloads.index(gid)
-                                    q.downloads[idx] = new_gid
-                                if gid in q.downloads_info:
-                                    q.downloads_info[new_gid] = q.downloads_info.pop(
-                                        gid
-                                    )
-                            if gid in self._all_downloads:
-                                self._all_downloads[new_gid] = self._all_downloads.pop(
-                                    gid
-                                )
-                            gid = new_gid
-                            real_status = "paused"
+                    # Use the common re-add method
+                    new_gid = self._re_add_download(gid)
+                    if new_gid:
+                        gid = new_gid
+                    else:
+                        return
 
                 if self.aria2.resume(gid) is not None:
                     if gid in self._all_downloads:
@@ -4275,81 +4397,12 @@ class MainWindow(QMainWindow):
         )
 
     def _process_move_item(self) -> None:
-        """پردازش یک آیتم در حین انتقال"""
-        if self._move_current_index >= len(self._move_queue_items):
+        """This method is no longer used - kept for compatibility"""
+        pass
 
-            self._move_timer.stop()
-            self._move_timer = None
-            self._move_queue_items = []
-
-            self.btn_move_queue.setEnabled(True)
-            self.btn_move_queue.setText("Move to Queue")
-
-            self.store.save()
-            self._refresh_queue_list()
-            self._refresh_table()
-            self._update_queue_buttons()
-            self._update_toggle_button()
-
-            self.tray.showMessage(
-                "FelfelDM",
-                f"✅ Moved {self._move_count} download(s) to '{self._move_target_queue.name}'",
-                QSystemTrayIcon.MessageIcon.Information,
-                2000,
-            )
-            return
-
-        gid = self._move_queue_items[self._move_current_index]
-        self._move_current_index += 1
-
-        try:
-
-            real_status = None
-            status_data = self.aria2.get_status(gid)
-            if status_data and isinstance(status_data, dict):
-                real_status = status_data.get("status", "")
-            elif gid in self._all_downloads:
-                real_status = self._all_downloads[gid].get("status", "")
-
-            if gid in self._move_source_queue.downloads:
-                self._move_source_queue.downloads.remove(gid)
-
-            if gid not in self._move_target_queue.downloads:
-                self._move_target_queue.downloads.append(gid)
-
-                if gid in self._move_source_queue.downloads_info:
-                    info = self._move_source_queue.downloads_info.pop(gid)
-                    if real_status:
-                        info["status"] = real_status
-                    self._move_target_queue.downloads_info[gid] = info
-
-                if gid in self._all_downloads:
-                    if real_status:
-                        self._all_downloads[gid]["status"] = real_status
-
-                    if self._move_target_queue.paused:
-                        self._all_downloads[gid]["status"] = "paused"
-                        self._all_downloads[gid]["downloadSpeed"] = 0
-                        try:
-                            self.aria2.pause(gid)
-                        except:
-                            pass
-                    else:
-
-                        try:
-                            self.aria2.resume(gid)
-                            self._all_downloads[gid]["status"] = "active"
-                        except:
-                            pass
-
-                self._move_count += 1
-
-        except Exception as e:
-            print(f"⚠️ Error moving {gid}: {e}")
-
-        progress_text = f"Moving... {self._move_count}/{self._move_total}"
-        self.btn_move_queue.setText(progress_text)
-        QApplication.processEvents()
+    def _on_queues_reordered(self, parent, start, end, destination, row) -> None:
+        """This method is no longer used - kept for compatibility"""
+        pass
 
     def _on_size_fetched(self, gid: str, size: int, category: str = "📁 Other") -> None:
 
@@ -4894,17 +4947,6 @@ class MainWindow(QMainWindow):
         self._refresh_queue_list()
         self.queue_list.setCurrentRow(self._current_queue_idx)
         self._on_queue_changed(self._current_queue_idx)
-
-    def _on_queues_reordered(self, parent, start, end, destination, row) -> None:
-        if start != row:
-            queue = self.store.queues.pop(start)
-            if row > start:
-                row -= 1
-            self.store.queues.insert(row, queue)
-            self._current_queue_idx = row
-            self.store.save()
-            self._refresh_queue_list()
-            self.queue_list.setCurrentRow(row)
 
     def _update_download_size(self, gid: str) -> None:
         """Update download size after resume"""
