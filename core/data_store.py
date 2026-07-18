@@ -5,29 +5,41 @@ import json
 import shutil
 from datetime import datetime, time as dtime
 from pathlib import Path
-from appdirs import user_config_dir
-import keyring
-from core.proxy_manager import ProxyConfig
 from typing import Dict, List, Optional, Any
+import uuid
+
+
+def get_config_dir(appname: str = "felfelDM") -> str:
+    """Get XDG config directory (Linux/Unix)"""
+
+    config_home = os.environ.get("XDG_CONFIG_HOME", os.path.expanduser("~/.config"))
+    return os.path.join(config_home, appname)
+
+
+try:
+    import keyring
+
+    KEYRING_AVAILABLE = True
+except ImportError:
+    KEYRING_AVAILABLE = False
 
 KEYRING_SERVICE = "felfelDM"
 KEYRING_KEY = "aria2_secret"
 
 
 class Queue:
-    # ... (کدهای قبلی رو نگه دار، تغییری نداره)
     def __init__(
         self,
-        name,
-        max_concurrent=3,
-        save_path="",
-        schedule_enabled=False,
-        schedule_start=None,
-        schedule_end=None,
-        days=None,
-        paused=True,
-        proxy_config=None,
-        speed_limit=0,
+        name: str,
+        max_concurrent: int = 3,
+        save_path: str = "",
+        schedule_enabled: bool = False,
+        schedule_start: Optional[dtime] = None,
+        schedule_end: Optional[dtime] = None,
+        days: Optional[List[int]] = None,
+        paused: bool = True,
+        proxy_config: Optional[Any] = None,
+        speed_limit: int = 0,
     ):
         self.name = name
         self.max_concurrent = max_concurrent
@@ -36,13 +48,13 @@ class Queue:
         self.schedule_start = schedule_start or dtime(0, 0)
         self.schedule_end = schedule_end or dtime(23, 59)
         self.days = days or [0, 1, 2, 3, 4, 5, 6]
-        self.downloads = []
-        self.downloads_info = {}
+        self.downloads: List[str] = []
+        self.downloads_info: Dict[str, Dict] = {}
         self.paused = paused
         self.proxy_config = proxy_config
         self.speed_limit = speed_limit
 
-    def to_dict(self):
+    def to_dict(self) -> Dict:
         proxy_dict = None
         if self.proxy_config:
             from core.proxy_manager import ProxyConfig
@@ -73,7 +85,7 @@ class Queue:
         }
 
     @classmethod
-    def from_dict(cls, d):
+    def from_dict(cls, d: Dict) -> "Queue":
         name = d.get("name", "Default")
         q = cls(name)
         q.max_concurrent = d.get("max_concurrent", 3)
@@ -83,8 +95,13 @@ class Queue:
 
         st = d.get("schedule_start", "00:00").split(":")
         en = d.get("schedule_end", "23:59").split(":")
-        q.schedule_start = dtime(int(st[0]), int(st[1]))
-        q.schedule_end = dtime(int(en[0]), int(en[1]))
+        try:
+            q.schedule_start = dtime(int(st[0]), int(st[1]))
+            q.schedule_end = dtime(int(en[0]), int(en[1]))
+        except (ValueError, IndexError):
+            q.schedule_start = dtime(0, 0)
+            q.schedule_end = dtime(23, 59)
+
         q.days = d.get("days", [0, 1, 2, 3, 4, 5, 6])
         q.downloads = list(d.get("downloads", []))
         q.downloads_info = d.get("downloads_info", {})
@@ -93,6 +110,8 @@ class Queue:
         proxy_config = d.get("proxy_config")
         if proxy_config:
             try:
+                from core.proxy_manager import ProxyConfig
+
                 q.proxy_config = ProxyConfig.from_dict(proxy_config)
             except Exception as e:
                 print(f"⚠️ Error loading proxy config for queue {name}: {e}")
@@ -101,8 +120,7 @@ class Queue:
             q.proxy_config = None
         return q
 
-    def is_scheduled_now(self):
-        """Check if current time is within the scheduled window for this queue"""
+    def is_scheduled_now(self) -> bool:
         if not self.schedule_enabled:
             return True
         now = datetime.now()
@@ -116,28 +134,51 @@ class Queue:
         else:
             return t >= start or t <= end
 
+    def get_next_schedule_time(self):
+        if not self.schedule_enabled:
+            return None
+        from datetime import datetime, timedelta
+
+        now = datetime.now()
+        current_time = now.time()
+        current_day = now.weekday()
+        start_time = self.schedule_start
+
+        if current_day in self.days and start_time > current_time:
+            return datetime.combine(now.date(), start_time)
+
+        for i in range(1, 8):
+            next_day = (current_day + i) % 7
+            if next_day in self.days:
+                days_ahead = i
+                if next_day <= current_day:
+                    days_ahead = 7 - current_day + next_day
+                next_date = now.date() + timedelta(days=days_ahead)
+                return datetime.combine(next_date, start_time)
+        return None
+
 
 class DataStore:
     def __init__(self):
-        self.config_dir = Path(user_config_dir("felfelDM"))
+
+        config_dir = get_config_dir("felfelDM")
+        self.config_dir = Path(config_dir)
         self.config_dir.mkdir(parents=True, exist_ok=True)
 
         self.data_file = self.config_dir / "data.json"
-
         self.backup_dir = self.config_dir / "backups"
         self.backup_dir.mkdir(exist_ok=True)
 
-        self.queues = []
+        self.queues: List[Queue] = []
         self.settings = self._get_default_settings()
-        self.download_proxies = {}
-        
-        # ===== بخش جدید: ذخیره‌سازی دانلودهای یوتیوب =====
+        self.download_proxies: Dict[str, Any] = {}
+
         self.youtube_downloads_file = self.config_dir / "youtube_downloads.json"
-        self.youtube_downloads: Dict[str, dict] = {}  # download_id -> download_data
+        self.youtube_downloads: Dict[str, dict] = {}
 
         self.load()
 
-    def _get_default_settings(self):
+    def _get_default_settings(self) -> Dict:
         return {
             "aria2_host": "http://localhost",
             "aria2_port": 6800,
@@ -154,7 +195,6 @@ class DataStore:
         }
 
     def load(self):
-        # ===== بارگذاری داده‌های قبلی =====
         if not self.data_file.exists():
             print("📁 No config file found, using defaults")
             self.queues = [Queue("Default", paused=True)]
@@ -165,7 +205,14 @@ class DataStore:
             with open(self.data_file, "r", encoding="utf-8") as f:
                 data = json.load(f)
 
-            self.queues = [Queue.from_dict(q) for q in data.get("queues", [])]
+            self.queues = []
+            for q_data in data.get("queues", []):
+                if isinstance(q_data, dict):
+                    try:
+                        self.queues.append(Queue.from_dict(q_data))
+                    except Exception as e:
+                        print(f"⚠️ Error loading queue: {e}")
+
             self.settings.update(data.get("settings", {}))
             self.download_proxies = data.get("download_proxies", {})
 
@@ -173,7 +220,7 @@ class DataStore:
                 if key not in self.settings:
                     self.settings[key] = value
 
-        except json.JSONDecodeError as e:
+        except (json.JSONDecodeError, ValueError) as e:
             print(f"⚠️ Config file corrupted: {e}")
             self._backup_corrupted_file()
             self.queues = [Queue("Default", paused=True)]
@@ -187,23 +234,53 @@ class DataStore:
             self.queues = [Queue("Default", paused=True)]
             self.download_proxies = {}
 
-        try:
-            secret = keyring.get_password(KEYRING_SERVICE, KEYRING_KEY)
-            if secret:
-                self.settings["aria2_secret"] = secret
-        except:
-            pass
+        self._load_secret()
 
         if not self.queues:
             self.queues = [Queue("Default", paused=True)]
 
-        # ===== بارگذاری دانلودهای یوتیوب =====
         self._load_youtube_downloads()
 
+    def _load_secret(self):
+        """Load secret from keyring or fallback to file"""
+        if KEYRING_AVAILABLE:
+            try:
+                secret = keyring.get_password(KEYRING_SERVICE, KEYRING_KEY)
+                if secret:
+                    self.settings["aria2_secret"] = secret
+                    return
+            except Exception as e:
+                print(f"⚠️ Could not load secret from keyring: {e}")
+
+        secret_file = self.config_dir / "secret.txt"
+        if secret_file.exists():
+            try:
+                with open(secret_file, "r") as f:
+                    self.settings["aria2_secret"] = f.read().strip()
+            except:
+                pass
+
+    def _save_secret(self, secret: str):
+        """Save secret to keyring or fallback to file"""
+        if KEYRING_AVAILABLE and secret:
+            try:
+                keyring.set_password(KEYRING_SERVICE, KEYRING_KEY, secret)
+                return True
+            except Exception as e:
+                print(f"⚠️ Could not save secret to keyring: {e}")
+
+                try:
+                    secret_file = self.config_dir / "secret.txt"
+                    with open(secret_file, "w") as f:
+                        f.write(secret)
+                    os.chmod(secret_file, 0o600)
+                    return True
+                except:
+                    pass
+        return False
+
     def _load_youtube_downloads(self):
-        """بارگذاری دانلودهای یوتیوب از فایل جداگانه"""
         if not self.youtube_downloads_file.exists():
-            print("📁 No YouTube downloads file found")
             self.youtube_downloads = {}
             return
 
@@ -217,32 +294,26 @@ class DataStore:
             self.youtube_downloads = {}
 
     def _save_youtube_downloads(self):
-        """ذخیره دانلودهای یوتیوب در فایل جداگانه"""
         try:
             temp_file = self.youtube_downloads_file.with_suffix(".tmp")
-            
             with open(temp_file, "w", encoding="utf-8") as f:
                 json.dump(
                     {"downloads": self.youtube_downloads},
                     f,
                     indent=2,
-                    ensure_ascii=False
+                    ensure_ascii=False,
                 )
                 f.flush()
                 os.fsync(f.fileno())
-            
             os.replace(temp_file, self.youtube_downloads_file)
-            
         except Exception as e:
             print(f"⚠️ Error saving YouTube downloads: {e}")
 
     def _backup_corrupted_file(self):
         if not self.data_file.exists():
             return
-
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         backup_file = self.backup_dir / f"felfeldm_corrupted_{timestamp}.json"
-
         try:
             shutil.copy2(self.data_file, backup_file)
             print(f"📁 Corrupted file backed up to: {backup_file}")
@@ -252,24 +323,16 @@ class DataStore:
     def save(self):
         secret = self.settings.pop("aria2_secret", "")
         if secret:
-            try:
-                keyring.set_password(KEYRING_SERVICE, KEYRING_KEY, secret)
-            except:
-                pass
+            self._save_secret(secret)
 
         try:
             temp_file = self.data_file.with_suffix(".json.tmp")
-
             with open(temp_file, "w", encoding="utf-8") as f:
                 json.dump(
                     {
                         "queues": [q.to_dict() for q in self.queues],
                         "settings": self.settings,
-                        "download_proxies": (
-                            self.download_proxies
-                            if hasattr(self, "download_proxies")
-                            else {}
-                        ),
+                        "download_proxies": self.download_proxies,
                     },
                     f,
                     indent=2,
@@ -277,23 +340,17 @@ class DataStore:
                 )
                 f.flush()
                 os.fsync(f.fileno())
-
             os.replace(temp_file, self.data_file)
 
         except Exception as e:
             print(f"⚠️ Error saving data: {e}")
-
             try:
                 with open(self.data_file, "w", encoding="utf-8") as f:
                     json.dump(
                         {
                             "queues": [q.to_dict() for q in self.queues],
                             "settings": self.settings,
-                            "download_proxies": (
-                                self.download_proxies
-                                if hasattr(self, "download_proxies")
-                                else {}
-                            ),
+                            "download_proxies": self.download_proxies,
                         },
                         f,
                         indent=2,
@@ -302,142 +359,90 @@ class DataStore:
             except:
                 print("❌ Failed to save data!")
 
-        # Restore secret
         self.settings["aria2_secret"] = secret
-        
-        # ===== ذخیره دانلودهای یوتیوب =====
         self._save_youtube_downloads()
 
-    # ===== بخش جدید: متدهای مدیریت دانلود یوتیوب =====
-    
     def add_youtube_download(self, download_data: dict) -> str:
-        """
-        افزودن دانلود یوتیوب جدید
-        
-        Args:
-            download_data: {
-                'id': str,
-                'url': str,
-                'save_path': str,
-                'queue_id': Optional[str],
-                'yt_options': dict,
-                'proxy': Optional[str],
-                'status': str,
-                'progress': int,
-                'speed': str,
-                'eta': str,
-                'created_at': str,
-                'completed_at': Optional[str],
-                'error_message': str
-            }
-        Returns:
-            download_id: str
-        """
-        download_id = download_data.get('id')
+        download_id = download_data.get("id")
         if not download_id:
-            import uuid
             download_id = str(uuid.uuid4())
-            download_data['id'] = download_id
-        
+            download_data["id"] = download_id
         self.youtube_downloads[download_id] = download_data
         self._save_youtube_downloads()
         return download_id
-    
+
     def get_youtube_download(self, download_id: str) -> Optional[dict]:
-        """دریافت یک دانلود یوتیوب با شناسه"""
         return self.youtube_downloads.get(download_id)
-    
+
     def get_all_youtube_downloads(self) -> List[dict]:
-        """دریافت همه دانلودهای یوتیوب"""
         return list(self.youtube_downloads.values())
-    
+
     def get_youtube_downloads_by_status(self, status: str) -> List[dict]:
-        """دریافت دانلودهای یوتیوب با وضعیت مشخص"""
-        return [d for d in self.youtube_downloads.values() if d.get('status') == status]
-    
+        return [d for d in self.youtube_downloads.values() if d.get("status") == status]
+
     def get_youtube_downloads_by_queue(self, queue_id: str) -> List[dict]:
-        """دریافت دانلودهای یوتیوب در یک صف خاص"""
-        return [d for d in self.youtube_downloads.values() if d.get('queue_id') == queue_id]
-    
+        return [
+            d for d in self.youtube_downloads.values() if d.get("queue_id") == queue_id
+        ]
+
     def update_youtube_download(self, download_id: str, updates: dict) -> bool:
-        """
-        به‌روزرسانی یک دانلود یوتیوب
-        
-        Args:
-            download_id: شناسه دانلود
-            updates: دیکشنری شامل فیلدهایی که باید به‌روز شوند
-        Returns:
-            bool: موفقیت یا شکست
-        """
         if download_id not in self.youtube_downloads:
             return False
-        
         self.youtube_downloads[download_id].update(updates)
         self._save_youtube_downloads()
         return True
-    
+
     def update_youtube_status(self, download_id: str, status: str) -> bool:
-        """به‌روزرسانی وضعیت دانلود یوتیوب"""
-        return self.update_youtube_download(download_id, {'status': status})
-    
+        return self.update_youtube_download(download_id, {"status": status})
+
     def update_youtube_progress(self, download_id: str, progress: int) -> bool:
-        """به‌روزرسانی پیشرفت دانلود یوتیوب"""
-        return self.update_youtube_download(download_id, {'progress': progress})
-    
+        return self.update_youtube_download(download_id, {"progress": progress})
+
     def delete_youtube_download(self, download_id: str) -> bool:
-        """حذف یک دانلود یوتیوب"""
         if download_id not in self.youtube_downloads:
             return False
-        
         del self.youtube_downloads[download_id]
         self._save_youtube_downloads()
         return True
-    
+
     def clear_completed_youtube_downloads(self) -> int:
-        """حذف همه دانلودهای یوتیوب که کامل شده‌اند"""
         completed_ids = [
-            d_id for d_id, d in self.youtube_downloads.items()
-            if d.get('status') in ['completed', 'cancelled']
+            d_id
+            for d_id, d in self.youtube_downloads.items()
+            if d.get("status") in ["completed", "cancelled"]
         ]
-        
         for d_id in completed_ids:
             del self.youtube_downloads[d_id]
-        
         if completed_ids:
             self._save_youtube_downloads()
-        
         return len(completed_ids)
-    
+
     def get_youtube_downloads_count(self) -> int:
-        """تعداد کل دانلودهای یوتیوب"""
         return len(self.youtube_downloads)
-    
+
     def get_youtube_downloads_count_by_status(self, status: str) -> int:
-        """تعداد دانلودهای یوتیوب با وضعیت مشخص"""
         return len(self.get_youtube_downloads_by_status(status))
-    
+
     def get_youtube_downloads_info_for_display(self) -> List[dict]:
-        """
-        دریافت اطلاعات دانلودهای یوتیوب برای نمایش در جدول
-        هر آیتم شامل فیلدهای مورد نیاز برای نمایش است
-        """
         display_list = []
         for d_id, d in self.youtube_downloads.items():
-            display_list.append({
-                'id': d_id,
-                'url': d.get('url', ''),
-                'title': d.get('yt_options', {}).get('title', d.get('url', '')),
-                'status': d.get('status', 'pending'),
-                'progress': d.get('progress', 0),
-                'speed': d.get('speed', ''),
-                'eta': d.get('eta', ''),
-                'save_path': d.get('save_path', ''),
-                'queue_id': d.get('queue_id', ''),
-                'created_at': d.get('created_at', ''),
-                'completed_at': d.get('completed_at'),
-                'error_message': d.get('error_message', ''),
-                'quality': d.get('yt_options', {}).get('quality', 'best'),
-                'format': d.get('yt_options', {}).get('format', 'video'),
-                'download_type': 'youtube'
-            })
+            display_list.append(
+                {
+                    "id": d_id,
+                    "url": d.get("url", ""),
+                    "title": d.get("yt_options", {}).get("title", d.get("url", "")),
+                    "status": d.get("status", "pending"),
+                    "progress": d.get("progress", 0),
+                    "speed": d.get("speed", ""),
+                    "eta": d.get("eta", ""),
+                    "save_path": d.get("save_path", ""),
+                    "queue_id": d.get("queue_id", ""),
+                    "created_at": d.get("created_at", ""),
+                    "completed_at": d.get("completed_at"),
+                    "error_message": d.get("error_message", ""),
+                    "quality": d.get("yt_options", {}).get("quality", "best"),
+                    "format": d.get("yt_options", {}).get("format", "video"),
+                    "download_type": "youtube",
+                }
+            )
         return display_list
