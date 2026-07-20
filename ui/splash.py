@@ -73,64 +73,55 @@ class SplashScreen(QSplashScreen):
             Qt.WindowType.FramelessWindowHint | Qt.WindowType.WindowStaysOnTopHint
         )
 
-        self.setStyleSheet(
-            f"""
+        self.setStyleSheet(f"""
             QSplashScreen {{
                 background-color: {bg_style};
                 border-radius: 16px;
             }}
-        """
-        )
+        """)
 
         self.title = QLabel(self)
         self.title.setText("FelfelDM")
-        self.title.setStyleSheet(
-            f"""
+        self.title.setStyleSheet(f"""
             QLabel {{
                 color: {text_color};
                 font-size: 28px;
                 font-weight: bold;
                 background: transparent;
             }}
-        """
-        )
+        """)
         self.title.setGeometry(140, 115, 200, 40)
         self.title.setAlignment(Qt.AlignmentFlag.AlignCenter)
 
         self.subtitle = QLabel(self)
         self.subtitle.setText("Download Manager")
-        self.subtitle.setStyleSheet(
-            f"""
+        self.subtitle.setStyleSheet(f"""
             QLabel {{
                 color: {sub_color};
                 font-size: 13px;
                 background: transparent;
                 letter-spacing: 2px;
             }}
-        """
-        )
+        """)
         self.subtitle.setGeometry(140, 155, 200, 25)
         self.subtitle.setAlignment(Qt.AlignmentFlag.AlignCenter)
 
         self.status = QLabel(self)
         self.status.setText("Loading...")
-        self.status.setStyleSheet(
-            f"""
+        self.status.setStyleSheet(f"""
             QLabel {{
                 color: {accent_color};
                 font-size: 13px;
                 background: transparent;
                 font-weight: 500;
             }}
-        """
-        )
+        """)
         self.status.setGeometry(50, 200, 380, 25)
         self.status.setAlignment(Qt.AlignmentFlag.AlignCenter)
 
         self.progress = QProgressBar(self)
         self.progress.setGeometry(60, 235, 360, 3)
-        self.progress.setStyleSheet(
-            f"""
+        self.progress.setStyleSheet(f"""
             QProgressBar {{
                 border: none;
                 background-color: {'#3d4045' if is_dark else '#d0d0d5'};
@@ -141,8 +132,7 @@ class SplashScreen(QSplashScreen):
                 background-color: #3daee9;
                 border-radius: 2px;
             }}
-        """
-        )
+        """)
         self.progress.setRange(0, 100)
         self.progress.setValue(0)
         self.progress.setTextVisible(False)

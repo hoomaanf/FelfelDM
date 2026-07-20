@@ -79,7 +79,7 @@ class MainWindow(QMainWindow):
     def _init_ui(self) -> None:
         theme_setting: str = self.store.settings.get("theme", "auto")
         is_dark: bool = self._detect_theme(theme_setting)
-
+        
         self.splash = SplashScreen(is_dark=is_dark)
         self.splash.update_status("Loading FelfelDM...", 5)
         QApplication.processEvents()
@@ -183,31 +183,9 @@ class MainWindow(QMainWindow):
             return False
         if theme_setting == "dark":
             return True
-        try:
-            result = subprocess.run(
-                [
-                    "kreadconfig5",
-                    "--group",
-                    "Colors:Window",
-                    "--key",
-                    "BackgroundNormal",
-                ],
-                capture_output=True,
-                text=True,
-            )
-            if result.stdout:
-                color = result.stdout.strip()
-                if color.startswith("#"):
-                    r, g, b = (
-                        int(color[1:3], 16),
-                        int(color[3:5], 16),
-                        int(color[5:7], 16),
-                    )
-                    brightness = (r * 299 + g * 587 + b * 114) / 1000
-                    return brightness < 128
-        except Exception:
-            pass
-        return True
+        
+        from utils.style import detect_system_theme
+        return detect_system_theme()
 
     def _ensure_default_queue(self) -> None:
         if not self.store.queues:
