@@ -2,8 +2,8 @@
 
 import os
 from PyQt6.QtWidgets import QSplashScreen, QLabel, QProgressBar, QApplication
-from PyQt6.QtCore import Qt, QTimer, QRectF
-from PyQt6.QtGui import QPixmap, QColor, QPainter, QPainterPath, QBrush
+from PyQt6.QtCore import Qt, QTimer
+from PyQt6.QtGui import QPixmap, QColor, QPainter, QPainterPath
 
 
 class SplashScreen(QSplashScreen):
