@@ -19,21 +19,19 @@ class Aria2RPC:
         self._connected = False
         self._aria2_process = None
 
-        self._timeout = 10
-        self._retry_count = 3
-        self._retry_delay = 0.5
-        
-        # تنظیمات Session Management
+        self._timeout = 2
+        self._retry_count = 2
+        self._retry_delay = 0.2
+
         self.config_dir = config_dir or os.path.expanduser("~/.config/felfelDM")
         self.session_file = os.path.join(self.config_dir, "aria2.session")
         self._ensure_session_file()
 
     def _ensure_session_file(self):
-        """اطمینان از وجود فایل session"""
         try:
             os.makedirs(self.config_dir, exist_ok=True)
             if not os.path.exists(self.session_file):
-                open(self.session_file, 'w').close()
+                open(self.session_file, "w").close()
                 print(f"📁 Created session file: {self.session_file}")
         except Exception as e:
             print(f"⚠️ Could not create session file: {e}")
@@ -92,7 +90,7 @@ class Aria2RPC:
                 try:
                     error_body = e.read().decode("utf-8")
                 except:
-                    pass
+                    error_body = ""
 
                 if "GID" in error_body and "not found" in error_body:
                     return None
@@ -135,11 +133,9 @@ class Aria2RPC:
             return False
 
     def start_aria2(self, max_concurrent: int = 5, max_tries: int = 5) -> bool:
-        """Start aria2 daemon with session management"""
         try:
-            # اطمینان از وجود فایل session
             self._ensure_session_file()
-            
+
             cmd = [
                 "aria2c",
                 "--enable-rpc",
@@ -155,10 +151,11 @@ class Aria2RPC:
                 "--retry-wait=2",
                 f"--max-tries={max_tries}",
                 "--min-split-size=1M",
-                # تنظیمات Session Management
                 f"--save-session={self.session_file}",
                 f"--input-file={self.session_file}",
                 "--save-session-interval=60",
+                "--timeout=5",
+                "--connect-timeout=5",
             ]
 
             if self.secret:
@@ -168,7 +165,7 @@ class Aria2RPC:
             subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
             for _ in range(30):
-                time.sleep(0.5)
+                time.sleep(0.3)
                 if self.is_connected():
                     print(f"✅ aria2 started on port {self.port}")
                     return True
@@ -221,7 +218,7 @@ class Aria2RPC:
 
         if options is None:
             options = {}
-        
+
         pause_after_add = options.pop("pause", False)
 
         options = {k: v for k, v in options.items() if v is not None and v != ""}
@@ -229,7 +226,7 @@ class Aria2RPC:
         params = [[url], options]
 
         result = self._call("aria2.addUri", params)
-        
+
         if result and pause_after_add:
             self.pause(result)
         return result
@@ -372,26 +369,48 @@ class Aria2RPC:
         return result is not None
 
     def save_session(self) -> bool:
-        """ذخیره دستی وضعیت دانلودها در فایل session"""
         result = self._call("aria2.saveSession")
         return result is not None
 
     def shutdown(self) -> bool:
-        """خاموش کردن aria2 با ذخیره session"""
-        # ابتدا session رو ذخیره کن
-        self.save_session()
-        result = self._call("aria2.shutdown")
-        if result is not None:
-            self._connected = False
-            return True
-        return False
+        try:
+
+            self.save_session()
+            time.sleep(0.5)
+
+            result = self._call("aria2.shutdown")
+
+            if result is not None:
+                self._connected = False
+                print("✅ aria2 shutdown successful")
+                return True
+            else:
+
+                print("⚠️ aria2 shutdown returned None, trying force_shutdown...")
+                return self.force_shutdown()
+
+        except Exception as e:
+            print(f"⚠️ Error during aria2 shutdown: {e}")
+            try:
+
+                subprocess.run(["pkill", "-f", "aria2c"], capture_output=True)
+                print("✅ aria2 killed via pkill")
+                return True
+            except Exception as e2:
+                print(f"❌ Could not kill aria2: {e2}")
+                return False
 
     def force_shutdown(self) -> bool:
-        result = self._call("aria2.forceShutdown")
-        if result is not None:
-            self._connected = False
-            return True
-        return False
+        try:
+            result = self._call("aria2.forceShutdown")
+            if result is not None:
+                self._connected = False
+                print("✅ aria2 force shutdown successful")
+                return True
+            return False
+        except Exception as e:
+            print(f"⚠️ Error during force shutdown: {e}")
+            return False
 
     def get_files(self, gid: str) -> Optional[List[Dict]]:
         if not gid:
@@ -472,49 +491,47 @@ class Aria2RPC:
         if not status:
             return None
         return int(status.get("downloadSpeed", 0))
-    
+
     def get_download_info_from_file(self, gid: str) -> Optional[Dict]:
-        """Get download info from local .aria2 file if available"""
         try:
             status = self.get_status(gid)
             if not status:
                 return None
-            
+
             files = status.get("files", [])
             if not files:
                 return None
-                
+
             for file_info in files:
                 path = file_info.get("path", "")
                 aria2_file = path + ".aria2"
                 if path and os.path.exists(aria2_file):
                     try:
-                        with open(aria2_file, 'rb') as f:
-                            # ساختار فایل .aria2:
-                            # offset 0-3: "A2" + version (4 bytes)
-                            # offset 4-7: version (4 bytes)
-                            # offset 8-15: totalLength (8 bytes)
-                            # offset 16-23: completedLength (8 bytes)
+                        with open(aria2_file, "rb") as f:
                             f.seek(8)
                             total_bytes = f.read(8)
                             completed_bytes = f.read(8)
-                            
+
                             total_length = 0
                             completed_length = 0
-                            
+
                             if len(total_bytes) == 8:
-                                total_length = int.from_bytes(total_bytes, byteorder='little', signed=False)
+                                total_length = int.from_bytes(
+                                    total_bytes, byteorder="little", signed=False
+                                )
                             if len(completed_bytes) == 8:
-                                completed_length = int.from_bytes(completed_bytes, byteorder='little', signed=False)
-                            
+                                completed_length = int.from_bytes(
+                                    completed_bytes, byteorder="little", signed=False
+                                )
+
                             if total_length > 0:
                                 return {
                                     "totalLength": total_length,
-                                    "completedLength": completed_length
+                                    "completedLength": completed_length,
                                 }
                     except Exception as e:
                         print(f"⚠️ Could not read .aria2 file: {e}")
-            
+
             return None
         except Exception as e:
             print(f"⚠️ Error getting download info from file: {e}")

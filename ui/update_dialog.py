@@ -12,7 +12,6 @@ from utils.helpers import get_icon
 
 
 class UpdateDialog(QDialog):
-    """دیالوگ آپدیت ساده با قابلیت Cancel"""
     
     update_finished = pyqtSignal(bool, str)
     
@@ -150,7 +149,6 @@ echo "100% - Done!"
                     pass
     
     def _kill_process(self):
-        """کشتن پروسه - خطا رو نادیده میگیره"""
         try:
             if self._process:
                 self._process.kill()
@@ -239,7 +237,6 @@ echo "100% - Done!"
             self.close()
     
     def _on_cancel_clicked(self):
-        """کنسل کردن آپدیت"""
         if self._is_updating:
             reply = QMessageBox.question(
                 self,

@@ -54,7 +54,6 @@ class YouTubeWorker(QThread):
         return self._is_running or self.isRunning()
 
     def fetch_size(self):
-        """دریافت حجم فایل با yt-dlp (بدون دانلود)"""
         if self.is_fetching_size:
             return
 
@@ -62,7 +61,6 @@ class YouTubeWorker(QThread):
         self.start()
 
     def _fetch_size(self):
-        """دریافت حجم فایل با استفاده از yt-dlp --dump-json"""
         try:
             self.status.emit("Getting file size...")
 

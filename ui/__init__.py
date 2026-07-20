@@ -5,7 +5,7 @@ from .dialogs import (
     AddDownloadDialog,
     SingleDownloadDialog,
     QueueSettingsDialog,
-    SettingsDialog,
+    SettingsDialog
 )
 from .table_model import DownloadTableModel
 from .delegates import ProgressDelegate

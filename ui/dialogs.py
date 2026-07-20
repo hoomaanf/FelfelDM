@@ -1,5 +1,3 @@
-# ui/dialogs.py
-
 import os
 import subprocess
 import time
@@ -15,7 +13,6 @@ from core.proxy_manager import ProxyType, ProxyConfig
 
 
 class AccordionGroup(QWidget):
-    """اکاردئون واقعی با فلش بالا/پایین"""
 
     def __init__(self, title, parent=None, expanded=True):
         super().__init__(parent)
@@ -93,11 +90,6 @@ class AccordionGroup(QWidget):
         return self.content_layout
 
 
-# ============================================================
-# AddDownloadDialog
-# ============================================================
-
-
 class AddDownloadDialog(QDialog):
     def __init__(self, queues, default_queue=0, parent=None):
         super().__init__(parent)
@@ -113,7 +105,6 @@ class AddDownloadDialog(QDialog):
         main_layout.setSpacing(8)
         main_layout.setContentsMargins(16, 12, 16, 16)
 
-        # ===== URLs =====
         url_acc = AccordionGroup("URLs")
         url_acc.set_expanded(True)
 
@@ -128,7 +119,6 @@ class AddDownloadDialog(QDialog):
 
         main_layout.addWidget(url_acc)
 
-        # ===== Settings =====
         settings_acc = AccordionGroup("Settings")
         settings_acc.set_expanded(True)
 
@@ -179,7 +169,6 @@ class AddDownloadDialog(QDialog):
 
         main_layout.addWidget(settings_acc)
 
-        # ===== Proxy =====
         proxy_acc = AccordionGroup("Proxy Settings")
         proxy_acc.set_expanded(False)
 
@@ -213,7 +202,6 @@ class AddDownloadDialog(QDialog):
 
         main_layout.addWidget(proxy_acc)
 
-        # ===== Info & Buttons =====
         self.info_label = QLabel("Downloads will be added in Paused state")
         self.info_label.setStyleSheet("color: #95a5a6; font-size: 11px; padding: 4px;")
         main_layout.addWidget(self.info_label)
@@ -321,11 +309,6 @@ class AddDownloadDialog(QDialog):
         }
 
 
-# ============================================================
-# QuickDownloadDialog
-# ============================================================
-
-
 class QuickDownloadDialog(QDialog):
     def __init__(self, queues, parent=None):
         super().__init__(parent)
@@ -340,7 +323,6 @@ class QuickDownloadDialog(QDialog):
         main_layout.setSpacing(8)
         main_layout.setContentsMargins(16, 12, 16, 16)
 
-        # ===== URLs =====
         url_acc = AccordionGroup("URLs")
         url_acc.set_expanded(True)
 
@@ -351,7 +333,6 @@ class QuickDownloadDialog(QDialog):
 
         main_layout.addWidget(url_acc)
 
-        # ===== Settings =====
         settings_acc = AccordionGroup("Settings")
         settings_acc.set_expanded(True)
 
@@ -399,11 +380,8 @@ class QuickDownloadDialog(QDialog):
         row2.addWidget(self.browse_btn)
         settings_acc.addLayout(row2)
 
-        # ===== حذف چک‌باکس Start Immediately =====
-
         main_layout.addWidget(settings_acc)
 
-        # ===== Proxy =====
         proxy_acc = AccordionGroup("Proxy Settings")
         proxy_acc.set_expanded(False)
 
@@ -435,7 +413,6 @@ class QuickDownloadDialog(QDialog):
 
         main_layout.addWidget(proxy_acc)
 
-        # ===== Buttons =====
         self.btn_box = QDialogButtonBox(
             QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
         )
@@ -513,11 +490,6 @@ class QuickDownloadDialog(QDialog):
         }
 
 
-# ============================================================
-# SingleDownloadDialog
-# ============================================================
-
-
 class SingleDownloadDialog(QDialog):
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -531,7 +503,6 @@ class SingleDownloadDialog(QDialog):
         main_layout.setSpacing(8)
         main_layout.setContentsMargins(16, 12, 16, 16)
 
-        # ===== URL =====
         url_acc = AccordionGroup("URL")
         url_acc.set_expanded(True)
 
@@ -541,7 +512,6 @@ class SingleDownloadDialog(QDialog):
 
         main_layout.addWidget(url_acc)
 
-        # ===== Settings =====
         settings_acc = AccordionGroup("Settings")
         settings_acc.set_expanded(True)
 
@@ -581,7 +551,6 @@ class SingleDownloadDialog(QDialog):
 
         main_layout.addWidget(settings_acc)
 
-        # ===== Proxy =====
         proxy_acc = AccordionGroup("Proxy Settings")
         proxy_acc.set_expanded(False)
 
@@ -615,7 +584,6 @@ class SingleDownloadDialog(QDialog):
 
         main_layout.addWidget(proxy_acc)
 
-        # ===== Buttons =====
         self.btn_box = QDialogButtonBox(
             QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
         )
@@ -688,11 +656,6 @@ class SingleDownloadDialog(QDialog):
         }
 
 
-# ============================================================
-# YouTubeDownloadDialog
-# ============================================================
-
-
 class YouTubeDownloadDialog(QDialog):
     youtube_download_requested = pyqtSignal(dict)
 
@@ -713,7 +676,6 @@ class YouTubeDownloadDialog(QDialog):
         main_layout.setSpacing(8)
         main_layout.setContentsMargins(16, 12, 16, 16)
 
-        # ===== Video =====
         video_acc = AccordionGroup("Video")
         video_acc.set_expanded(True)
 
@@ -741,7 +703,6 @@ class YouTubeDownloadDialog(QDialog):
 
         main_layout.addWidget(video_acc)
 
-        # ===== Options =====
         opts_acc = AccordionGroup("Options")
         opts_acc.set_expanded(True)
 
@@ -782,7 +743,6 @@ class YouTubeDownloadDialog(QDialog):
 
         main_layout.addWidget(opts_acc)
 
-        # ===== Proxy =====
         proxy_acc = AccordionGroup("Proxy Settings")
         proxy_acc.set_expanded(False)
 
@@ -814,7 +774,6 @@ class YouTubeDownloadDialog(QDialog):
 
         main_layout.addWidget(proxy_acc)
 
-        # ===== Buttons =====
         self.btn_box = QDialogButtonBox()
         self.download_btn = self.btn_box.addButton(
             "Add to Queue", QDialogButtonBox.ButtonRole.AcceptRole
@@ -1109,11 +1068,6 @@ class YouTubeDownloadDialog(QDialog):
         }
 
 
-# ============================================================
-# QueueSettingsDialog (تب‌بندی)
-# ============================================================
-
-
 class QueueSettingsDialog(QDialog):
     def __init__(self, queue: Queue, parent=None):
         super().__init__(parent)
@@ -1130,7 +1084,6 @@ class QueueSettingsDialog(QDialog):
 
         tabs = QTabWidget()
 
-        # ---- General ----
         general_tab = QWidget()
         general_layout = QFormLayout(general_tab)
         general_layout.setSpacing(10)
@@ -1157,7 +1110,6 @@ class QueueSettingsDialog(QDialog):
 
         tabs.addTab(general_tab, get_icon("configure"), "General")
 
-        # ---- Schedule ----
         sched_tab = QWidget()
         sched_layout = QVBoxLayout(sched_tab)
         sched_layout.setSpacing(10)
@@ -1200,7 +1152,6 @@ class QueueSettingsDialog(QDialog):
         sched_layout.addStretch()
         tabs.addTab(sched_tab, get_icon("alarm-clock"), "Schedule")
 
-        # ---- Speed ----
         speed_tab = QWidget()
         speed_layout = QVBoxLayout(speed_tab)
         speed_layout.setSpacing(10)
@@ -1233,7 +1184,6 @@ class QueueSettingsDialog(QDialog):
         speed_layout.addStretch()
         tabs.addTab(speed_tab, get_icon("preferences-system-speed"), "Speed")
 
-        # ---- Proxy ----
         proxy_tab = QWidget()
         proxy_layout = QVBoxLayout(proxy_tab)
         proxy_layout.setSpacing(10)
@@ -1339,11 +1289,6 @@ class QueueSettingsDialog(QDialog):
         return data
 
 
-# ============================================================
-# SettingsDialog (تب‌بندی)
-# ============================================================
-
-
 class SettingsDialog(QDialog):
     def __init__(self, settings, parent=None):
         super().__init__(parent)
@@ -1359,7 +1304,6 @@ class SettingsDialog(QDialog):
 
         tabs = QTabWidget()
 
-        # ---- General ----
         general_tab = QWidget()
         general_layout = QVBoxLayout(general_tab)
         general_layout.setSpacing(10)
@@ -1403,10 +1347,17 @@ class SettingsDialog(QDialog):
         self.conns.setRange(1, 16)
         self.conns.setValue(settings.get("connections", 8))
 
+        self.retry_delay = QDoubleSpinBox()
+        self.retry_delay.setRange(0.5, 10.0)
+        self.retry_delay.setSingleStep(0.5)
+        self.retry_delay.setValue(settings.get("retry_delay", 1.0))
+        self.retry_delay.setSuffix(" seconds")
+
         dl_layout.addRow("Max Concurrent:", self.max_concurrent)
         dl_layout.addRow("Max Retry Attempts:", self.max_retries)
         dl_layout.addRow("Max Tries (aria2):", self.max_tries)
         dl_layout.addRow("Default Connections:", self.conns)
+        dl_layout.addRow("Retry Delay:", self.retry_delay)
         general_layout.addWidget(dl_group)
 
         cleanup_group = QGroupBox("Cleanup")
@@ -1421,7 +1372,6 @@ class SettingsDialog(QDialog):
         general_layout.addStretch()
         tabs.addTab(general_tab, get_icon("configure"), "General")
 
-        # ---- Appearance ----
         appearance_tab = QWidget()
         appearance_layout = QVBoxLayout(appearance_tab)
         appearance_layout.setSpacing(10)
@@ -1443,7 +1393,6 @@ class SettingsDialog(QDialog):
         appearance_layout.addStretch()
         tabs.addTab(appearance_tab, get_icon("preferences-desktop-theme"), "Appearance")
 
-        # ---- Speed ----
         speed_tab = QWidget()
         speed_layout = QVBoxLayout(speed_tab)
         speed_layout.setSpacing(10)
@@ -1480,7 +1429,6 @@ class SettingsDialog(QDialog):
         speed_layout.addStretch()
         tabs.addTab(speed_tab, get_icon("preferences-system-speed"), "Speed")
 
-        # ---- Proxy ----
         proxy_tab = QWidget()
         proxy_layout = QVBoxLayout(proxy_tab)
         proxy_layout.setSpacing(10)
@@ -1510,7 +1458,31 @@ class SettingsDialog(QDialog):
         proxy_layout.addStretch()
         tabs.addTab(proxy_tab, get_icon("network-vpn"), "Proxy")
 
-        # ---- Service ----
+        startup_tab = QWidget()
+        startup_layout = QVBoxLayout(startup_tab)
+        startup_layout.setSpacing(10)
+        startup_layout.setContentsMargins(12, 12, 12, 12)
+
+        startup_group = QGroupBox("Startup Settings")
+        startup_group_layout = QVBoxLayout(startup_group)
+
+        self.run_on_startup = QCheckBox("Run FelfelDM on system startup")
+        self.run_on_startup.setChecked(settings.get("run_on_startup", False))
+        self.run_on_startup.toggled.connect(self._on_startup_toggled)
+        startup_group_layout.addWidget(self.run_on_startup)
+
+        self.start_minimized = QCheckBox("Start minimized to system tray")
+        self.start_minimized.setChecked(settings.get("start_minimized", False))
+        startup_group_layout.addWidget(self.start_minimized)
+
+        self.startup_status = QLabel("")
+        self.startup_status.setStyleSheet("color: #95a5a6; font-size: 11px;")
+        startup_group_layout.addWidget(self.startup_status)
+
+        startup_layout.addWidget(startup_group)
+        startup_layout.addStretch()
+        tabs.addTab(startup_tab, get_icon("applications-system"), "Startup")
+
         service_tab = QWidget()
         service_layout = QVBoxLayout(service_tab)
         service_layout.setSpacing(10)
@@ -1810,12 +1782,66 @@ WantedBy=default.target
             "theme": self.theme_combo.currentText().lower(),
             "run_as_service": self.run_as_service.isChecked(),
             "speed_limit": speed_limit,
+            "retry_delay": self.retry_delay.value(),
+            "run_on_startup": self.run_on_startup.isChecked(),
+            "start_minimized": self.start_minimized.isChecked(),
         }
 
+    def _on_startup_toggled(self, checked: bool):
+        if checked:
+            self._add_to_startup()
+        else:
+            self._remove_from_startup()
 
-# ============================================================
-# DownloadProgressDialog
-# ============================================================
+        if checked:
+            self.startup_status.setText("✓ Added to startup")
+            self.startup_status.setStyleSheet("color: #27ae60; font-size: 11px;")
+        else:
+            self.startup_status.setText("Removed from startup")
+            self.startup_status.setStyleSheet("color: #95a5a6; font-size: 11px;")
+
+    def _add_to_startup(self):
+        try:
+            app_path = os.path.abspath("main.py")
+            desktop_file = os.path.expanduser("~/.config/autostart/felfeldm.desktop")
+
+            os.makedirs(os.path.dirname(desktop_file), exist_ok=True)
+
+            icon_path = os.path.abspath("logo/icon512.png")
+            if not os.path.exists(icon_path):
+                icon_path = "/usr/share/icons/hicolor/512x512/apps/felfeldm.png"
+
+            content = f"""[Desktop Entry]
+    Type=Application
+    Name=FelfelDM
+    Comment=Download Manager
+    Exec=python3 {app_path}
+    Icon={icon_path}
+    Terminal=false
+    Hidden=false
+    X-GNOME-Autostart-enabled=true
+    """
+            with open(desktop_file, "w") as f:
+                f.write(content)
+
+            print(f"✅ Added to startup: {desktop_file}")
+
+        except Exception as e:
+            print(f"⚠️ Could not add to startup: {e}")
+            self.startup_status.setText(f"Failed: {e}")
+            self.startup_status.setStyleSheet("color: #e74c3c; font-size: 11px;")
+            self.run_on_startup.setChecked(False)
+
+    def _remove_from_startup(self):
+        try:
+            desktop_file = os.path.expanduser("~/.config/autostart/felfeldm.desktop")
+            if os.path.exists(desktop_file):
+                os.remove(desktop_file)
+                print(f"✅ Removed from startup: {desktop_file}")
+        except Exception as e:
+            print(f"⚠️ Could not remove from startup: {e}")
+
+
 class DownloadProgressDialog(QDialog):
     pause_requested = pyqtSignal(str)
     resume_requested = pyqtSignal(str)
@@ -1844,20 +1870,17 @@ class DownloadProgressDialog(QDialog):
         main_layout.setSpacing(4)
         main_layout.setContentsMargins(20, 16, 20, 20)
 
-        # Title
         self.name_lbl = QLabel(dl_data.get("name", "Unknown"))
         self.name_lbl.setWordWrap(True)
         self.name_lbl.setStyleSheet("font-weight: bold; font-size: 14px;")
         main_layout.addWidget(self.name_lbl)
 
-        # Progress
         self.progress_bar = QProgressBar()
         self.progress_bar.setMinimum(0)
         self.progress_bar.setMaximum(100)
         self.progress_bar.setTextVisible(True)
         main_layout.addWidget(self.progress_bar)
 
-        # Info Grid با آیکون Papirus
         info_group = QGroupBox("Details")
         info_group.setStyleSheet("QGroupBox { font-weight: 600; }")
         info_layout = QGridLayout(info_group)
@@ -1889,10 +1912,8 @@ class DownloadProgressDialog(QDialog):
 
         main_layout.addWidget(info_group)
 
-        # ===== Spacer برای فاصله بیشتر بین Info و دکمه‌ها =====
-        main_layout.addSpacing(8)  # فاصله اضافه
+        main_layout.addSpacing(8)
 
-        # Buttons
         btn_row = QHBoxLayout()
         btn_row.setSpacing(10)
 
@@ -2072,11 +2093,6 @@ class DownloadProgressDialog(QDialog):
             self.cancel_btn.setEnabled(False)
 
 
-# ============================================================
-# ProxyDialog
-# ============================================================
-
-
 class ProxyDialog(QDialog):
     def __init__(
         self, proxy_config: ProxyConfig = None, parent=None, title="Proxy Settings"
@@ -2209,9 +2225,6 @@ class ProxyDialog(QDialog):
         )
 
 
-# ============================================================
-# ShutdownCountdownDialog
-# ============================================================
 class ShutdownCountdownDialog(QDialog):
     def __init__(self, parent=None):
         super().__init__(parent)

@@ -173,7 +173,16 @@ def get_category_from_extension(ext: str) -> str:
         ],
         "📚 Ebook": ["epub", "mobi", "azw", "azw3", "fb2", "lit", "lrf", "pdf"],
         "🔤 Font": ["ttf", "otf", "woff", "woff2", "eot", "pfb", "pfm", "fnt"],
-        "🗄️ Database": ["db", "sqlite", "sqlite3", "mdb", "accdb", "sql", "dump", "bak"],
+        "🗄️ Database": [
+            "db",
+            "sqlite",
+            "sqlite3",
+            "mdb",
+            "accdb",
+            "sql",
+            "dump",
+            "bak",
+        ],
         "💿 Disk": ["iso", "img", "dmg", "vhd", "vmdk", "qcow2", "raw"],
         "🧲 Torrent": ["torrent"],
         "📝 Subtitle": ["srt", "ass", "ssa", "sub", "vtt", "sbv"],
@@ -188,13 +197,11 @@ def get_category_from_extension(ext: str) -> str:
 
 
 def get_category_from_filename(filename: str) -> str:
-    """دریافت کتگوری از نام فایل"""
     ext = get_file_extension(filename)
     return get_category_from_extension(ext)
 
 
 def get_category_icon(category: str) -> str:
-    """دریافت آیکون (اموجی) برای کتگوری"""
     icons = {
         "🎬 Video": "🎬",
         "🎵 Audio": "🎵",
@@ -215,7 +222,6 @@ def get_category_icon(category: str) -> str:
 
 
 def get_category(filename):
-    """نسخه قدیمی - برای سازگاری با کدهای قبلی"""
     ext = get_file_extension(filename)
     return get_category_from_extension(ext)
 

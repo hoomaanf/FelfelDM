@@ -136,7 +136,6 @@ class YouTubeProgressDialog(QDialog):
                 self.action_btn.setText(" Start")
 
     def _build_ui(self):
-        """ساخت UI"""
         layout = QVBoxLayout(self)
         layout.setSpacing(12)
 
@@ -291,7 +290,6 @@ class YouTubeProgressDialog(QDialog):
         layout.addLayout(btn_layout)
 
     def _create_worker(self):
-        """ساخت worker برای دانلود جدید"""
         self._worker = YouTubeWorker(
             url=self.url,
             output_path=self.output_path,
@@ -308,7 +306,6 @@ class YouTubeProgressDialog(QDialog):
         self._worker.start()
 
     def update_progress(self, progress: int, speed: str = "", eta: str = ""):
-        """به‌روزرسانی پیشرفت از خارج"""
         self._progress_value = progress
         self._speed_text = speed
         self._eta_text = eta
@@ -324,7 +321,6 @@ class YouTubeProgressDialog(QDialog):
             self.speed_eta_label.setText(f"ETA: {eta}")
 
     def update_status(self, status: str):
-        """به‌روزرسانی وضعیت از خارج"""
         self._status_text = status
         self.status_label.setText(status)
 
@@ -338,7 +334,6 @@ class YouTubeProgressDialog(QDialog):
             self.status_label.setStyleSheet("color: #e74c3c;")
 
     def update_finished(self, success: bool, message: str):
-        """به‌روزرسانی پایان دانلود از خارج"""
         print(
             f"📢 [Dialog] update_finished called: success={success}, message={message}"
         )
@@ -399,7 +394,6 @@ class YouTubeProgressDialog(QDialog):
             self.cancel_btn.clicked.connect(self.reject)
 
     def get_worker(self):
-        """دریافت worker (برای اتصال سیگنال از خارج)"""
         return self._worker
 
     def _on_progress(self, value):
@@ -426,7 +420,6 @@ class YouTubeProgressDialog(QDialog):
             self.speed_eta_label.setText("")
 
     def _on_paused(self):
-        """Handle pause"""
         self._is_paused = True
         self.action_btn.setIcon(get_icon("media-playback-start"))
         self.action_btn.setText(" Resume")
@@ -435,7 +428,6 @@ class YouTubeProgressDialog(QDialog):
         print(f"⏸️ [Dialog] Paused state updated")
 
     def _on_resumed(self):
-        """Handle resume"""
         self._is_paused = False
         self.action_btn.setIcon(get_icon("media-playback-pause"))
         self.action_btn.setText(" Pause")
@@ -444,7 +436,6 @@ class YouTubeProgressDialog(QDialog):
         print(f"▶️ [Dialog] Resumed state updated")
 
     def update_pause_state(self, is_paused: bool):
-        """به‌روزرسانی وضعیت Pause از خارج"""
         print(f"🔄 [Dialog] update_pause_state called: is_paused={is_paused}")
         if is_paused:
             self._on_paused()
@@ -452,7 +443,6 @@ class YouTubeProgressDialog(QDialog):
             self._on_resumed()
 
     def _on_action_clicked(self):
-        """دکمه اکشن (Pause/Resume/Open Folder)"""
         if self._is_complete:
             self._open_folder()
             return
@@ -492,7 +482,6 @@ class YouTubeProgressDialog(QDialog):
                 self._worker.resume()
 
     def _on_cancel_clicked(self):
-        """دکمه Cancel/Close"""
         if self._is_complete:
             self.accept()
             return
@@ -529,7 +518,6 @@ class YouTubeProgressDialog(QDialog):
                 QTimer.singleShot(500, self.reject)
 
     def _on_finished(self, success, message):
-        """پایان دانلود"""
         self.progress_bar.setValue(100 if success else 0)
 
         if success:
@@ -577,14 +565,12 @@ class YouTubeProgressDialog(QDialog):
             self.cancel_btn.clicked.connect(self.reject)
 
     def set_action_button_enabled(self, enabled: bool):
-        """فعال/غیرفعال کردن دکمه اکشن"""
         self.action_btn.setEnabled(enabled)
         if not enabled:
             self.action_btn.setIcon(get_icon("media-playback-start"))
             self.action_btn.setText(" Start")
 
     def _open_folder(self):
-        """باز کردن پوشه"""
         if self._file_path and os.path.exists(self._file_path):
             folder = os.path.dirname(self._file_path)
             QDesktopServices.openUrl(QUrl.fromLocalFile(folder))
@@ -595,7 +581,6 @@ class YouTubeProgressDialog(QDialog):
                 QMessageBox.warning(self, "Folder Not Found", "Folder not found.")
 
     def closeEvent(self, event):
-        """بستن دیالوگ"""
         if (
             hasattr(self, "_worker")
             and self._worker

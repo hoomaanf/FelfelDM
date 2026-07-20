@@ -75,7 +75,6 @@ class YouTubeDownloader:
             return False, f"Download failed: {e.stderr}", None
 
     def _find_downloaded_file(self, output_path: str, url: str) -> str:
-        """فایل دانلود شده رو پیدا کن"""
         try:
             files = os.listdir(output_path)
             for file in files:

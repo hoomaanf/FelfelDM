@@ -35,7 +35,6 @@ class ProxyConfig:
         return f"Proxy({self.type.value}://{self.host}:{self.port})"
 
     def to_aria2_args(self) -> list:
-        """تبدیل به پارامترهای aria2"""
         if not self.enabled or not self.host:
             return []
 
@@ -46,7 +45,6 @@ class ProxyConfig:
         return ["--all-proxy", proxy_url]
 
     def _build_proxy_url(self) -> str:
-        """ساخت URL پروکسی برای aria2"""
         auth = ""
         if self.username and self.password:
             auth = f"{self.username}:{self.password}@"
@@ -77,7 +75,6 @@ class ProxyConfig:
         )
 
     def is_valid(self) -> bool:
-        """بررسی معتبر بودن پروکسی"""
         if not self.host:
             return False
         if not 1 <= self.port <= 65535:
@@ -89,7 +86,6 @@ class ProxyConfig:
         return True
 
     def get_display_string(self) -> str:
-        """نمایش پروکسی به صورت رشته"""
         if not self.enabled:
             return "Disabled"
         if not self.host:
@@ -162,7 +158,6 @@ class ProxyManager:
         return None
 
     def get_aria2_proxy_args(self, queue_name: str = None) -> list:
-        """دریافت آرگومان‌های پروکسی برای aria2"""
         if queue_name:
             proxy = self.get_proxy_for_queue(queue_name)
             if proxy:
@@ -183,7 +178,6 @@ class ProxyManager:
         self._apply_proxy_to_aria2()
 
     def _apply_proxy_to_aria2(self):
-        """اعمال پروکسی به aria2 از طریق RPC"""
         try:
             from core.aria2_rpc import Aria2RPC
 
@@ -192,17 +186,14 @@ class ProxyManager:
             pass
 
     def get_queue_proxy(self, queue_name: str) -> Optional[ProxyConfig]:
-        """دریافت پروکسی تنظیم شده برای صف (بدون fallback)"""
         return self.queue_proxies.get(queue_name)
 
     def remove_queue_proxy(self, queue_name: str):
-        """حذف پروکسی مخصوص صف"""
         if queue_name in self.queue_proxies:
             del self.queue_proxies[queue_name]
             self.save_proxies()
 
     def get_proxy_for_download(self, download_id: str) -> Optional[ProxyConfig]:
-        """دریافت پروکسی مخصوص یک دانلود خاص"""
         if hasattr(self.data_store, "download_proxies"):
             download_proxies = self.data_store.download_proxies
             if download_id in download_proxies:
@@ -212,7 +203,6 @@ class ProxyManager:
         return None
 
     def set_download_proxy(self, download_id: str, config: Optional[ProxyConfig]):
-        """تنظیم پروکسی برای یک دانلود خاص"""
         if not hasattr(self.data_store, "download_proxies"):
             self.data_store.download_proxies = {}
 
