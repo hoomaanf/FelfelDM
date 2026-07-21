@@ -16,14 +16,16 @@ class YouTubeDownloader:
 
         path = shutil.which("yt-dlp")
         if path:
+            print(f"✅ Found yt-dlp at: {path}")
             return path
-        try:
-            import yt_dlp
 
-            return "yt-dlp"
-        except ImportError:
-            pass
-        raise FileNotFoundError("yt-dlp not found. Please install: pip install yt-dlp")
+        raise FileNotFoundError(
+            "❌ yt-dlp not found in system!\n"
+            "Please install it using your package manager:\n"
+            "  Arch:   sudo pacman -S yt-dlp\n"
+            "  Ubuntu: sudo apt install yt-dlp\n"
+            "  Fedora: sudo dnf install yt-dlp"
+        )
 
     def get_video_info(self, url: str) -> Dict:
         cmd = [self.ytdlp_path, "--skip-download", "--dump-json", url]
@@ -38,13 +40,13 @@ class YouTubeDownloader:
 
     def download(
         self, url: str, output_path: str, format_type: str = "mp4", gid: str = None
-    ) -> Tuple[bool, str, str]: 
+    ) -> Tuple[bool, str, str]:
         cmd = [
             self.ytdlp_path,
             "-o",
             os.path.join(output_path, "%(title)s.%(ext)s"),
             "--no-playlist",
-            "--restrict-filenames", 
+            "--restrict-filenames",
             url,
         ]
 

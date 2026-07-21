@@ -109,7 +109,10 @@ class AddDownloadDialog(QDialog):
         url_acc.set_expanded(True)
 
         self.url_edit = QTextEdit()
-        self.url_edit.setPlaceholderText("Enter URLs (one per line)...")
+        self.url_edit.setPlaceholderText(
+            "Enter URLs (one per line)\n"
+            "Supported: http://, https://, ftp://, magnet:, file://*.torrent"
+        )
         self.url_edit.setMinimumHeight(100)
         url_acc.addWidget(self.url_edit)
 
@@ -235,19 +238,23 @@ class AddDownloadDialog(QDialog):
 
     def _import_from_txt(self):
         file_path, _ = QFileDialog.getOpenFileName(
-            self, "Open Links File", "", "Text Files (*.txt);;All Files (*)"
+            self, "Open File", "", 
+            "Supported Files (*.txt *.torrent);;Text Files (*.txt);;Torrent Files (*.torrent);;All Files (*)"
         )
         if file_path:
             try:
+                # ===== اگه فایل تورنت هست =====
+                if file_path.endswith('.torrent'):
+                    # ذخیره مسیر فایل تورنت در url_edit
+                    self.url_edit.setPlainText(f"file://{file_path}")
+                    return
+                # =================================
+                
                 with open(file_path, "r", encoding="utf-8") as f:
                     lines = [line.strip() for line in f if line.strip()]
                 if lines:
                     current = self.url_edit.toPlainText().strip()
-                    combined = (
-                        current + "\n" + "\n".join(lines)
-                        if current
-                        else "\n".join(lines)
-                    )
+                    combined = current + "\n" + "\n".join(lines) if current else "\n".join(lines)
                     self.url_edit.setPlainText(combined)
             except Exception as e:
                 QMessageBox.warning(self, "Error", f"Failed to parse file:\n{str(e)}")
@@ -294,7 +301,22 @@ class AddDownloadDialog(QDialog):
 
     def _get_urls(self):
         raw = self.url_edit.toPlainText()
-        return [line.strip() for line in raw.split("\n") if line.strip()]
+        urls = []
+        for line in raw.split("\n"):
+            line = line.strip()
+            if not line:
+                continue
+            
+            # ===== تشخیص تورنت =====
+            if line.startswith("file://") and line.endswith(".torrent"):
+                urls.append(line)
+            elif line.startswith("magnet:"):
+                urls.append(line)
+            else:
+                urls.append(line)
+            # ==========================
+        
+        return urls
 
     def get_data(self):
         urls = self._get_urls()
@@ -327,7 +349,10 @@ class QuickDownloadDialog(QDialog):
         url_acc.set_expanded(True)
 
         self.url_edit = QTextEdit()
-        self.url_edit.setPlaceholderText("Enter URLs (one per line)...")
+        self.url_edit.setPlaceholderText(
+            "Enter URLs (one per line)\n"
+            "Supported: http://, https://, ftp://, magnet:, file://*.torrent"
+        )
         self.url_edit.setMinimumHeight(90)
         url_acc.addWidget(self.url_edit)
 

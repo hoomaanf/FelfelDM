@@ -51,6 +51,8 @@ class Aria2RPC:
         return f"{self.host}:{self.port}/jsonrpc"
 
     def _call(self, method: str, params: List = None) -> Optional[Dict]:
+        print(f"📡 [RPC] _call: method={method}")
+
         if params is None:
             params = []
 
@@ -64,6 +66,10 @@ class Aria2RPC:
             "params": params,
         }
 
+        print(f"📡 [RPC] payload keys: {list(payload.keys())}")
+        print(f"📡 [RPC] method: {method}")
+        print(f"📡 [RPC] params length: {len(params)}")
+
         data = json.dumps(payload).encode("utf-8")
         req = urllib.request.Request(
             self._get_url(), data=data, headers={"Content-Type": "application/json"}
@@ -71,10 +77,18 @@ class Aria2RPC:
 
         for attempt in range(self._retry_count):
             try:
+                print(f"📡 [RPC] attempt {attempt + 1}/{self._retry_count}")
                 with urllib.request.urlopen(req, timeout=self._timeout) as response:
-                    result = json.loads(response.read().decode("utf-8"))
+                    response_data = response.read().decode("utf-8")
+                    print(f"📡 [RPC] response status: {response.status}")
+                    print(
+                        f"📡 [RPC] response data (first 200 chars): {response_data[:200]}"
+                    )
+                    result = json.loads(response_data)
+                    print(f"📡 [RPC] parsed result: {result}")
                     if "error" in result:
                         error_msg = result["error"].get("message", str(result["error"]))
+                        print(f"📡 [RPC] error: {error_msg}")
                         if "Invalid GID" in error_msg or (
                             "not found" in error_msg.lower()
                             and "gid" in error_msg.lower()
@@ -87,8 +101,10 @@ class Aria2RPC:
                     return result.get("result")
 
             except urllib.error.HTTPError as e:
+                print(f"📡 [RPC] HTTPError: {e.code} - {e.reason}")
                 try:
                     error_body = e.read().decode("utf-8")
+                    print(f"📡 [RPC] error_body: {error_body}")
                 except:
                     error_body = ""
 
@@ -103,6 +119,7 @@ class Aria2RPC:
                 return None
 
             except urllib.error.URLError as e:
+                print(f"📡 [RPC] URLError: {e}")
                 if attempt < self._retry_count - 1:
                     time.sleep(self._retry_delay * (attempt + 1))
                     continue
@@ -111,6 +128,10 @@ class Aria2RPC:
                 return None
 
             except Exception as e:
+                print(f"📡 [RPC] Exception: {e}")
+                import traceback
+
+                traceback.print_exc()
                 if attempt < self._retry_count - 1:
                     time.sleep(self._retry_delay * (attempt + 1))
                     continue
@@ -118,6 +139,7 @@ class Aria2RPC:
                     self.on_error(f"Error: {e}")
                 return None
 
+        print(f"📡 [RPC] returning None after {self._retry_count} attempts")
         return None
 
     def is_connected(self) -> bool:
@@ -156,6 +178,10 @@ class Aria2RPC:
                 "--save-session-interval=60",
                 "--timeout=5",
                 "--connect-timeout=5",
+                "--enable-torrent",
+                "--follow-torrent=mem",
+                "--bt-save-metadata=true",
+                "--bt-max-peers=50",
             ]
 
             if self.secret:
@@ -230,6 +256,104 @@ class Aria2RPC:
         if result and pause_after_add:
             self.pause(result)
         return result
+
+    def add_torrent(self, torrent_file: str, options: Dict = None) -> Optional[str]:
+        """اضافه کردن دانلود تورنت از فایل .torrent"""
+        print(f"🧲 [RPC] add_torrent called")
+        print(f"🧲 [RPC] torrent_file: {torrent_file}")
+        print(f"🧲 [RPC] options: {options}")
+
+        if not torrent_file:
+            print(f"🧲 [RPC] torrent_file is empty")
+            return None
+
+        if options is None:
+            options = {}
+
+        pause_after_add = options.pop("pause", False)
+        options = {k: v for k, v in options.items() if v is not None and v != ""}
+
+        print(f"🧲 [RPC] options after cleanup: {options}")
+
+        import base64
+
+        if os.path.exists(torrent_file):
+            print(f"🧲 [RPC] Reading torrent file: {torrent_file}")
+            try:
+                with open(torrent_file, "rb") as f:
+                    torrent_data = base64.b64encode(f.read()).decode("utf-8")
+                print(
+                    f"🧲 [RPC] Torrent file read successfully, base64 length: {len(torrent_data)}"
+                )
+            except Exception as e:
+                print(f"🧲 [RPC] Error reading torrent file: {e}")
+                return None
+        else:
+            print(f"🧲 [RPC] Torrent file does NOT exist: {torrent_file}")
+            return None
+
+        params = [torrent_data, options]
+        print(f"🧲 [RPC] Calling aria2.addTorrent with params")
+        print(f"🧲 [RPC] params[0] (base64) length: {len(params[0])}")
+        print(f"🧲 [RPC] params[1] (options): {params[1]}")
+
+        try:
+            result = self._call("aria2.addTorrent", params)
+            print(f"🧲 [RPC] aria2.addTorrent result: {result}")
+        except Exception as e:
+            print(f"🧲 [RPC] Exception in addTorrent: {e}")
+            import traceback
+
+            traceback.print_exc()
+            return None
+
+        if result and pause_after_add:
+            self.pause(result)
+            print(f"🧲 [RPC] Paused after add: {result}")
+
+        print(f"🧲 [RPC] Returning result: {result}")
+        return result
+
+    def add_magnet(self, magnet_uri: str, options: Dict = None) -> Optional[str]:
+        """اضافه کردن دانلود از لینک Magnet"""
+        if not magnet_uri or not magnet_uri.startswith("magnet:"):
+            return None
+
+        if options is None:
+            options = {}
+
+        pause_after_add = options.pop("pause", False)
+        options = {k: v for k, v in options.items() if v is not None and v != ""}
+
+        params = [[magnet_uri], options]
+        result = self._call("aria2.addUri", params)
+
+        if result and pause_after_add:
+            self.pause(result)
+        return result
+
+    def get_torrent_info(self, gid: str) -> Optional[Dict]:
+        """دریافت اطلاعات تورنت"""
+        if not gid:
+            return None
+
+        status = self.get_status(gid)
+        if not status:
+            return None
+
+        return {
+            "infoHash": status.get("infoHash", ""),
+            "numSeeders": status.get("numSeeders", 0),
+            "seeder": status.get("seeder", False),
+            "totalLength": int(status.get("totalLength", 0)),
+            "completedLength": int(status.get("completedLength", 0)),
+            "uploadLength": int(status.get("uploadLength", 0)),
+            "uploadSpeed": int(status.get("uploadSpeed", 0)),
+            "downloadSpeed": int(status.get("downloadSpeed", 0)),
+            "connections": int(status.get("connections", 0)),
+            "files": status.get("files", []),
+            "bittorrent": status.get("bittorrent", {}),
+        }
 
     def add_uris(self, urls: List[str], options: Dict = None) -> List[Optional[str]]:
         gids = []

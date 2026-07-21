@@ -79,7 +79,7 @@ class MainWindow(QMainWindow):
     def _init_ui(self) -> None:
         theme_setting: str = self.store.settings.get("theme", "auto")
         is_dark: bool = self._detect_theme(theme_setting)
-        
+
         self.splash = SplashScreen(is_dark=is_dark)
         self.splash.update_status("Loading FelfelDM...", 5)
         QApplication.processEvents()
@@ -183,8 +183,9 @@ class MainWindow(QMainWindow):
             return False
         if theme_setting == "dark":
             return True
-        
+
         from utils.style import detect_system_theme
+
         return detect_system_theme()
 
     def _ensure_default_queue(self) -> None:
@@ -1631,7 +1632,7 @@ class MainWindow(QMainWindow):
             valid_lines = [
                 line.strip()
                 for line in clip.split("\n")
-                if line.strip().startswith(("http", "magnet:", "ftp"))
+                if line.strip().startswith(("http", "magnet:", "ftp", "file://"))
             ]
             if valid_lines:
                 dlg.url_edit.setPlainText("\n".join(valid_lines))
@@ -1680,16 +1681,50 @@ class MainWindow(QMainWindow):
             for url in d["urls"]:
                 options_with_pause = options.copy()
                 options_with_pause["pause"] = "true"
-                gid = self.aria2.add_url(url, options_with_pause)
 
+                # ===== تشخیص نوع دانلود =====
+                gid = None
+                download_type = "normal"
+
+                if url.startswith("file://") and url.endswith(".torrent"):
+                    # فایل تورنت
+                    torrent_path = url.replace("file://", "")
+                    if os.path.exists(torrent_path):
+                        gid = self.aria2.add_torrent(torrent_path, options_with_pause)
+                        download_type = "torrent"
+                        clean_name = os.path.basename(torrent_path).replace(
+                            ".torrent", ""
+                        )
+                        files = []
+                        category = "🧲 Torrent"
+                    else:
+                        print(f"⚠️ Torrent file not found: {torrent_path}")
+                        continue
+
+                elif url.startswith("magnet:"):
+                    # لینک مگنت
+                    gid = self.aria2.add_magnet(url, options_with_pause)
+                    download_type = "torrent"
+                    clean_name = "Magnet Download"
+                    files = []
+                    category = "🧲 Torrent"
+
+                else:
+                    # دانلود معمولی
+                    gid = self.aria2.add_url(url, options_with_pause)
+                    download_type = "normal"
+                    clean_name = self._extract_filename(url)
+                    files = [{"path": os.path.join(d["path"], clean_name)}]
+                    category = "📁 Other"
+                # =================================
+                print(f"🧲 [DEBUG] URL: {url}")
+                print(f"🧲 [DEBUG] torrent_path: {torrent_path}")
+                print(f"🧲 [DEBUG] options_with_pause: {options_with_pause}")
                 if gid:
                     if gid in self._cleared_gids:
                         self._cleared_gids.remove(gid)
 
                     q.downloads.append(gid)
-
-                    clean_name = self._extract_filename(url)
-                    full_path = os.path.join(d["path"], clean_name)
 
                     q.downloads_info[gid] = {
                         "url": url,
@@ -1697,9 +1732,9 @@ class MainWindow(QMainWindow):
                         "totalLength": 0,
                         "completedLength": 0,
                         "status": "waiting",
-                        "files": [{"path": full_path}],
-                        "category": "📁 Other",
-                        "download_type": "normal",
+                        "files": files,
+                        "category": category,
+                        "download_type": download_type,
                     }
 
                     new_gids.append(gid)
@@ -1713,11 +1748,11 @@ class MainWindow(QMainWindow):
                         "completedLength": 0,
                         "downloadSpeed": 0,
                         "connections": 0,
-                        "files": [{"path": full_path}],
+                        "files": files,
                         "errorMessage": "",
-                        "category": "📁 Other",
+                        "category": category,
                         "size_fetch_attempts": 0,
-                        "download_type": "normal",
+                        "download_type": download_type,
                     }
 
                     if q and getattr(q, "speed_limit", 0) > 0:
