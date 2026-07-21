@@ -79,7 +79,7 @@ class MainWindow(QMainWindow):
     def _init_ui(self) -> None:
         theme_setting: str = self.store.settings.get("theme", "auto")
         is_dark: bool = self._detect_theme(theme_setting)
-        
+
         self.splash = SplashScreen(is_dark=is_dark)
         self.splash.update_status("Loading FelfelDM...", 5)
         QApplication.processEvents()
@@ -183,8 +183,9 @@ class MainWindow(QMainWindow):
             return False
         if theme_setting == "dark":
             return True
-        
+
         from utils.style import detect_system_theme
+
         return detect_system_theme()
 
     def _ensure_default_queue(self) -> None:
@@ -457,8 +458,7 @@ class MainWindow(QMainWindow):
         self.btn_clear_completed.clicked.connect(self._clear_completed_downloads)
         tb_lay.addWidget(self.btn_clear_completed)
 
-        self.btn_youtube = QPushButton()
-        self.btn_youtube.setIcon(get_icon("multimedia-video-player"))
+        self.btn_youtube = QPushButton(get_icon("applications-multimedia"), " YouTube")
         self.btn_youtube.setIconSize(icon_size)
         self.btn_youtube.setText(" YouTube")
         self.btn_youtube.clicked.connect(self._youtube_download)

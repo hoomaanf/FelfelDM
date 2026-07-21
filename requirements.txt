@@ -4,3 +4,4 @@ keyring==25.7.0
 appdirs==1.4.4
 websocket-client==1.7.0
 yt-dlp==2026.6.9
+platformdirs>=3.0.0

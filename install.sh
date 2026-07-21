@@ -188,7 +188,8 @@ esac
 # ============================================
 echo -e "${YELLOW}📦 Installing pip packages...${NC}"
 
-PIP_PACKAGES="requests keyring appdirs"
+# ===== REPLACED appdirs with platformdirs =====
+PIP_PACKAGES="requests keyring platformdirs"
 
 for pkg in $PIP_PACKAGES; do
     if ! python3 -c "import $pkg" >/dev/null 2>&1; then
