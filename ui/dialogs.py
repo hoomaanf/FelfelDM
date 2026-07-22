@@ -1866,6 +1866,12 @@ class DownloadProgressDialog(QDialog):
         self._is_complete = False
         self._file_path = None
 
+        # ===== تشخیص تم =====
+        from utils.style import detect_system_theme
+
+        self._is_dark = detect_system_theme()
+        # ====================
+
         main_layout = QVBoxLayout(self)
         main_layout.setSpacing(4)
         main_layout.setContentsMargins(20, 16, 20, 20)
@@ -1896,22 +1902,26 @@ class DownloadProgressDialog(QDialog):
         ]
 
         self.info_labels = {}
+        # ===== رنگ‌های پویا برای لیبل‌ها =====
+        label_color = "#a6adc8" if self._is_dark else "#4a4a5a"
+        value_color = "#cdd6f4" if self._is_dark else "#1e1e2a"
+        # ===================================
+
         for i, (icon_name, label, key) in enumerate(items):
             icon_lbl = QLabel()
             icon_lbl.setPixmap(get_icon(icon_name).pixmap(16, 16))
             info_layout.addWidget(icon_lbl, i, 0)
 
             lbl = QLabel(label)
-            lbl.setStyleSheet("color: #a6adc8;")
+            lbl.setStyleSheet(f"color: {label_color};")
             info_layout.addWidget(lbl, i, 1)
 
             val_lbl = QLabel("—")
-            val_lbl.setStyleSheet("color: #cdd6f4; font-weight: 500;")
+            val_lbl.setStyleSheet(f"color: {value_color}; font-weight: 500;")
             info_layout.addWidget(val_lbl, i, 2)
             self.info_labels[key] = val_lbl
 
         main_layout.addWidget(info_group)
-
         main_layout.addSpacing(8)
 
         btn_row = QHBoxLayout()
@@ -1943,11 +1953,34 @@ class DownloadProgressDialog(QDialog):
 
     def _on_action_clicked(self):
         if self._is_complete:
+            folder_path = None
+
+            # 1. از _file_path
             if self._file_path and os.path.exists(self._file_path):
-                folder = os.path.dirname(self._file_path)
-                QDesktopServices.openUrl(QUrl.fromLocalFile(folder))
+                folder_path = os.path.dirname(self._file_path)
+
+            # 2. اگر _file_path وجود نداشت، از MainWindow بپرس
+            if not folder_path and self.parent():
+                # پیدا کردن MainWindow در زنجیره والدین
+                main_window = self.parent()
+                while main_window and not hasattr(main_window, "_find_download_folder"):
+                    main_window = main_window.parent()
+                if main_window and hasattr(main_window, "_find_download_folder"):
+                    try:
+                        folder_path = main_window._find_download_folder(self.gid)
+                    except Exception:
+                        pass
+
+            # 3. fallback به Downloads
+            if not folder_path:
+                folder_path = os.path.expanduser("~/Downloads")
+
+            if folder_path and os.path.exists(folder_path):
+                QDesktopServices.openUrl(QUrl.fromLocalFile(folder_path))
             else:
-                QMessageBox.warning(self, "Folder Not Found", "Folder not found.")
+                QMessageBox.warning(
+                    self, "Folder Not Found", f"Folder not found:\n{folder_path}"
+                )
             return
 
         btn_text = self.action_btn.text().strip()
@@ -2039,22 +2072,46 @@ class DownloadProgressDialog(QDialog):
 
         self.info_labels["connections"].setText(str(dl_data.get("connections", 0)))
 
-        status_map = {
-            "active": {"text": "Downloading", "color": "#89b4fa"},
-            "downloading": {"text": "Downloading", "color": "#89b4fa"},
-            "waiting": {"text": "Waiting", "color": "#a6adc8"},
-            "paused": {"text": "Paused", "color": "#f9e2af"},
-            "complete": {"text": "Complete", "color": "#a6e3a1"},
-            "completed": {"text": "Complete", "color": "#a6e3a1"},
-            "error": {"text": "Error", "color": "#f38ba8"},
-            "removed": {"text": "Removed", "color": "#6c7086"},
+        # ===== رنگ وضعیت (بهبود یافته برای Light Mode) =====
+        if self._is_dark:
+            status_colors = {
+                "active": "#89b4fa",
+                "downloading": "#89b4fa",
+                "waiting": "#a6adc8",
+                "paused": "#f9e2af",
+                "complete": "#a6e3a1",
+                "completed": "#a6e3a1",
+                "error": "#f38ba8",
+                "removed": "#6c7086",
+            }
+        else:
+            status_colors = {
+                "active": "#1a5fb4",  # آبی پررنگ
+                "downloading": "#1a5fb4",
+                "waiting": "#4a4a5a",  # خاکستری تیره
+                "paused": "#b8870a",  # طلایی تیره
+                "complete": "#26a269",  # سبز پررنگ
+                "completed": "#26a269",
+                "error": "#c01c28",  # قرمز پررنگ
+                "removed": "#6a6a7a",  # خاکستری متوسط
+            }
+
+        status_texts = {
+            "active": "Downloading",
+            "downloading": "Downloading",
+            "waiting": "Waiting",
+            "paused": "Paused",
+            "complete": "Complete",
+            "completed": "Complete",
+            "error": "Error",
+            "removed": "Removed",
         }
 
-        info = status_map.get(status, {"text": status.capitalize(), "color": "#a6adc8"})
-        self.info_labels["status"].setText(info["text"])
-        self.info_labels["status"].setStyleSheet(
-            f"color: {info['color']}; font-weight: 600;"
-        )
+        color = status_colors.get(status, "#6a6a7a")
+        text = status_texts.get(status, status.capitalize())
+
+        self.info_labels["status"].setText(text)
+        self.info_labels["status"].setStyleSheet(f"color: {color}; font-weight: 600;")
 
         self._status = status
         self._update_buttons(status)

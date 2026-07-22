@@ -420,9 +420,7 @@ class MainWindow(QMainWindow):
         tb_lay.setContentsMargins(8, 4, 8, 4)
         tb_lay.setSpacing(4)
 
-        # ===== اندازه آیکون‌ها =====
         icon_size = QSize(20, 20)
-        # ==========================
 
         self.btn_add = QPushButton(get_icon("download"), "Download")
         self.btn_add.setIconSize(icon_size)
@@ -1982,15 +1980,24 @@ class MainWindow(QMainWindow):
         self._update_queue_buttons()
 
     def _delete_download_files(self, gid: str) -> None:
+        import glob
+
         file_paths = []
+        aria2_files = []
         save_path = None
         name = None
+        url = None
+        download_type = None
+
+        print(f"🗑️ [_delete_download_files] START for gid: {gid}")
 
         for q in self.store.queues:
             if gid in q.downloads_info:
                 info = q.downloads_info[gid]
                 save_path = q.save_path
                 name = info.get("name", "").strip()
+                url = info.get("url", "")
+                download_type = info.get("download_type", "normal")
                 files = info.get("files", [])
                 for f in files:
                     if f.get("path"):
@@ -2000,30 +2007,161 @@ class MainWindow(QMainWindow):
         if not file_paths and gid in self._all_downloads:
             dl = self._all_downloads[gid]
             name = dl.get("name", name)
+            url = dl.get("url", url)
+            download_type = dl.get("download_type", "normal")
             files = dl.get("files", [])
             for f in files:
                 if f.get("path"):
                     file_paths.append(f["path"])
 
         if not save_path:
+            for q in self.store.queues:
+                if gid in q.downloads:
+                    save_path = q.save_path
+                    break
+
+        if not save_path:
             save_path = os.path.expanduser("~/Downloads")
 
+        print(f"📁 save_path: {save_path}")
+        print(f"📁 name: {name}")
+        print(f"📁 file_paths: {file_paths}")
+
+        if not name and url:
+            name = url.split("/")[-1].split("?")[0]
+        if not name:
+            name = f"download_{gid[:8]}"
+
+        if save_path and os.path.exists(save_path):
+            print(f"🔍 Searching in: {save_path}")
+            try:
+                for file in os.listdir(save_path):
+                    full_path = os.path.join(save_path, file)
+                    lower = file.lower()
+
+                    if name and name.lower() in lower:
+                        if not any(
+                            x in lower
+                            for x in [".aria2", ".part", ".f", ".temp", ".ytdl"]
+                        ):
+                            if full_path not in file_paths:
+                                file_paths.append(full_path)
+                                print(f"✅ Found main file by name: {file}")
+
+                    if gid in file:
+                        if not any(
+                            x in lower
+                            for x in [".aria2", ".part", ".f", ".temp", ".ytdl"]
+                        ):
+                            if full_path not in file_paths:
+                                file_paths.append(full_path)
+                                print(f"✅ Found main file by GID: {file}")
+
+                    if ".aria2" in lower:
+                        aria2_files.append(full_path)
+                        print(f"✅ Found .aria2 file: {file}")
+
+                    if any(x in lower for x in [".part", ".f", ".temp", ".ytdl"]):
+                        aria2_files.append(full_path)
+                        print(f"✅ Found temp file: {file}")
+
+            except Exception as e:
+                print(f"⚠️ Dir list error: {e}")
+
+        if save_path and os.path.exists(save_path):
+
+            patterns = [
+                f"{name}.aria2",
+                f"{name}.*.aria2",
+                f"*.aria2",
+            ]
+            for pattern in patterns:
+                full_pattern = os.path.join(save_path, pattern)
+                for f in glob.glob(full_pattern):
+                    if f not in aria2_files:
+                        aria2_files.append(f)
+                        print(f"✅ Found .aria2 with pattern: {os.path.basename(f)}")
+
+        if not file_paths and aria2_files:
+            for aria2_path in aria2_files:
+                base_name = aria2_path.replace(".aria2", "")
+
+                for ext in [".aria2", ".part", ".f", ".temp", ".ytdl"]:
+                    if base_name.endswith(ext):
+                        base_name = base_name[: -len(ext)]
+
+                if os.path.exists(base_name):
+                    file_paths.append(base_name)
+                    print(f"✅ Found main file from .aria2: {base_name}")
+                else:
+
+                    extensions = [
+                        "",
+                        ".mp4",
+                        ".mkv",
+                        ".webm",
+                        ".mp3",
+                        ".m4a",
+                        ".zip",
+                        ".rar",
+                        ".7z",
+                        ".tar.gz",
+                        ".tgz",
+                        ".txt",
+                        ".pdf",
+                        ".jpg",
+                        ".png",
+                        ".exe",
+                        ".msi",
+                    ]
+                    for ext in extensions:
+                        test_path = base_name + ext
+                        if os.path.exists(test_path):
+                            file_paths.append(test_path)
+                            print(f"✅ Found main file with extension: {test_path}")
+                            break
+
+        print(f"📊 Files to delete: {file_paths}")
+        deleted_count = 0
         for path in set(file_paths):
             try:
                 if os.path.exists(path):
-                    os.remove(path)
-                    print(f"🗑️ DELETED: {path}")
+                    if os.path.isfile(path):
+                        os.remove(path)
+                        deleted_count += 1
+                        print(f"🗑️ DELETED FILE: {os.path.basename(path)}")
+                    elif os.path.isdir(path):
+                        shutil.rmtree(path)
+                        deleted_count += 1
+                        print(f"🗑️ DELETED FOLDER: {path}")
+            except PermissionError:
+                print(f"⚠️ Permission denied on {path}, trying force...")
+                try:
+                    subprocess.run(["rm", "-f", path], capture_output=True)
+                    print(f"🗑️ DELETED (force): {os.path.basename(path)}")
+                    deleted_count += 1
+                except Exception as e2:
+                    print(f"⚠️ Force delete failed {path}: {e2}")
             except Exception as e:
                 print(f"⚠️ Delete failed {path}: {e}")
 
-        for path in set(file_paths):
-            aria2_file = path + ".aria2"
+        print(f"📊 .aria2/temp files to delete: {aria2_files}")
+        for path in set(aria2_files):
             try:
-                if os.path.exists(aria2_file):
-                    os.remove(aria2_file)
-                    print(f"🗑️ DELETED .aria2: {aria2_file}")
+                if os.path.exists(path):
+                    os.remove(path)
+                    print(f"🗑️ DELETED TEMP: {os.path.basename(path)}")
+            except PermissionError:
+                print(f"⚠️ Permission denied on {path}, trying force...")
+                try:
+                    subprocess.run(["rm", "-f", path], capture_output=True)
+                    print(f"🗑️ DELETED TEMP (force): {os.path.basename(path)}")
+                except Exception as e2:
+                    print(f"⚠️ Force delete temp failed {path}: {e2}")
             except Exception as e:
-                print(f"⚠️ Delete .aria2 failed {aria2_file}: {e}")
+                print(f"⚠️ Delete temp failed {path}: {e}")
+
+        print(f"✅ Deleted {deleted_count} file(s)")
 
     def _youtube_download(self) -> None:
         queues = [q for q in self.store.queues if q.name != "__direct__"]
@@ -2608,10 +2746,19 @@ class MainWindow(QMainWindow):
         self._progress_dialog = None
 
     def _cancel_with_delete_from_dialog(self, gid: str) -> None:
+
         try:
-            self.worker.remove_requested.emit(gid)
-        except Exception:
-            pass
+            self.aria2.force_remove(gid)
+            print(f"🗑️ force_remove emitted for {gid}")
+        except Exception as e:
+            print(f"❌ force_remove failed: {e}")
+            try:
+                self.worker.remove_requested.emit(gid)
+            except:
+                pass
+
+        QApplication.processEvents()
+        time.sleep(0.5)
 
         self._delete_download_files(gid)
 
@@ -3496,8 +3643,6 @@ class MainWindow(QMainWindow):
                 self.aria2.shutdown()
         except Exception:
             try:
-                import subprocess
-
                 subprocess.run(["pkill", "-f", "aria2c"], capture_output=True)
             except:
                 pass
