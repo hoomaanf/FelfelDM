@@ -25,7 +25,7 @@
 
 <div align="center">
   <img src="screenshots/main-window.png" alt="FelfelDM Main Window" width="800">
-  <p><em>Main Interface - Dark Theme</em></p>
+  <p><em>Main Interface - Dark Theme with Details Panel</em></p>
 </div>
 
 ---
@@ -60,6 +60,8 @@ bash <(curl -s https://raw.githubusercontent.com/hoomaanf/FelfelDM/main/install.
 - 🎯 **Smart Management** — Auto-retry, pause/resume, and error handling
 - 🗑️ **Safe Removal** — Remove from list or delete files permanently
 - 🎵 **YouTube Download** — Download videos and audio from YouTube with dynamic quality selection
+- 📋 **Details Panel** — View download details (name, size, downloaded, status, path) with quick actions
+- ⌨️ **Keyboard Shortcuts** — Full keyboard navigation for power users
 
 ### Queue Management
 
@@ -87,6 +89,7 @@ bash <(curl -s https://raw.githubusercontent.com/hoomaanf/FelfelDM/main/install.
 - 💾 **Persistent State** — All downloads and queues are preserved between sessions
 - 🔄 **Download Resume** — Resume interrupted downloads from where they stopped
 - 🔄 **In-App Update** — Update FelfelDM directly from the application (Help → About → Update)
+- ⚡ **Optimized Performance** — Reduced RPC calls for better responsiveness
 
 ### YouTube Download Features
 
@@ -211,6 +214,25 @@ FelfelDM --update
 4. Choose queue and save location
 5. Click Download
 
+### Details Panel
+
+The details panel provides quick access to download information and actions:
+
+- **File**: Download name
+- **Size**: Total file size
+- **Downloaded**: Downloaded size
+- **Status**: Current download status
+- **Path**: Download folder location
+
+**Quick Actions:**
+- **Pause/Resume** — Control the selected download
+- **Cancel** — Remove the download (with option to delete files)
+- **Open Folder** — Open the download folder
+- **Copy URL** — Copy the download URL to clipboard
+
+**Toggle Details Panel:**
+- Press `Ctrl+D` or click the details button in the toolbar
+
 ### YouTube Download
 
 FelfelDM supports downloading videos and audio from YouTube with advanced features:
@@ -262,13 +284,27 @@ FelfelDM supports proxy configuration at three levels:
 
 ### Keyboard Shortcuts
 
-| Shortcut | Action              |
-| -------- | ------------------- |
-| `Ctrl+N` | Add downloads       |
-| `Ctrl+Q` | Quit application    |
-| `Ctrl+,` | Open settings       |
-| `F5`     | Refresh table       |
-| `Esc`    | Close splash screen |
+FelfelDM supports comprehensive keyboard shortcuts for efficient usage:
+
+| Shortcut | Action |
+|----------|--------|
+| `Ctrl+N` | Add Downloads |
+| `Ctrl+U` | Add URL |
+| `Space` | Pause/Resume selected |
+| `Ctrl+P` | Pause selected |
+| `Ctrl+R` | Resume selected |
+| `Delete` | Remove selected |
+| `Shift+Delete` | Remove and delete files |
+| `Ctrl+D` | Toggle details panel |
+| `Ctrl+F` | Focus search |
+| `Escape` | Clear search |
+| `Ctrl+Tab` | Next queue |
+| `Ctrl+Shift+Tab` | Previous queue |
+| `Ctrl+,` | Settings |
+| `F5` | Refresh |
+| `F1` | Show shortcuts |
+
+Press `F1` at any time to view all keyboard shortcuts.
 
 ---
 
@@ -512,6 +548,4 @@ python3 main.py
 
 <div align="center">
   <sub>Built with ❤️ and 🌶️</sub>
-  <br>
-  <sub>© 2026 FelfelDM Contributors</sub>
 </div>

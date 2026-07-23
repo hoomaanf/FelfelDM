@@ -6,7 +6,6 @@ import threading
 import uuid
 from datetime import datetime
 import os
-import time
 import re
 import glob
 
@@ -51,10 +50,6 @@ class BackendWorker(QThread):
         self.youtube_lock = threading.Lock()
         self.youtube_gids: Set[str] = set()
         self._size_workers: Dict[str, YouTubeWorker] = {}
-
-        self._download_cache: Dict[str, dict] = {}
-        self._last_update_time: Dict[str, float] = {}
-        self._CACHE_TTL = 0.1
 
         self.resume_requested.connect(
             self._on_resume_requested, Qt.ConnectionType.QueuedConnection
@@ -199,18 +194,13 @@ class BackendWorker(QThread):
     def _get_complete_download_info(
         self, gid: str, partial_info: dict
     ) -> Optional[dict]:
-        current_time = time.time()
-        if (
-            gid in self._download_cache
-            and (current_time - self._last_update_time.get(gid, 0)) < self._CACHE_TTL
-        ):
-            cached = self._download_cache[gid].copy()
-            if partial_info.get("status") != cached.get("status"):
-                cached["status"] = partial_info.get("status")
-            return cached
-
+        # partial_info comes from tell_active()/tell_waiting()/tell_stopped(),
+        # which aria2 returns with the exact same field set as tell_status()
+        # for that gid (no `keys` filter is applied in aria2_rpc.py). Calling
+        # tell_status(gid) here again was a fully redundant extra RPC
+        # round-trip per download on every single poll tick.
         try:
-            full_info = self.aria2.tell_status(gid) or partial_info
+            full_info = partial_info
             complete_info = {
                 "gid": gid,
                 "status": full_info.get("status", "unknown"),
@@ -239,9 +229,6 @@ class BackendWorker(QThread):
             for field in optional_fields:
                 if field in full_info:
                     complete_info[field] = full_info[field]
-
-            self._download_cache[gid] = complete_info
-            self._last_update_time[gid] = time.time()
 
             if complete_info.get("totalLength") == "0" and complete_info.get(
                 "status"

@@ -43,6 +43,7 @@ class MainWindow(QMainWindow):
         self._init_ui()
         self._init_backend()
         self._init_services()
+        self._setup_shortcuts()
 
         if self.store.settings.get("start_minimized", False):
             QTimer.singleShot(0, self._minimize_to_tray)
@@ -76,6 +77,8 @@ class MainWindow(QMainWindow):
         self.speed_update_timer: Optional[QTimer] = None
         self._shutdown_timer: Optional[QTimer] = None
         self.splash = None
+        self._details_visible = False
+        self.details_panel = None
 
     def _init_ui(self) -> None:
         theme_setting: str = self.store.settings.get("theme", "auto")
@@ -410,6 +413,10 @@ class MainWindow(QMainWindow):
                 self._update_toggle_button
             )
 
+        self.details_panel = self._build_details_panel()
+        self.details_panel.setVisible(False)
+        ma_lay.addWidget(self.details_panel)
+
         self._build_status_bar()
 
         return main_area
@@ -462,6 +469,15 @@ class MainWindow(QMainWindow):
         self.btn_youtube.setText(" YouTube")
         self.btn_youtube.clicked.connect(self._youtube_download)
         tb_lay.addWidget(self.btn_youtube)
+
+        tb_lay.addStretch()
+
+        self.btn_show_details = QPushButton(get_icon("view-list-details"), "")
+        self.btn_show_details.setIconSize(icon_size)
+        self.btn_show_details.setToolTip("Toggle details panel (Ctrl+D)")
+        self.btn_show_details.setCheckable(True)
+        self.btn_show_details.toggled.connect(self._toggle_details_panel)
+        tb_lay.addWidget(self.btn_show_details)
 
         tb_lay.addStretch()
 
@@ -557,6 +573,7 @@ class MainWindow(QMainWindow):
 
         help_menu = mb.addMenu("&Help")
         help_menu.addAction("About", self._show_about)
+        help_menu.addAction("Shortcuts", self._show_shortcuts)
 
     def _build_tray(self) -> None:
         self.tray = QSystemTrayIcon(self)
@@ -1408,6 +1425,13 @@ class MainWindow(QMainWindow):
         self._update_toggle_button()
         self._update_progress_bar()
 
+        if (
+            self._details_visible
+            and hasattr(self, "details_panel")
+            and self.details_panel is not None
+        ):
+            self._update_details_panel()
+
         self._manage_schedules()
         self._update_progress_dialog()
 
@@ -1515,7 +1539,7 @@ class MainWindow(QMainWindow):
                         }
                     )
 
-        self.store.save()
+        self.store.mark_dirty()
 
     def _on_aria2_error(self, message: str) -> None:
         if any(
@@ -1772,6 +1796,360 @@ class MainWindow(QMainWindow):
                 )
 
             self._refresh_table()
+
+    def _build_details_panel(self) -> QWidget:
+        """Collapsible details panel for selected download"""
+        panel = QWidget()
+        panel.setObjectName("details_panel")
+        panel.setMinimumHeight(100)
+        panel.setMaximumHeight(170)
+        panel.setStyleSheet("""
+            #details_panel {
+                background: palette(alternate-base);
+                border-top: 1px solid palette(mid);
+            }
+        """)
+
+        lay = QHBoxLayout(panel)
+        lay.setContentsMargins(16, 10, 16, 10)
+        lay.setSpacing(16)
+
+        self.empty_label = QLabel("Select a download to view details")
+        self.empty_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.empty_label.setStyleSheet("""
+            font-size: 16px;
+            color: #888;
+            font-weight: 500;
+            background: transparent;
+        """)
+        self.empty_label.setVisible(True)
+        lay.addWidget(self.empty_label)
+
+        self.details_container = QWidget()
+        self.details_container.setVisible(False)
+        details_lay = QHBoxLayout(self.details_container)
+        details_lay.setContentsMargins(0, 0, 0, 0)
+        details_lay.setSpacing(16)
+
+        info_widget = QWidget()
+        info_lay = QGridLayout(info_widget)
+        info_lay.setSpacing(6)
+        info_lay.setContentsMargins(0, 0, 0, 0)
+
+        labels = [
+            ("text-x-generic", "File:", "name", 0),
+            ("package-x-generic", "Size:", "size", 1),
+            ("emblem-downloads", "Downloaded:", "downloaded", 2),
+            ("dialog-information", "Status:", "status", 3),
+            ("folder", "Path:", "path", 4),
+        ]
+
+        self.detail_labels = {}
+        for icon_name, label_text, key, row in labels:
+
+            icon_label = QLabel()
+            icon = get_icon(icon_name)
+            if not icon.isNull():
+                icon_label.setPixmap(icon.pixmap(16, 16))
+            else:
+
+                icon_label.setText("📄")
+                icon_label.setStyleSheet("font-size: 14px;")
+            info_lay.addWidget(
+                icon_label, row, 0, alignment=Qt.AlignmentFlag.AlignCenter
+            )
+
+            label = QLabel(label_text)
+            label.setStyleSheet("font-weight: bold; color: #888; font-size: 12px;")
+            info_lay.addWidget(label, row, 1)
+
+            value = QLabel("—")
+            value.setObjectName(f"detail_{key}")
+            value.setStyleSheet("font-size: 12px;")
+            value.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+            info_lay.addWidget(value, row, 2)
+            self.detail_labels[key] = value
+
+        details_lay.addWidget(info_widget, stretch=3)
+
+        action_widget = QWidget()
+        action_lay = QVBoxLayout(action_widget)
+        action_lay.setSpacing(4)
+        action_lay.setContentsMargins(0, 0, 0, 0)
+
+        self.detail_pause_btn = QPushButton(get_icon("media-playback-pause"), "Pause")
+        self.detail_pause_btn.clicked.connect(self._toggle_pause_resume)
+        self.detail_pause_btn.setMinimumWidth(110)
+        self.detail_pause_btn.setFixedHeight(34)
+        self.detail_pause_btn.setEnabled(False)
+        action_lay.addWidget(self.detail_pause_btn)
+
+        self.detail_cancel_btn = QPushButton(get_icon("edit-delete"), "Cancel")
+        self.detail_cancel_btn.clicked.connect(self._remove_selected)
+        self.detail_cancel_btn.setMinimumWidth(110)
+        self.detail_cancel_btn.setFixedHeight(34)
+        self.detail_cancel_btn.setEnabled(False)
+        action_lay.addWidget(self.detail_cancel_btn)
+
+        self.detail_open_btn = QPushButton(get_icon("folder"), "Open Folder")
+        self.detail_open_btn.clicked.connect(
+            lambda: self._open_folder(self._selected_gid())
+        )
+        self.detail_open_btn.setMinimumWidth(110)
+        self.detail_open_btn.setFixedHeight(34)
+        self.detail_open_btn.setEnabled(False)
+        action_lay.addWidget(self.detail_open_btn)
+
+        self.detail_copy_btn = QPushButton(get_icon("edit-copy"), "Copy URL")
+        self.detail_copy_btn.clicked.connect(
+            lambda: self._copy_link(self._selected_gid())
+        )
+        self.detail_copy_btn.setMinimumWidth(110)
+        self.detail_copy_btn.setFixedHeight(34)
+        self.detail_copy_btn.setEnabled(False)
+        action_lay.addWidget(self.detail_copy_btn)
+
+        action_lay.addStretch()
+        details_lay.addWidget(action_widget, stretch=1)
+
+        lay.addWidget(self.details_container)
+
+        return panel
+
+    def _toggle_details_panel(self, checked: bool = False) -> None:
+        """Toggle details panel visibility"""
+        if not hasattr(self, "details_panel") or self.details_panel is None:
+            return
+
+        self._details_visible = not self._details_visible
+        self.details_panel.setVisible(self._details_visible)
+
+        if hasattr(self, "btn_show_details"):
+
+            self.btn_show_details.blockSignals(True)
+            self.btn_show_details.setChecked(self._details_visible)
+            self.btn_show_details.blockSignals(False)
+
+        if self._details_visible:
+            self._update_details_panel()
+
+    def _update_details_panel(self) -> None:
+        """Update details panel with selected download info"""
+        gid = self._selected_gid()
+
+        if not gid or gid not in self._all_downloads:
+            if hasattr(self, "empty_label"):
+                self.empty_label.setVisible(True)
+            if hasattr(self, "details_container"):
+                self.details_container.setVisible(False)
+            return
+
+        if hasattr(self, "empty_label"):
+            self.empty_label.setVisible(False)
+        if hasattr(self, "details_container"):
+            self.details_container.setVisible(True)
+
+        data = self._all_downloads[gid]
+
+        if hasattr(self, "detail_labels"):
+
+            self.detail_labels["name"].setText(data.get("name", "Unknown"))
+
+            try:
+                total = int(data.get("totalLength", 0))
+            except (ValueError, TypeError):
+                total = 0
+            self.detail_labels["size"].setText(format_size(total))
+
+            try:
+                downloaded = int(data.get("completedLength", 0))
+            except (ValueError, TypeError):
+                downloaded = 0
+            self.detail_labels["downloaded"].setText(format_size(downloaded))
+
+            status = data.get("status", "unknown")
+            status_texts = {
+                "active": "Downloading",
+                "downloading": "Downloading",
+                "waiting": "Waiting",
+                "paused": "Paused",
+                "complete": "Complete",
+                "completed": "Complete",
+                "error": "Error",
+                "removed": "Removed",
+            }
+            status_display = status_texts.get(status, status.title())
+            self.detail_labels["status"].setText(status_display)
+
+            status_colors = {
+                "active": "#27ae60",
+                "downloading": "#27ae60",
+                "waiting": "#f39c12",
+                "paused": "#f39c12",
+                "complete": "#3498db",
+                "completed": "#3498db",
+                "error": "#e74c3c",
+            }
+            color = status_colors.get(status, "#888")
+            self.detail_labels["status"].setStyleSheet(
+                f"font-size: 12px; color: {color};"
+            )
+
+            files = data.get("files", [])
+            if files and files[0].get("path"):
+                path = os.path.dirname(files[0]["path"])
+                self.detail_labels["path"].setText(path)
+            else:
+                self.detail_labels["path"].setText("—")
+
+        if hasattr(self, "detail_pause_btn"):
+            real_status = data.get("status", "")
+
+            if real_status in ["active", "waiting", "downloading"]:
+                self.detail_pause_btn.setEnabled(True)
+                self.detail_pause_btn.setText("Pause")
+                self.detail_pause_btn.setIcon(get_icon("media-playback-pause"))
+            elif real_status == "paused":
+                self.detail_pause_btn.setEnabled(True)
+                self.detail_pause_btn.setText("Resume")
+                self.detail_pause_btn.setIcon(get_icon("media-playback-start"))
+            else:
+                self.detail_pause_btn.setEnabled(False)
+                self.detail_pause_btn.setText("Pause")
+                self.detail_pause_btn.setIcon(get_icon("media-playback-pause"))
+
+        if hasattr(self, "detail_cancel_btn"):
+            real_status = data.get("status", "")
+            if real_status in ["active", "waiting", "downloading", "paused"]:
+                self.detail_cancel_btn.setEnabled(True)
+            else:
+                self.detail_cancel_btn.setEnabled(False)
+
+        if hasattr(self, "detail_open_btn"):
+            self.detail_open_btn.setEnabled(True)
+        if hasattr(self, "detail_copy_btn"):
+            self.detail_copy_btn.setEnabled(True)
+
+    def _setup_shortcuts(self) -> None:
+        """Set up keyboard shortcuts"""
+
+        QShortcut(QKeySequence("Ctrl+U"), self, self._quick_download)
+
+        QShortcut(QKeySequence("Space"), self, self._toggle_pause_resume)
+        QShortcut(QKeySequence("Ctrl+P"), self, self._pause_selected)
+        QShortcut(QKeySequence("Ctrl+R"), self, self._resume_selected)
+        QShortcut(QKeySequence("Delete"), self, self._remove_selected)
+        QShortcut(QKeySequence("Shift+Delete"), self, self._remove_with_files)
+
+        QShortcut(QKeySequence("Ctrl+D"), self, self._toggle_details_panel)
+        QShortcut(QKeySequence("Ctrl+F"), self, self._focus_search)
+        QShortcut(QKeySequence("Escape"), self, self._clear_search)
+
+        QShortcut(QKeySequence("Ctrl+Tab"), self, self._next_queue)
+        QShortcut(QKeySequence("Ctrl+Shift+Tab"), self, self._prev_queue)
+
+        QShortcut(QKeySequence("Ctrl+,"), self, self._open_settings)
+        QShortcut(QKeySequence("F5"), self, self._refresh_table)
+        QShortcut(QKeySequence("F1"), self, self._show_shortcuts)
+
+    def _show_shortcuts(self) -> None:
+        """Show keyboard shortcuts dialog"""
+        shortcuts = [
+            ("Ctrl+N", "Add Downloads"),
+            ("Ctrl+U", "Add URL"),
+            ("Space", "Pause/Resume selected"),
+            ("Ctrl+P", "Pause selected"),
+            ("Ctrl+R", "Resume selected"),
+            ("Delete", "Remove selected"),
+            ("Shift+Delete", "Remove and delete files"),
+            ("Ctrl+D", "Toggle details panel"),
+            ("Ctrl+F", "Focus search"),
+            ("Escape", "Clear search"),
+            ("Ctrl+Tab", "Next queue"),
+            ("Ctrl+Shift+Tab", "Previous queue"),
+            ("Ctrl+,", "Settings"),
+            ("F5", "Refresh"),
+            ("F1", "Show shortcuts"),
+        ]
+
+        msg = "<h3>Keyboard Shortcuts</h3><br>"
+        for key, action in shortcuts:
+            msg += f"<b>{key}</b> — {action}<br>"
+
+        QMessageBox.information(self, "Shortcuts", msg)
+
+    def _focus_search(self) -> None:
+        """Focus the search box"""
+        if hasattr(self, "search_box"):
+            self.search_box.setFocus()
+            self.search_box.selectAll()
+
+    def _clear_search(self) -> None:
+        """Clear search box and restore focus to table"""
+        if hasattr(self, "search_box"):
+            self.search_box.clear()
+            self.table.setFocus()
+
+    def _next_queue(self) -> None:
+        """Switch to next queue"""
+        if self.queue_list.count() > 0:
+            current = self.queue_list.currentRow()
+            next_idx = (current + 1) % self.queue_list.count()
+            self.queue_list.setCurrentRow(next_idx)
+
+    def _prev_queue(self) -> None:
+        """Switch to previous queue"""
+        if self.queue_list.count() > 0:
+            current = self.queue_list.currentRow()
+            prev_idx = (current - 1) % self.queue_list.count()
+            self.queue_list.setCurrentRow(prev_idx)
+
+    def _remove_with_files(self) -> None:
+        """Remove selected downloads and delete files (Shift+Delete)"""
+        selected = self.table.selectionModel().selectedRows()
+        if not selected:
+            return
+
+        reply = QMessageBox.question(
+            self,
+            "Remove & Delete Files",
+            f"Remove {len(selected)} download(s) and delete all associated files?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+        )
+
+        if reply == QMessageBox.StandardButton.Yes:
+            gids_to_remove = [
+                self.model.get_gid(idx.row())
+                for idx in selected
+                if self.model.get_gid(idx.row())
+            ]
+
+            for gid in gids_to_remove:
+                try:
+                    self.worker.remove_requested.emit(gid)
+                except Exception:
+                    pass
+
+                try:
+                    self.aria2._call("aria2.removeDownloadResult", [gid])
+                except Exception:
+                    pass
+
+                for q in self.store.queues:
+                    if gid in q.downloads:
+                        q.downloads.remove(gid)
+                    if gid in q.downloads_info:
+                        self._delete_download_files(gid)
+                        del q.downloads_info[gid]
+
+                if gid in self._all_downloads:
+                    del self._all_downloads[gid]
+
+            self.store.save()
+            self._refresh_table()
+            self._refresh_queue_list()
+            self._update_queue_buttons()
+            self._update_status_stats()
 
     def _quick_download(self) -> None:
         all_queues = self.store.queues

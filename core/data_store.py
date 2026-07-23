@@ -268,12 +268,24 @@ class DataStore:
         self._yt_dirty = threading.Event()
         self._yt_stop = threading.Event()
 
+        # Debounced-save infra for high-frequency updates (e.g. progress ticks).
+        # Event-driven callers keep calling save() directly for an immediate,
+        # synchronous write; mark_dirty() lets a caller defer that write to
+        # this background loop instead, coalescing rapid updates.
+        self._main_stop = threading.Event()
+        self._main_flush_interval = 3.0  # seconds
+
         self.load()
 
         self._yt_thread = threading.Thread(
             target=self._yt_flush_loop, name="felfelDM-yt-writer", daemon=True
         )
         self._yt_thread.start()
+
+        self._main_thread = threading.Thread(
+            target=self._main_flush_loop, name="felfelDM-main-writer", daemon=True
+        )
+        self._main_thread.start()
 
     def _get_default_settings(self) -> Dict:
         return {
@@ -297,6 +309,21 @@ class DataStore:
     def _mark_main_dirty(self) -> None:
         with self._lock:
             self._main_dirty = True
+
+    def mark_dirty(self) -> None:
+        """
+        Record that in-memory state changed without writing to disk yet.
+
+        Use this for high-frequency, non-critical updates (progress/speed
+        ticks). The background flush loop persists the change within
+        ``_main_flush_interval`` seconds, coalescing many rapid updates
+        into a single atomic write instead of one write per tick.
+
+        Critical actions (add/remove/pause/resume/complete/fail/retry,
+        queue create/edit/delete, shutdown) should keep calling save()
+        directly for an immediate, synchronous write.
+        """
+        self._mark_main_dirty()
 
     def _mark_yt_dirty(self) -> None:
         self._yt_dirty.set()
@@ -420,10 +447,11 @@ class DataStore:
         except Exception as e:
             print(f"⚠️ Could not prune old corrupted backups: {e}")
 
-    def save(self) -> None:
+    def _persist(self, *, require_dirty: bool) -> None:
         with self._lock:
-            if not self._main_dirty:
+            if require_dirty and not self._main_dirty:
                 return
+            self._main_dirty = True
 
             secret = self.settings.pop("aria2_secret", "")
             payload = {
@@ -443,10 +471,33 @@ class DataStore:
         except Exception as e:
             print(f"⚠️ Error saving data (previous config on disk is unchanged): {e}")
 
+    def save(self) -> None:
+        """
+        Persist current state immediately (synchronous, atomic write).
+
+        Calling save() is an explicit "something changed, write it now"
+        signal — use it for event-driven/critical actions (add, remove,
+        pause, resume, complete, fail, retry, queue create/edit/delete,
+        shutdown, app exit). For high-frequency progress-only updates
+        (e.g. a stats-poll tick), call mark_dirty() instead so the
+        background flush loop can coalesce rapid updates into a single
+        write every ``_main_flush_interval`` seconds.
+        """
+        self._persist(require_dirty=False)
+
     def force_save(self) -> None:
-        with self._lock:
-            self._main_dirty = True
         self.save()
+
+    def _flush_if_dirty(self) -> None:
+        """Background-loop write: only persists if mark_dirty() was called since the last flush."""
+        self._persist(require_dirty=True)
+
+    def _main_flush_loop(self) -> None:
+        while True:
+            stop_requested = self._main_stop.wait(self._main_flush_interval)
+            self._flush_if_dirty()
+            if stop_requested:
+                break
 
     def _load_youtube_downloads(self) -> None:
         if not self.youtube_downloads_file.exists():
@@ -489,7 +540,9 @@ class DataStore:
         self._flush_youtube_downloads()
 
     def shutdown(self, timeout: float = 5.0) -> None:
+        self._main_stop.set()
         self._yt_stop.set()
+        self._main_thread.join(timeout=timeout)
         self._yt_thread.join(timeout=timeout)
         self.force_save()
         self._flush_youtube_downloads()
