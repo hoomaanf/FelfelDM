@@ -663,6 +663,7 @@ class MainWindow(QMainWindow):
         self.pause_queue_btn.setEnabled(False)
 
     def _pause_current_queue(self) -> None:
+        """Pause the current queue and all its active/waiting downloads"""
         print("⏸️ Pausing queue...")
 
         q = self._current_queue()
@@ -685,17 +686,17 @@ class MainWindow(QMainWindow):
 
         for gid in q.downloads:
             if gid in self._all_downloads:
-
                 current_status = self._all_downloads[gid].get("status", "")
-                if current_status in ["error", "stopped"]:
-                    self._all_downloads[gid]["status"] = "paused"
-                    if gid in q.downloads_info:
-                        q.downloads_info[gid]["status"] = "paused"
 
-                elif current_status in ["active", "waiting", "downloading"]:
+                if current_status in ["active", "waiting", "downloading"]:
                     self.worker.pause_requested.emit(gid)
                     self._all_downloads[gid]["status"] = "paused"
                     self._all_downloads[gid]["downloadSpeed"] = 0
+                    if gid in q.downloads_info:
+                        q.downloads_info[gid]["status"] = "paused"
+                elif current_status in ["error", "stopped"]:
+
+                    self._all_downloads[gid]["status"] = "paused"
                     if gid in q.downloads_info:
                         q.downloads_info[gid]["status"] = "paused"
 
@@ -3682,6 +3683,7 @@ class MainWindow(QMainWindow):
             manually_paused = getattr(q, "manually_paused", False)
 
             if is_scheduled_time:
+
                 if q.paused and not manually_paused:
                     q.paused = False
                     q.manually_paused = False
@@ -3705,6 +3707,7 @@ class MainWindow(QMainWindow):
                                     self.worker.resume_requested.emit(gid)
                                     self._all_downloads[gid]["status"] = "active"
             else:
+
                 if not q.paused:
                     q.paused = True
                     q.manually_paused = False
@@ -3715,6 +3718,7 @@ class MainWindow(QMainWindow):
                         download_type = self._all_downloads.get(gid, {}).get(
                             "download_type", "normal"
                         )
+
                         if download_type == "youtube":
                             if gid in self._all_downloads:
                                 status = self._all_downloads[gid].get("status", "")
@@ -3724,10 +3728,13 @@ class MainWindow(QMainWindow):
                         else:
                             if gid in self._all_downloads:
                                 status = self._all_downloads[gid].get("status", "")
-                                if status in ["active", "waiting"]:
+                                if status in ["active", "waiting", "downloading"]:
                                     self.worker.pause_requested.emit(gid)
                                     self._all_downloads[gid]["status"] = "paused"
                                     self._all_downloads[gid]["downloadSpeed"] = 0
+                                elif status in ["error", "stopped"]:
+
+                                    self._all_downloads[gid]["status"] = "paused"
 
     def _update_youtube_dialogs(self, youtube_downloads: List[Dict]) -> None:
         for yt_data in youtube_downloads:
