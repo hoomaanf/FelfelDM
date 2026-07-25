@@ -79,6 +79,7 @@ class MainWindow(QMainWindow):
         self.splash = None
         self._details_visible = False
         self.details_panel = None
+        self._queue_list_dirty = True
 
     def _init_ui(self) -> None:
         theme_setting: str = self.store.settings.get("theme", "auto")
@@ -624,6 +625,7 @@ class MainWindow(QMainWindow):
         print("✅ BackendWorker started")
 
     def _start_current_queue(self) -> None:
+        """Start the entire queue"""
         print("▶️ Starting queue...")
 
         self._retry_enabled = True
@@ -653,6 +655,7 @@ class MainWindow(QMainWindow):
         self._apply_settings_to_aria2()
         q.paused = False
         self.store.save()
+        self._queue_list_dirty = True
         self._refresh_queue_list()
 
         self._queue_worker = QueueOperationWorker(q, "start", self)
@@ -702,6 +705,7 @@ class MainWindow(QMainWindow):
 
         self.store.save()
         self._refresh_table()
+        self._queue_list_dirty = True
         self._refresh_queue_list()
         self._update_queue_status()
         self._update_queue_buttons()
@@ -922,13 +926,19 @@ class MainWindow(QMainWindow):
         self.model.update_rows(rows)
 
     def _refresh_queue_list(self) -> None:
+        """Refresh the queue list with proper status indicators"""
+
+        if not self._queue_list_dirty:
+            return
+
+        self._queue_list_dirty = False
+
         self.queue_list.blockSignals(True)
         self.queue_list.clear()
 
         something_changed = False
 
         for q in self.store.queues:
-
             if len(q.downloads) == 0:
                 if q.paused != True or q.manually_paused != False:
                     something_changed = True
@@ -991,6 +1001,11 @@ class MainWindow(QMainWindow):
         if not q or len(q.downloads) == 0 or q.name == "__direct__":
             self.start_queue_btn.setEnabled(False)
             self.pause_queue_btn.setEnabled(False)
+
+            if q and q.name == "__direct__":
+                self.queue_status_lbl.setText("Direct Downloads")
+            else:
+                self.queue_status_lbl.setText("📭 Empty")
             return
 
         has_active = False
@@ -998,7 +1013,6 @@ class MainWindow(QMainWindow):
         has_paused = False
         has_error = False
         has_getting_size = False
-        has_resumable = False
 
         for gid in q.downloads:
             if gid in self._all_downloads:
@@ -1019,17 +1033,43 @@ class MainWindow(QMainWindow):
 
         has_resumable = has_paused or has_error or has_getting_size
 
-        if has_active or has_waiting:
-            self.start_queue_btn.setEnabled(False)
-            self.pause_queue_btn.setEnabled(True)
+        if q.paused:
 
-        elif has_resumable:
-            self.start_queue_btn.setEnabled(True)
-            self.pause_queue_btn.setEnabled(False)
+            self.queue_status_lbl.setText("⏸ Paused")
+            self.queue_status_lbl.setStyleSheet("color: #f39c12; font-weight: bold;")
 
+            if has_active or has_waiting:
+                self.start_queue_btn.setEnabled(True)
+                self.pause_queue_btn.setEnabled(False)
+            elif has_resumable:
+                self.start_queue_btn.setEnabled(True)
+                self.pause_queue_btn.setEnabled(False)
+            else:
+                self.start_queue_btn.setEnabled(False)
+                self.pause_queue_btn.setEnabled(False)
         else:
-            self.start_queue_btn.setEnabled(False)
-            self.pause_queue_btn.setEnabled(False)
+
+            if has_active or has_waiting:
+                self.queue_status_lbl.setText("▶ Running")
+                self.queue_status_lbl.setStyleSheet(
+                    "color: #27ae60; font-weight: bold;"
+                )
+                self.start_queue_btn.setEnabled(False)
+                self.pause_queue_btn.setEnabled(True)
+            elif has_resumable:
+                self.queue_status_lbl.setText("⏳ Idle")
+                self.queue_status_lbl.setStyleSheet(
+                    "color: #95a5a6; font-weight: bold;"
+                )
+                self.start_queue_btn.setEnabled(True)
+                self.pause_queue_btn.setEnabled(False)
+            else:
+                self.queue_status_lbl.setText("⏳ Idle")
+                self.queue_status_lbl.setStyleSheet(
+                    "color: #95a5a6; font-weight: bold;"
+                )
+                self.start_queue_btn.setEnabled(False)
+                self.pause_queue_btn.setEnabled(False)
 
     def _update_queue_status(self) -> None:
         q = self._current_queue()
@@ -1293,6 +1333,13 @@ class MainWindow(QMainWindow):
             self.btn_toggle.setText("Pause")
             self.btn_toggle.setIcon(get_icon("media-playback-pause"))
 
+        q = self._current_queue()
+        if real_status == "waiting" and q and not q.paused:
+            self.btn_toggle.setEnabled(False)
+            self.btn_toggle.setText("Waiting")
+            self.btn_toggle.setIcon(get_icon("clock"))
+            return
+
     def _update_shutdown_button_state(self) -> None:
         q = self._current_queue()
         if not q or q.name == "__direct__" or len(q.downloads) == 0:
@@ -1420,7 +1467,10 @@ class MainWindow(QMainWindow):
 
         self._refresh_table()
         self._update_queue_status()
-        self._refresh_queue_list()
+
+        if self._queue_list_dirty:
+            self._refresh_queue_list()
+
         self._update_queue_buttons()
         self._update_shutdown_button_state()
         self._update_toggle_button()
@@ -1748,6 +1798,7 @@ class MainWindow(QMainWindow):
                         self.worker.set_speed_limit_requested.emit(gid, q.speed_limit)
 
             self.store.save()
+            self._queue_list_dirty = True
             self._refresh_queue_list()
             self._refresh_table()
             self._update_queue_buttons()
@@ -2356,6 +2407,7 @@ class MainWindow(QMainWindow):
 
         self.store.save()
         self._refresh_table()
+        self._queue_list_dirty = True
         self._refresh_queue_list()
         self._update_queue_buttons()
 
@@ -3170,6 +3222,7 @@ class MainWindow(QMainWindow):
             self.worker.pause_requested.emit(gid)
 
     def _resume_selected(self) -> None:
+        """Resume selected download only, don't touch queue state"""
         gid = self._selected_gid()
         if not gid:
             return
@@ -3189,6 +3242,7 @@ class MainWindow(QMainWindow):
         return gid
 
     def _toggle_pause_resume(self) -> None:
+        """Toggle pause/resume for selected download"""
         gid = self._selected_gid()
         if not gid:
             return
@@ -3204,6 +3258,7 @@ class MainWindow(QMainWindow):
                 self._pause_youtube_download(gid)
             else:
                 self._pause_selected()
+
         elif real_status == "paused":
             if download_type == "youtube":
                 self._resume_youtube_download(gid)
