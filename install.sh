@@ -129,12 +129,14 @@ case "$DISTRO" in
             python3-pyqt6-devel \
             aria2 \
             git \
-            yt-dlp \
-            papirus-icon-theme
+            yt-dlp || true
         
+        # Papirus icon theme for Fedora - try different package names
         if ! rpm -q papirus-icon-theme &> /dev/null; then
-            echo -e "${YELLOW}⚠ papirus-icon-theme not found, installing from pip...${NC}"
-            pip3 install --user papirus-icon-theme 2>/dev/null || echo -e "${YELLOW}⚠ Could not install papirus-icon-theme${NC}"
+            echo -e "${YELLOW}⚠ Installing papirus-icon-theme...${NC}"
+            $SUDO dnf install -y papirus-icon-theme 2>/dev/null || \
+            $SUDO dnf install -y papirus-icon-theme 2>/dev/null || \
+            echo -e "${YELLOW}⚠ papirus-icon-theme not available via dnf${NC}"
         fi
         ;;
         
@@ -157,7 +159,7 @@ case "$DISTRO" in
             python3-qt6 \
             aria2 \
             git \
-            yt-dlp
+            yt-dlp || true
         ;;
         
     alpine)
@@ -168,7 +170,7 @@ case "$DISTRO" in
             py3-pyqt6 \
             aria2 \
             git \
-            yt-dlp
+            yt-dlp || true
         ;;
         
     *)
@@ -188,17 +190,24 @@ esac
 # ============================================
 echo -e "${YELLOW}📦 Installing pip packages...${NC}"
 
-# ===== REPLACED appdirs with platformdirs =====
-PIP_PACKAGES="requests keyring platformdirs"
+PIP_PACKAGES="requests keyring platformdirs packaging"
 
 for pkg in $PIP_PACKAGES; do
     if ! python3 -c "import $pkg" >/dev/null 2>&1; then
         echo "Installing $pkg..."
+        # Try different installation methods
         if [ "$DISTRO" = "arch" ]; then
-            pip3 install --break-system-packages "$pkg" 2>/dev/null || pip3 install --user "$pkg"
+            pip3 install --break-system-packages "$pkg" 2>/dev/null || \
+            pip3 install --user "$pkg" 2>/dev/null || \
+            $SUDO pip3 install "$pkg" 2>/dev/null || \
+            echo -e "${YELLOW}⚠ Could not install $pkg${NC}"
         else
-            pip3 install --user "$pkg" 2>/dev/null || $SUDO pip3 install "$pkg"
+            pip3 install --user "$pkg" 2>/dev/null || \
+            $SUDO pip3 install "$pkg" 2>/dev/null || \
+            echo -e "${YELLOW}⚠ Could not install $pkg${NC}"
         fi
+    else
+        echo -e "${GREEN}✓ $pkg already installed${NC}"
     fi
 done
 
@@ -211,6 +220,7 @@ echo -e "${GREEN}📁 Installing application...${NC}"
 $SUDO rm -rf "$INSTALL_DIR"
 $SUDO mkdir -p "$INSTALL_DIR"
 
+# Copy all necessary files
 $SUDO cp -r \
     "$SOURCE_DIR"/core \
     "$SOURCE_DIR"/ui \
@@ -219,9 +229,21 @@ $SUDO cp -r \
     "$SOURCE_DIR"/FelfelDM-extension \
     "$INSTALL_DIR" 2>/dev/null || true
 
+# Copy main files
 [ -f "$SOURCE_DIR/main.py" ] && $SUDO cp "$SOURCE_DIR/main.py" "$INSTALL_DIR"
 [ -f "$SOURCE_DIR/README.md" ] && $SUDO cp "$SOURCE_DIR/README.md" "$INSTALL_DIR"
 [ -f "$SOURCE_DIR/requirements.txt" ] && $SUDO cp "$SOURCE_DIR/requirements.txt" "$INSTALL_DIR"
+
+# Create __init__.py if needed
+if [ ! -f "$INSTALL_DIR/core/__init__.py" ]; then
+    $SUDO touch "$INSTALL_DIR/core/__init__.py"
+fi
+if [ ! -f "$INSTALL_DIR/ui/__init__.py" ]; then
+    $SUDO touch "$INSTALL_DIR/ui/__init__.py"
+fi
+if [ ! -f "$INSTALL_DIR/utils/__init__.py" ]; then
+    $SUDO touch "$INSTALL_DIR/utils/__init__.py"
+fi
 
 # ============================================
 # Create launcher
@@ -239,9 +261,20 @@ $SUDO chmod +x /usr/local/bin/FelfelDM
 echo -e "${YELLOW}🎨 Installing icons...${NC}"
 
 $SUDO mkdir -p /usr/share/icons/hicolor/{256x256,128x128,64x64,48x48,32x32,16x16}/apps
+$SUDO mkdir -p /usr/share/pixmaps
 
-[ -f "$SOURCE_DIR/logo/icon512.png" ] && $SUDO cp "$SOURCE_DIR/logo/icon512.png" /usr/share/icons/hicolor/256x256/apps/felfeldm.png
-[ -f "$SOURCE_DIR/logo/icon512.png" ] && $SUDO cp "$SOURCE_DIR/logo/icon512.png" /usr/share/pixmaps/felfeldm.png
+if [ -f "$SOURCE_DIR/logo/icon512.png" ]; then
+    $SUDO cp "$SOURCE_DIR/logo/icon512.png" /usr/share/icons/hicolor/256x256/apps/felfeldm.png
+    $SUDO cp "$SOURCE_DIR/logo/icon512.png" /usr/share/icons/hicolor/128x128/apps/felfeldm.png 2>/dev/null || true
+    $SUDO cp "$SOURCE_DIR/logo/icon512.png" /usr/share/icons/hicolor/64x64/apps/felfeldm.png 2>/dev/null || true
+    $SUDO cp "$SOURCE_DIR/logo/icon512.png" /usr/share/icons/hicolor/48x48/apps/felfeldm.png 2>/dev/null || true
+    $SUDO cp "$SOURCE_DIR/logo/icon512.png" /usr/share/icons/hicolor/32x32/apps/felfeldm.png 2>/dev/null || true
+    $SUDO cp "$SOURCE_DIR/logo/icon512.png" /usr/share/icons/hicolor/16x16/apps/felfeldm.png 2>/dev/null || true
+    $SUDO cp "$SOURCE_DIR/logo/icon512.png" /usr/share/pixmaps/felfeldm.png
+    echo -e "${GREEN}✓ Icons installed${NC}"
+else
+    echo -e "${YELLOW}⚠ Icon file not found${NC}"
+fi
 
 # ============================================
 # Create desktop file
@@ -265,6 +298,8 @@ EOF
 # ============================================
 # Update caches
 # ============================================
+echo -e "${YELLOW}🔄 Updating system caches...${NC}"
+
 if command -v update-desktop-database >/dev/null; then
     $SUDO update-desktop-database /usr/share/applications 2>/dev/null || true
 fi
