@@ -1077,6 +1077,7 @@ class QueueSettingsDialog(QDialog):
 
         self.queue = queue
         self._queue_proxy_config = None
+        self.disable_ssl_verify = False
 
         main_layout = QVBoxLayout(self)
         main_layout.setSpacing(10)
@@ -1107,8 +1108,6 @@ class QueueSettingsDialog(QDialog):
         self.conc_spin.setRange(1, 20)
         self.conc_spin.setValue(queue.max_concurrent)
         general_layout.addRow("Max Concurrent:", self.conc_spin)
-
-        tabs.addTab(general_tab, get_icon("configure"), "General")
 
         sched_tab = QWidget()
         sched_layout = QVBoxLayout(sched_tab)
@@ -1370,6 +1369,28 @@ class SettingsDialog(QDialog):
         general_layout.addWidget(cleanup_group)
 
         general_layout.addStretch()
+
+        ssl_group = QGroupBox("SSL/TLS Settings")
+        ssl_layout = QVBoxLayout(ssl_group)
+
+        self.disable_ssl_verify = QCheckBox("Disable SSL certificate verification")
+        self.disable_ssl_verify.setChecked(settings.get("disable_ssl_verify", False))
+        self.disable_ssl_verify.setToolTip(
+            "Disable SSL certificate verification for aria2 (use for self-signed certificates)"
+        )
+        ssl_layout.addWidget(self.disable_ssl_verify)
+
+        warning_label = QLabel(
+            "⚠️ Disabling SSL verification is insecure and should only be used for testing or with trusted self-signed certificates."
+        )
+        warning_label.setStyleSheet("color: #f39c12; font-size: 10px;")
+        warning_label.setWordWrap(True)
+        ssl_layout.addWidget(warning_label)
+
+        general_layout.addWidget(ssl_group)
+
+        general_layout.addStretch()
+
         tabs.addTab(general_tab, get_icon("configure"), "General")
 
         appearance_tab = QWidget()
@@ -1886,6 +1907,7 @@ WantedBy=default.target
             "start_minimized": self.start_minimized.isChecked(),
             "sound_enabled": self.sound_enabled_cb.isChecked(),
             "sound_path": self.sound_path_edit.text().strip(),
+            "disable_ssl_verify": self.disable_ssl_verify.isChecked(),
         }
 
     def _on_startup_toggled(self, checked: bool):

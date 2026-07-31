@@ -127,7 +127,7 @@ class MainWindow(QMainWindow):
 
         if not self.aria2.is_connected():
             self.splash.update_status("Starting aria2 daemon...", 55)
-            self.aria2.start_aria2()
+            self._start_aria2_if_needed()
             QApplication.processEvents()
 
         self.splash.update_status("aria2 ready!", 60)
@@ -234,6 +234,11 @@ class MainWindow(QMainWindow):
                 "--save-session-interval=60",
             ]
 
+            if self.store.settings.get("disable_ssl_verify", False):
+                cmd.append("--check-certificate=false")
+            else:
+                cmd.append("--check-certificate=true")
+
             if self.aria2.secret:
                 cmd.append(f"--rpc-secret={self.aria2.secret}")
 
@@ -244,7 +249,7 @@ class MainWindow(QMainWindow):
             QMessageBox.critical(
                 self,
                 "aria2 Not Found",
-                "aria2 is not installed.\nRun: sudo pacman -S aria2",
+                "aria2 is not installed.",
             )
 
     def _build_ui(self) -> None:
@@ -1521,7 +1526,6 @@ class MainWindow(QMainWindow):
             if total > 0 or completed > 0:
                 saved_data[gid] = {"totalLength": total, "completedLength": completed}
 
-        # ===== برای تشخیص دانلودهای کامل شده جدید =====
         newly_completed = []
 
         for dl in downloads_list:
@@ -1557,11 +1561,9 @@ class MainWindow(QMainWindow):
                     ]
                     continue
 
-                # ===== چک کردن اینکه دانلود کامل شده =====
                 old_status = self._all_downloads[gid].get("status", "")
                 new_status = dl.get("status", "")
 
-                # اگه status از چیزی غیر از complete به complete تغییر کرده
                 if new_status in ["complete", "completed"] and old_status not in [
                     "complete",
                     "completed",
@@ -1574,7 +1576,6 @@ class MainWindow(QMainWindow):
             else:
                 self._all_downloads[gid] = dl
 
-        # ===== پخش صدا برای دانلودهای جدید کامل شده =====
         for gid in newly_completed:
             self._play_completion_sound()
 
@@ -2923,6 +2924,12 @@ class MainWindow(QMainWindow):
     def _open_settings(self) -> None:
         dlg = SettingsDialog(self.store.settings, self)
         if dlg.exec():
+
+            old_ssl = self.store.settings.get("disable_ssl_verify", False)
+            old_port = self.store.settings.get("aria2_port", 6800)
+            old_host = self.store.settings.get("aria2_host", "http://localhost")
+            old_secret = self.store.settings.get("aria2_secret", "")
+
             s = dlg.get_settings()
             self.store.settings.update(s)
             self.store.save()
@@ -2930,15 +2937,56 @@ class MainWindow(QMainWindow):
             theme = self.store.settings.get("theme", "auto")
             setup_style(QApplication.instance(), theme)
 
-            if not self._apply_settings_to_aria2():
-                self._restart_aria2()
-            else:
-                self.tray.showMessage(
-                    "FelfelDM",
-                    "Settings applied successfully",
-                    QSystemTrayIcon.MessageIcon.Information,
-                    2000,
+            new_ssl = self.store.settings.get("disable_ssl_verify", False)
+            new_port = self.store.settings.get("aria2_port", 6800)
+            new_host = self.store.settings.get("aria2_host", "http://localhost")
+            new_secret = self.store.settings.get("aria2_secret", "")
+
+            needs_restart = (
+                old_ssl != new_ssl
+                or old_port != new_port
+                or old_host != new_host
+                or old_secret != new_secret
+            )
+
+            if needs_restart:
+
+                reply = QMessageBox.information(
+                    self,
+                    "Restart Required",
+                    "Some settings (SSL, Port, Host, Secret) require restarting aria2.\n\n"
+                    "Please restart FelfelDM for changes to take effect.\n\n"
+                    "Do you want to restart now?",
+                    QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
                 )
+
+                if reply == QMessageBox.StandardButton.Yes:
+                    self.quit_app()
+                    self.tray.showMessage(
+                        "FelfelDM",
+                        "✅ aria2 restarted with new settings",
+                        QSystemTrayIcon.MessageIcon.Information,
+                        2000,
+                    )
+                else:
+                    self.tray.showMessage(
+                        "FelfelDM",
+                        "⚠️ Some settings require restart.\nPlease restart FelfelDM later.",
+                        QSystemTrayIcon.MessageIcon.Warning,
+                        3000,
+                    )
+
+            else:
+
+                if not self._apply_settings_to_aria2():
+                    self._restart_aria2()
+                else:
+                    self.tray.showMessage(
+                        "FelfelDM",
+                        "Settings applied successfully",
+                        QSystemTrayIcon.MessageIcon.Information,
+                        2000,
+                    )
 
             self._refresh_table()
 
@@ -2946,12 +2994,21 @@ class MainWindow(QMainWindow):
         try:
             max_concurrent = self.store.settings.get("max_concurrent", 5)
             max_tries = self.store.settings.get("max_tries", 0)
-            self.aria2.change_global_option(
-                {
-                    "max-concurrent-downloads": str(max_concurrent),
-                    "max-tries": str(max_tries),
-                }
-            )
+
+            options = {
+                "max-concurrent-downloads": str(max_concurrent),
+                "max-tries": str(max_tries),
+            }
+
+            if self.store.settings.get("disable_ssl_verify", False):
+                options["check-certificate"] = "false"
+            else:
+                options["check-certificate"] = "true"
+
+            print("apply setting", self.store.settings.get("disable_ssl_verify", False))
+
+            self.aria2.change_global_option(options)
+
             return True
         except Exception:
             return False
@@ -4465,7 +4522,7 @@ class MainWindow(QMainWindow):
         sound_path = self.store.settings.get("sound_path", "")
 
         if not sound_path or not os.path.exists(sound_path):
-            # صدای پیش‌فرض
+
             default_sounds = [
                 "/usr/share/sounds/freedesktop/stereo/complete.oga",
                 "/usr/share/sounds/freedesktop/stereo/complete.wav",
@@ -4480,7 +4537,6 @@ class MainWindow(QMainWindow):
                 return
 
         try:
-            # ===== روش 1: QtMultimedia =====
             from PyQt6.QtMultimedia import QSound
 
             QSound.play(sound_path)
@@ -4490,7 +4546,6 @@ class MainWindow(QMainWindow):
             pass
 
         try:
-            # ===== روش 2: پخش‌کننده سیستم =====
             import subprocess
 
             players = [
@@ -4509,28 +4564,6 @@ class MainWindow(QMainWindow):
                 except FileNotFoundError:
                     continue
         except:
-            pass
-
-        try:
-            # ===== روش 3: pygame =====
-            import pygame
-
-            if not pygame.mixer.get_init():
-                pygame.mixer.init()
-            pygame.mixer.Sound(sound_path).play()
-            print(f"🔊 Playing via pygame: {sound_path}")
-            return
-        except ImportError:
-            pass
-
-        try:
-            # ===== روش 4: playsound3 =====
-            import playsound3
-
-            playsound3.playsound(sound_path)
-            print(f"🔊 Playing via playsound3: {sound_path}")
-            return
-        except ImportError:
             pass
 
         print(f"⚠️ Could not play sound: {sound_path}")

@@ -132,7 +132,12 @@ class Aria2RPC:
             self._connected = False
             return False
 
-    def start_aria2(self, max_concurrent: int = 5, max_tries: int = 5) -> bool:
+    def start_aria2(
+        self,
+        max_concurrent: int = 5,
+        max_tries: int = 5,
+        disable_ssl_verify: bool = False,
+    ) -> bool:
         try:
             self._ensure_session_file()
 
@@ -157,6 +162,9 @@ class Aria2RPC:
                 "--timeout=5",
                 "--connect-timeout=5",
             ]
+
+            if disable_ssl_verify:
+                cmd.append("--check-certificate=false")
 
             if self.secret:
                 cmd.append(f"--rpc-secret={self.secret}")

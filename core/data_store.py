@@ -304,6 +304,9 @@ class DataStore:
             "run_on_startup": False,
             "retry_delay": 1.0,
             "proxy_settings": {"global": None, "queues": {}},
+            "sound_enabled": True,
+            "sound_path": "",
+            "disable_ssl_verify": False,
         }
 
     def _mark_main_dirty(self) -> None:
