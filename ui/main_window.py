@@ -79,6 +79,7 @@ class MainWindow(QMainWindow):
         self.splash = None
         self._details_visible = False
         self.details_panel = None
+        self._completed_gids: Set[str] = set()
         self._queue_list_dirty = True
 
     def _init_ui(self) -> None:
@@ -1520,6 +1521,9 @@ class MainWindow(QMainWindow):
             if total > 0 or completed > 0:
                 saved_data[gid] = {"totalLength": total, "completedLength": completed}
 
+        # ===== برای تشخیص دانلودهای کامل شده جدید =====
+        newly_completed = []
+
         for dl in downloads_list:
             if not isinstance(dl, dict):
                 continue
@@ -1528,7 +1532,6 @@ class MainWindow(QMainWindow):
                 continue
 
             if gid in self._all_downloads:
-
                 new_total = 0
                 try:
                     new_total = (
@@ -1542,7 +1545,6 @@ class MainWindow(QMainWindow):
                     and gid in saved_data
                     and saved_data[gid]["totalLength"] > 0
                 ):
-
                     for key in ["status", "downloadSpeed", "files"]:
                         if key in dl:
                             self._all_downloads[gid][key] = dl[key]
@@ -1553,12 +1555,28 @@ class MainWindow(QMainWindow):
                     self._all_downloads[gid]["completedLength"] = saved_data[gid][
                         "completedLength"
                     ]
-
                     continue
+
+                # ===== چک کردن اینکه دانلود کامل شده =====
+                old_status = self._all_downloads[gid].get("status", "")
+                new_status = dl.get("status", "")
+
+                # اگه status از چیزی غیر از complete به complete تغییر کرده
+                if new_status in ["complete", "completed"] and old_status not in [
+                    "complete",
+                    "completed",
+                ]:
+                    if gid not in self._completed_gids:
+                        self._completed_gids.add(gid)
+                        newly_completed.append(gid)
 
                 self._all_downloads[gid].update(dl)
             else:
                 self._all_downloads[gid] = dl
+
+        # ===== پخش صدا برای دانلودهای جدید کامل شده =====
+        for gid in newly_completed:
+            self._play_completion_sound()
 
         current_gids = {dl.get("gid") for dl in downloads_list if dl.get("gid")}
         for gid in list(self._all_downloads.keys()):
@@ -4438,3 +4456,81 @@ class MainWindow(QMainWindow):
         except Exception as e:
             print(f"⚠️ Could not get aria2 status for {gid}: {e}")
         return None
+
+    def _play_completion_sound(self) -> None:
+        """Play sound when download completes"""
+        if not self.store.settings.get("sound_enabled", True):
+            return
+
+        sound_path = self.store.settings.get("sound_path", "")
+
+        if not sound_path or not os.path.exists(sound_path):
+            # صدای پیش‌فرض
+            default_sounds = [
+                "/usr/share/sounds/freedesktop/stereo/complete.oga",
+                "/usr/share/sounds/freedesktop/stereo/complete.wav",
+                "/usr/share/sounds/alsa/Noise.wav",
+                "/usr/share/sounds/gnome/default/alerts/glass.ogg",
+            ]
+            for s in default_sounds:
+                if os.path.exists(s):
+                    sound_path = s
+                    break
+            else:
+                return
+
+        try:
+            # ===== روش 1: QtMultimedia =====
+            from PyQt6.QtMultimedia import QSound
+
+            QSound.play(sound_path)
+            print(f"🔊 Playing sound: {sound_path}")
+            return
+        except ImportError:
+            pass
+
+        try:
+            # ===== روش 2: پخش‌کننده سیستم =====
+            import subprocess
+
+            players = [
+                ["paplay", sound_path],
+                ["aplay", sound_path],
+                ["ffplay", "-nodisp", "-autoexit", sound_path],
+                ["mpv", "--no-video", sound_path],
+            ]
+            for player in players:
+                try:
+                    subprocess.Popen(
+                        player, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
+                    )
+                    print(f"🔊 Playing via {' '.join(player)}")
+                    return
+                except FileNotFoundError:
+                    continue
+        except:
+            pass
+
+        try:
+            # ===== روش 3: pygame =====
+            import pygame
+
+            if not pygame.mixer.get_init():
+                pygame.mixer.init()
+            pygame.mixer.Sound(sound_path).play()
+            print(f"🔊 Playing via pygame: {sound_path}")
+            return
+        except ImportError:
+            pass
+
+        try:
+            # ===== روش 4: playsound3 =====
+            import playsound3
+
+            playsound3.playsound(sound_path)
+            print(f"🔊 Playing via playsound3: {sound_path}")
+            return
+        except ImportError:
+            pass
+
+        print(f"⚠️ Could not play sound: {sound_path}")

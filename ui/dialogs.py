@@ -1518,8 +1518,107 @@ class SettingsDialog(QDialog):
         self._update_proxy_status()
         self._update_service_status()
 
+        notif_tab = QWidget()
+        notif_layout = QVBoxLayout(notif_tab)
+        notif_layout.setSpacing(10)
+        notif_layout.setContentsMargins(12, 12, 12, 12)
+
+        notif_group = QGroupBox("Download Completion Sound")
+        notif_group_layout = QVBoxLayout(notif_group)
+
+        # چک‌باکس فعال/غیرفعال
+        self.sound_enabled_cb = QCheckBox("Play sound when download completes")
+        self.sound_enabled_cb.setChecked(settings.get("sound_enabled", True))
+        notif_group_layout.addWidget(self.sound_enabled_cb)
+
+        # انتخاب فایل صدا
+        sound_file_row = QHBoxLayout()
+        sound_file_row.setSpacing(6)
+        sound_file_row.addWidget(QLabel("Sound file:"))
+
+        self.sound_path_edit = QLineEdit()
+        self.sound_path_edit.setPlaceholderText("Select a sound file...")
+        self.sound_path_edit.setText(settings.get("sound_path", ""))
+        self.sound_path_edit.setEnabled(self.sound_enabled_cb.isChecked())
+        sound_file_row.addWidget(self.sound_path_edit)
+
+        self.sound_browse_btn = QPushButton("📂 Browse")
+        self.sound_browse_btn.clicked.connect(self._browse_sound_file)
+        self.sound_browse_btn.setEnabled(self.sound_enabled_cb.isChecked())
+        sound_file_row.addWidget(self.sound_browse_btn)
+
+        self.sound_play_btn = QPushButton("▶ Play Test")
+        self.sound_play_btn.clicked.connect(self._play_test_sound)
+        self.sound_play_btn.setEnabled(self.sound_enabled_cb.isChecked())
+        sound_file_row.addWidget(self.sound_play_btn)
+
+        notif_group_layout.addLayout(sound_file_row)
+
+        # اطلاعات
+        info_label = QLabel("Supported formats: WAV, MP3, OGG, FLAC")
+        info_label.setStyleSheet("color: #95a5a6; font-size: 11px;")
+        notif_group_layout.addWidget(info_label)
+
+        notif_layout.addWidget(notif_group)
+        notif_layout.addStretch()
+        tabs.addTab(notif_tab, get_icon("applications-multimedia"), "Notifications")
+
     def _toggle_global_speed(self, checked):
         self.global_speed_spin.setEnabled(checked)
+
+    def _toggle_sound_settings(self, checked):
+        """Enable/disable sound settings based on checkbox"""
+        self.sound_path_edit.setEnabled(checked)
+        self.sound_browse_btn.setEnabled(checked)
+        self.sound_play_btn.setEnabled(checked)
+
+    def _browse_sound_file(self):
+        """Browse for a sound file"""
+        file_path, _ = QFileDialog.getOpenFileName(
+            self,
+            "Select Sound File",
+            "",
+            "Sound Files (*.wav *.mp3 *.ogg *.flac);;All Files (*)",
+        )
+        if file_path:
+            self.sound_path_edit.setText(file_path)
+
+    def _play_test_sound(self):
+        """Play a test sound"""
+        sound_path = self.sound_path_edit.text().strip()
+        if not sound_path or not os.path.exists(sound_path):
+            QMessageBox.warning(self, "Error", "Sound file not found!")
+            return
+
+        try:
+            from PyQt6.QtMultimedia import QSound
+
+            QSound.play(sound_path)
+            return
+        except ImportError:
+            pass
+
+        try:
+            import subprocess
+
+            players = [
+                ["paplay", sound_path],
+                ["aplay", sound_path],
+                ["ffplay", "-nodisp", "-autoexit", sound_path],
+                ["mpv", "--no-video", sound_path],
+            ]
+            for player in players:
+                try:
+                    subprocess.Popen(
+                        player, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
+                    )
+                    return
+                except FileNotFoundError:
+                    continue
+        except:
+            pass
+
+        QMessageBox.warning(self, "Error", "Could not play sound.")
 
     def _update_proxy_status(self):
         from core.proxy_manager import ProxyManager
@@ -1785,6 +1884,8 @@ WantedBy=default.target
             "retry_delay": self.retry_delay.value(),
             "run_on_startup": self.run_on_startup.isChecked(),
             "start_minimized": self.start_minimized.isChecked(),
+            "sound_enabled": self.sound_enabled_cb.isChecked(),
+            "sound_path": self.sound_path_edit.text().strip(),
         }
 
     def _on_startup_toggled(self, checked: bool):
