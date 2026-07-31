@@ -1109,6 +1109,8 @@ class QueueSettingsDialog(QDialog):
         self.conc_spin.setValue(queue.max_concurrent)
         general_layout.addRow("Max Concurrent:", self.conc_spin)
 
+        tabs.addTab(general_tab, get_icon("configure"), "General")
+
         sched_tab = QWidget()
         sched_layout = QVBoxLayout(sched_tab)
         sched_layout.setSpacing(10)
@@ -1215,9 +1217,20 @@ class QueueSettingsDialog(QDialog):
         btn_box = QDialogButtonBox(
             QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
         )
-        btn_box.accepted.connect(self.accept)
+        btn_box.accepted.connect(self._on_accept)
         btn_box.rejected.connect(self.reject)
         main_layout.addWidget(btn_box)
+
+        self._cached_data = None
+
+    def _on_accept(self):
+        # Read every widget value right now, before the dialog closes.
+        # A queued signal from the background worker thread (stats_updated)
+        # can be processed while this dialog's nested event loop is still
+        # running, so we must not wait until after exec() returns to read
+        # from the widgets.
+        self._cached_data = self.get_queue_data()
+        self.accept()
 
     def _browse(self):
         d = QFileDialog.getExistingDirectory(

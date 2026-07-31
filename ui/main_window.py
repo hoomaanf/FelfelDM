@@ -3464,9 +3464,21 @@ class MainWindow(QMainWindow):
         if not q or q.name == "__direct__":
             return
 
-        dlg = QueueSettingsDialog(q, self)
-        if dlg.exec():
-            d = dlg.get_queue_data()
+        # Block queued signals from the background worker (stats_updated,
+        # etc.) while this modal dialog's nested event loop is running.
+        # Otherwise a stats update can be processed mid-dialog and end up
+        # touching UI state while the user is still editing the form,
+        # which previously caused "wrapped C/C++ object has been deleted"
+        # crashes when reading the form back out after exec().
+        self.worker.blockSignals(True)
+        try:
+            dlg = QueueSettingsDialog(q, self)
+            accepted = dlg.exec()
+            d = dlg._cached_data if accepted else None
+        finally:
+            self.worker.blockSignals(False)
+
+        if accepted and d:
             q.name = d["name"]
             q.save_path = d["save_path"]
             q.max_concurrent = d["max_concurrent"]
