@@ -1707,9 +1707,7 @@ class MainWindow(QMainWindow):
 
         self.model.update_rows(filtered)
 
-    def _show_singleton_dialog(
-        self, key: str, dlg: QDialog, on_accepted=None
-    ) -> None:
+    def _show_singleton_dialog(self, key: str, dlg: QDialog, on_accepted=None) -> None:
         """Show `dlg` as its own independent (non-modal) window, tracked
         under `key`. If a dialog is already open under this key, just
         raise/focus that one instead of opening a duplicate.
