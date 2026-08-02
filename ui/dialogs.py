@@ -100,6 +100,8 @@ class AddDownloadDialog(QDialog):
         self.queues = queues
         self.default_queue = default_queue
         self._custom_proxy = None
+        self._visible_queues = [q for q in self.queues if q.name != "__direct__"]
+        self._path_user_edited = False
 
         main_layout = QVBoxLayout(self)
         main_layout.setSpacing(8)
@@ -132,11 +134,11 @@ class AddDownloadDialog(QDialog):
         queue_layout.setSpacing(2)
         queue_layout.addWidget(QLabel("Queue:"))
         self.queue_cb = QComboBox()
-        for q in self.queues:
-            if q.name != "__direct__":
-                self.queue_cb.addItem(q.name)
+        for q in self._visible_queues:
+            self.queue_cb.addItem(q.name)
         if self.default_queue < self.queue_cb.count():
             self.queue_cb.setCurrentIndex(self.default_queue)
+        self.queue_cb.currentIndexChanged.connect(self._on_queue_selection_changed)
         queue_layout.addWidget(self.queue_cb)
         row1.addWidget(queue_widget)
 
@@ -158,7 +160,8 @@ class AddDownloadDialog(QDialog):
         row2 = QHBoxLayout()
         row2.setSpacing(6)
         row2.addWidget(QLabel("Save to:"))
-        self.path_edit = QLineEdit(os.path.expanduser("~/Downloads"))
+        self.path_edit = QLineEdit(self._default_path_for_index(self.default_queue))
+        self.path_edit.textEdited.connect(self._on_path_manually_edited)
         row2.addWidget(self.path_edit)
         self.browse_btn = QPushButton()
         self.browse_btn.setIcon(get_icon("folder-open"))
@@ -232,6 +235,23 @@ class AddDownloadDialog(QDialog):
         )
         if d:
             self.path_edit.setText(d)
+            self._path_user_edited = True
+
+    def _default_path_for_index(self, index):
+        if 0 <= index < len(self._visible_queues):
+            save_path = self._visible_queues[index].save_path
+            if save_path:
+                return save_path
+        return os.path.expanduser("~/Downloads")
+
+    def _on_path_manually_edited(self, _text):
+        self._path_user_edited = True
+
+    def _on_queue_selection_changed(self, index):
+        # Keep "Save to" in sync with the selected queue's default location,
+        # unless the user has explicitly typed or browsed to a custom path.
+        if not self._path_user_edited:
+            self.path_edit.setText(self._default_path_for_index(index))
 
     def _import_from_txt(self):
         file_path, _ = QFileDialog.getOpenFileName(
@@ -318,6 +338,8 @@ class QuickDownloadDialog(QDialog):
 
         self.queues = queues
         self._custom_proxy = None
+        self._queues_by_name = {q.name: q for q in self.queues}
+        self._path_user_edited = False
 
         main_layout = QVBoxLayout(self)
         main_layout.setSpacing(8)
@@ -350,6 +372,7 @@ class QuickDownloadDialog(QDialog):
         for q in self.queues:
             if q.name != "__direct__":
                 self.queue_combo.addItem(q.name, q.name)
+        self.queue_combo.currentIndexChanged.connect(self._on_queue_selection_changed)
         queue_layout.addWidget(self.queue_combo)
         row1.addWidget(queue_widget)
 
@@ -371,7 +394,8 @@ class QuickDownloadDialog(QDialog):
         row2 = QHBoxLayout()
         row2.setSpacing(6)
         row2.addWidget(QLabel("Save to:"))
-        self.path_edit = QLineEdit(os.path.expanduser("~/Downloads"))
+        self.path_edit = QLineEdit(self._default_path_for_queue_name("__direct__"))
+        self.path_edit.textEdited.connect(self._on_path_manually_edited)
         row2.addWidget(self.path_edit)
         self.browse_btn = QPushButton()
         self.browse_btn.setIcon(get_icon("folder-open"))
@@ -438,6 +462,21 @@ class QuickDownloadDialog(QDialog):
         )
         if d:
             self.path_edit.setText(d)
+            self._path_user_edited = True
+
+    def _default_path_for_queue_name(self, queue_name):
+        q = self._queues_by_name.get(queue_name)
+        if q and q.save_path:
+            return q.save_path
+        return os.path.expanduser("~/Downloads")
+
+    def _on_path_manually_edited(self, _text):
+        self._path_user_edited = True
+
+    def _on_queue_selection_changed(self, _index):
+        if not self._path_user_edited:
+            queue_name = self.queue_combo.currentData()
+            self.path_edit.setText(self._default_path_for_queue_name(queue_name))
 
     def _on_proxy_mode_changed(self, index):
         is_custom = index == 1
@@ -671,6 +710,7 @@ class YouTubeDownloadDialog(QDialog):
         self._custom_proxy = None
         self._format_map = {}
         self.worker = None
+        self._path_user_edited = False
 
         main_layout = QVBoxLayout(self)
         main_layout.setSpacing(8)
@@ -713,6 +753,7 @@ class YouTubeDownloadDialog(QDialog):
         path_row = QHBoxLayout()
         path_row.setSpacing(6)
         self.path_edit = QLineEdit(os.path.expanduser("~/Downloads"))
+        self.path_edit.textEdited.connect(self._on_path_manually_edited)
         path_row.addWidget(self.path_edit)
         self.browse_btn = QPushButton()
         self.browse_btn.setIcon(get_icon("folder-open"))
@@ -739,7 +780,13 @@ class YouTubeDownloadDialog(QDialog):
                 self.queue_combo.addItem(q.name, i)
         if self.default_queue < self.queue_combo.count():
             self.queue_combo.setCurrentIndex(self.default_queue)
+        self.queue_combo.currentIndexChanged.connect(self._on_queue_selection_changed)
         opts_acc.addWidget(self.queue_combo)
+
+        # Now that the queue combo has a selection, sync the save path to it
+        # (the field was created earlier with a placeholder default).
+        self._on_queue_selection_changed(self.queue_combo.currentIndex())
+        self._path_user_edited = False
 
         main_layout.addWidget(opts_acc)
 
@@ -812,6 +859,18 @@ class YouTubeDownloadDialog(QDialog):
         )
         if d:
             self.path_edit.setText(d)
+            self._path_user_edited = True
+
+    def _on_path_manually_edited(self, _text):
+        self._path_user_edited = True
+
+    def _on_queue_selection_changed(self, _index):
+        if self._path_user_edited:
+            return
+        queue_idx = self.queue_combo.currentData()
+        if queue_idx is not None and 0 <= queue_idx < len(self.queues):
+            save_path = self.queues[queue_idx].save_path
+            self.path_edit.setText(save_path or os.path.expanduser("~/Downloads"))
 
     def _browse_cookie(self):
         file_path, _ = QFileDialog.getOpenFileName(
