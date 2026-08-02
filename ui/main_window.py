@@ -81,6 +81,7 @@ class MainWindow(QMainWindow):
         self.details_panel = None
         self._completed_gids: Set[str] = set()
         self._queue_list_dirty = True
+        self._open_dialogs: Dict[str, QDialog] = {}
 
     def _init_ui(self) -> None:
         theme_setting: str = self.store.settings.get("theme", "auto")
@@ -1706,6 +1707,52 @@ class MainWindow(QMainWindow):
 
         self.model.update_rows(filtered)
 
+    def _show_singleton_dialog(
+        self, key: str, dlg: QDialog, on_accepted=None
+    ) -> None:
+        """Show `dlg` as its own independent (non-modal) window, tracked
+        under `key`. If a dialog is already open under this key, just
+        raise/focus that one instead of opening a duplicate.
+
+        `dlg` should already be fully built (fields pre-filled, signals
+        for its own internal logic connected) before calling this.
+        `on_accepted(dlg)`, if given, runs when the dialog is accepted
+        (OK clicked) — read whatever you need from `dlg` inside it,
+        since the dialog is destroyed shortly after.
+        """
+        existing = self._open_dialogs.get(key)
+        if existing is not None:
+            try:
+                if existing.isVisible():
+                    existing.raise_()
+                    existing.activateWindow()
+                    return
+            except RuntimeError:
+                pass
+            self._open_dialogs.pop(key, None)
+
+        self._open_dialogs[key] = dlg
+        dlg.setWindowModality(Qt.WindowModality.NonModal)
+        dlg.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose, True)
+
+        def _cleanup():
+            if self._open_dialogs.get(key) is dlg:
+                self._open_dialogs.pop(key, None)
+
+        def _handle_accepted():
+            try:
+                if on_accepted:
+                    on_accepted(dlg)
+            finally:
+                _cleanup()
+
+        dlg.accepted.connect(_handle_accepted)
+        dlg.rejected.connect(_cleanup)
+
+        dlg.show()
+        dlg.raise_()
+        dlg.activateWindow()
+
     def _add_download(self) -> None:
         visible_queues = [q for q in self.store.queues if q.name != "__direct__"]
 
@@ -1729,144 +1776,149 @@ class MainWindow(QMainWindow):
             if valid_lines:
                 dlg.url_edit.setPlainText("\n".join(valid_lines))
 
-        if dlg.exec():
-            d = dlg.get_data()
-            if not d["urls"]:
-                return
+        self._show_singleton_dialog(
+            "add_download", dlg, on_accepted=self._process_add_download
+        )
 
-            queue_index = d["queue"]
-            if queue_index < 0 or queue_index >= len(visible_queues):
-                QMessageBox.warning(self, "Error", "Selected queue does not exist.")
-                return
+    def _process_add_download(self, dlg: "AddDownloadDialog") -> None:
+        visible_queues = [q for q in self.store.queues if q.name != "__direct__"]
+        d = dlg.get_data()
+        if not d["urls"]:
+            return
 
-            q = visible_queues[queue_index]
-            self._apply_settings_to_aria2()
+        queue_index = d["queue"]
+        if queue_index < 0 or queue_index >= len(visible_queues):
+            QMessageBox.warning(self, "Error", "Selected queue does not exist.")
+            return
 
-            proxy_mode = d.get("proxy_mode", 0)
-            options = {
-                "dir": d["path"],
-                "split": str(d["connections"]),
-                "max-connection-per-server": str(d["connections"]),
-                "min-split-size": "1M",
-                "stream-piece-selector": "geom",
-                "continue": "true",
-                "always-resume": "true",
-                "header": [
-                    "User-Agent: Mozilla/5.0 (X11; Linux x86_64; rv:125.0) Gecko/20100101 Firefox/125.0"
-                ],
-            }
+        q = visible_queues[queue_index]
+        self._apply_settings_to_aria2()
 
-            if proxy_mode == 0:
-                proxy = self.proxy_manager.get_proxy_for_queue(q.name)
-                if proxy and proxy.is_valid():
-                    options["all-proxy"] = proxy._build_proxy_url()
-            elif proxy_mode == 1:
-                custom_proxy = d.get("custom_proxy")
-                if custom_proxy and custom_proxy.is_valid():
-                    options["all-proxy"] = custom_proxy._build_proxy_url()
-            elif proxy_mode == 2:
-                options["all-proxy"] = ""
+        proxy_mode = d.get("proxy_mode", 0)
+        options = {
+            "dir": d["path"],
+            "split": str(d["connections"]),
+            "max-connection-per-server": str(d["connections"]),
+            "min-split-size": "1M",
+            "stream-piece-selector": "geom",
+            "continue": "true",
+            "always-resume": "true",
+            "header": [
+                "User-Agent: Mozilla/5.0 (X11; Linux x86_64; rv:125.0) Gecko/20100101 Firefox/125.0"
+            ],
+        }
 
-            added = 0
-            new_gids = []
+        if proxy_mode == 0:
+            proxy = self.proxy_manager.get_proxy_for_queue(q.name)
+            if proxy and proxy.is_valid():
+                options["all-proxy"] = proxy._build_proxy_url()
+        elif proxy_mode == 1:
+            custom_proxy = d.get("custom_proxy")
+            if custom_proxy and custom_proxy.is_valid():
+                options["all-proxy"] = custom_proxy._build_proxy_url()
+        elif proxy_mode == 2:
+            options["all-proxy"] = ""
 
-            for url in d["urls"]:
-                options_with_pause = options.copy()
-                options_with_pause["pause"] = "true"
-                gid = self.aria2.add_url(url, options_with_pause)
+        added = 0
+        new_gids = []
 
-                if gid:
-                    if gid in self._cleared_gids:
-                        self._cleared_gids.remove(gid)
+        for url in d["urls"]:
+            options_with_pause = options.copy()
+            options_with_pause["pause"] = "true"
+            gid = self.aria2.add_url(url, options_with_pause)
 
-                    q.downloads.append(gid)
+            if gid:
+                if gid in self._cleared_gids:
+                    self._cleared_gids.remove(gid)
 
-                    clean_name = self._extract_filename(url)
-                    full_path = os.path.join(d["path"], clean_name)
+                q.downloads.append(gid)
 
-                    q.downloads_info[gid] = {
-                        "url": url,
-                        "name": clean_name,
-                        "totalLength": 0,
-                        "completedLength": 0,
-                        "status": "waiting",
-                        "files": [{"path": full_path}],
-                        "category": "📁 Other",
-                        "download_type": "normal",
-                    }
+                clean_name = self._extract_filename(url)
+                full_path = os.path.join(d["path"], clean_name)
 
-                    new_gids.append(gid)
-                    added += 1
+                q.downloads_info[gid] = {
+                    "url": url,
+                    "name": clean_name,
+                    "totalLength": 0,
+                    "completedLength": 0,
+                    "status": "waiting",
+                    "files": [{"path": full_path}],
+                    "category": "📁 Other",
+                    "download_type": "normal",
+                }
 
-                    self._all_downloads[gid] = {
-                        "gid": gid,
-                        "name": clean_name,
-                        "status": "waiting",
-                        "totalLength": 0,
-                        "completedLength": 0,
-                        "downloadSpeed": 0,
-                        "connections": 0,
-                        "files": [{"path": full_path}],
-                        "errorMessage": "",
-                        "category": "📁 Other",
-                        "size_fetch_attempts": 0,
-                        "download_type": "normal",
-                    }
+                new_gids.append(gid)
+                added += 1
 
-                    if q and getattr(q, "speed_limit", 0) > 0:
-                        self.worker.set_speed_limit_requested.emit(gid, q.speed_limit)
+                self._all_downloads[gid] = {
+                    "gid": gid,
+                    "name": clean_name,
+                    "status": "waiting",
+                    "totalLength": 0,
+                    "completedLength": 0,
+                    "downloadSpeed": 0,
+                    "connections": 0,
+                    "files": [{"path": full_path}],
+                    "errorMessage": "",
+                    "category": "📁 Other",
+                    "size_fetch_attempts": 0,
+                    "download_type": "normal",
+                }
 
+                if q and getattr(q, "speed_limit", 0) > 0:
+                    self.worker.set_speed_limit_requested.emit(gid, q.speed_limit)
+
+        self.store.save()
+        self._queue_list_dirty = True
+        self._refresh_queue_list()
+        self._refresh_table()
+        self._update_queue_buttons()
+        self._update_shutdown_button_state()
+
+        if q.name == "__direct__":
+            for gid in new_gids:
+                self.worker.resume_requested.emit(gid)
+                if gid in self._all_downloads:
+                    self._all_downloads[gid]["status"] = "active"
+                    if gid in q.downloads_info:
+                        q.downloads_info[gid]["status"] = "active"
             self.store.save()
-            self._queue_list_dirty = True
-            self._refresh_queue_list()
-            self._refresh_table()
-            self._update_queue_buttons()
-            self._update_shutdown_button_state()
+            self.tray.showMessage(
+                "FelfelDM",
+                f"✅ Added {added} download(s) to 'Direct Downloads' (started)",
+                QSystemTrayIcon.MessageIcon.Information,
+                2000,
+            )
+        elif q.paused:
+            for gid in new_gids:
+                if gid in self._all_downloads:
+                    self._all_downloads[gid]["status"] = "paused"
+                    self._all_downloads[gid]["downloadSpeed"] = 0
+                    if gid in q.downloads_info:
+                        q.downloads_info[gid]["status"] = "paused"
+            self.store.save()
+            self.tray.showMessage(
+                "FelfelDM",
+                f"✅ Added {added} download(s) to '{q.name}' (paused)",
+                QSystemTrayIcon.MessageIcon.Information,
+                2000,
+            )
+        else:
+            for gid in new_gids:
+                self.worker.resume_requested.emit(gid)
+                if gid in self._all_downloads:
+                    self._all_downloads[gid]["status"] = "active"
+                    if gid in q.downloads_info:
+                        q.downloads_info[gid]["status"] = "active"
+            self.store.save()
+            self.tray.showMessage(
+                "FelfelDM",
+                f"✅ Added {added} download(s) to '{q.name}' (downloading)",
+                QSystemTrayIcon.MessageIcon.Information,
+                2000,
+            )
 
-            if q.name == "__direct__":
-                for gid in new_gids:
-                    self.worker.resume_requested.emit(gid)
-                    if gid in self._all_downloads:
-                        self._all_downloads[gid]["status"] = "active"
-                        if gid in q.downloads_info:
-                            q.downloads_info[gid]["status"] = "active"
-                self.store.save()
-                self.tray.showMessage(
-                    "FelfelDM",
-                    f"✅ Added {added} download(s) to 'Direct Downloads' (started)",
-                    QSystemTrayIcon.MessageIcon.Information,
-                    2000,
-                )
-            elif q.paused:
-                for gid in new_gids:
-                    if gid in self._all_downloads:
-                        self._all_downloads[gid]["status"] = "paused"
-                        self._all_downloads[gid]["downloadSpeed"] = 0
-                        if gid in q.downloads_info:
-                            q.downloads_info[gid]["status"] = "paused"
-                self.store.save()
-                self.tray.showMessage(
-                    "FelfelDM",
-                    f"✅ Added {added} download(s) to '{q.name}' (paused)",
-                    QSystemTrayIcon.MessageIcon.Information,
-                    2000,
-                )
-            else:
-                for gid in new_gids:
-                    self.worker.resume_requested.emit(gid)
-                    if gid in self._all_downloads:
-                        self._all_downloads[gid]["status"] = "active"
-                        if gid in q.downloads_info:
-                            q.downloads_info[gid]["status"] = "active"
-                self.store.save()
-                self.tray.showMessage(
-                    "FelfelDM",
-                    f"✅ Added {added} download(s) to '{q.name}' (downloading)",
-                    QSystemTrayIcon.MessageIcon.Information,
-                    2000,
-                )
-
-            self._refresh_table()
+        self._refresh_table()
 
     def _build_details_panel(self) -> QWidget:
         """Collapsible details panel for selected download"""
@@ -2230,111 +2282,115 @@ class MainWindow(QMainWindow):
         if clip and clip.startswith(("http", "magnet:", "ftp")):
             dlg.url_edit.setText(clip)
 
-        if dlg.exec():
-            d = dlg.get_data()
-            if not d["urls"]:
-                return
+        self._show_singleton_dialog(
+            "quick_download", dlg, on_accepted=self._process_quick_download
+        )
 
-            queue_name = d.get("queue_name", "__direct__")
-            target_queue = self._get_or_create_queue(queue_name)
+    def _process_quick_download(self, dlg: "QuickDownloadDialog") -> None:
+        d = dlg.get_data()
+        if not d["urls"]:
+            return
 
-            options = {
-                "dir": d["path"],
-                "split": str(d["connections"]),
-                "max-connection-per-server": str(d["connections"]),
-                "min-split-size": "1M",
-                "continue": "true",
-                "always-resume": "true",
-                "header": [
-                    "User-Agent: Mozilla/5.0 (X11; Linux x86_64; rv:125.0) Gecko/20100101 Firefox/125.0"
-                ],
-            }
+        queue_name = d.get("queue_name", "__direct__")
+        target_queue = self._get_or_create_queue(queue_name)
 
-            proxy_mode = d.get("proxy_mode", 0)
-            if proxy_mode == 0:
-                proxy = self.proxy_manager.get_proxy_for_queue(target_queue.name)
-                if proxy and proxy.is_valid():
-                    options["all-proxy"] = proxy._build_proxy_url()
-            elif proxy_mode == 1:
-                custom_proxy = d.get("custom_proxy")
-                if custom_proxy and custom_proxy.is_valid():
-                    options["all-proxy"] = custom_proxy._build_proxy_url()
-            elif proxy_mode == 2:
-                options["all-proxy"] = ""
+        options = {
+            "dir": d["path"],
+            "split": str(d["connections"]),
+            "max-connection-per-server": str(d["connections"]),
+            "min-split-size": "1M",
+            "continue": "true",
+            "always-resume": "true",
+            "header": [
+                "User-Agent: Mozilla/5.0 (X11; Linux x86_64; rv:125.0) Gecko/20100101 Firefox/125.0"
+            ],
+        }
 
-            added_gids = []
-            for url in d["urls"]:
-                options_with_pause = options.copy()
-                options_with_pause["pause"] = "true"
-                gid = self.aria2.add_url(url, options_with_pause)
+        proxy_mode = d.get("proxy_mode", 0)
+        if proxy_mode == 0:
+            proxy = self.proxy_manager.get_proxy_for_queue(target_queue.name)
+            if proxy and proxy.is_valid():
+                options["all-proxy"] = proxy._build_proxy_url()
+        elif proxy_mode == 1:
+            custom_proxy = d.get("custom_proxy")
+            if custom_proxy and custom_proxy.is_valid():
+                options["all-proxy"] = custom_proxy._build_proxy_url()
+        elif proxy_mode == 2:
+            options["all-proxy"] = ""
 
-                if gid:
-                    target_queue.downloads.append(gid)
-                    clean_name = self._extract_filename(url)
-                    full_path = os.path.join(d["path"], clean_name)
+        added_gids = []
+        for url in d["urls"]:
+            options_with_pause = options.copy()
+            options_with_pause["pause"] = "true"
+            gid = self.aria2.add_url(url, options_with_pause)
 
-                    target_queue.downloads_info[gid] = {
-                        "url": url,
-                        "name": clean_name,
-                        "totalLength": 0,
-                        "completedLength": 0,
-                        "status": "waiting",
-                        "files": [{"path": full_path}],
-                        "category": "📁 Other",
-                        "download_type": "normal",
-                    }
+            if gid:
+                target_queue.downloads.append(gid)
+                clean_name = self._extract_filename(url)
+                full_path = os.path.join(d["path"], clean_name)
 
-                    self._all_downloads[gid] = {
-                        "gid": gid,
-                        "name": clean_name,
-                        "status": "waiting",
-                        "totalLength": 0,
-                        "completedLength": 0,
-                        "downloadSpeed": 0,
-                        "connections": 0,
-                        "files": [{"path": full_path}],
-                        "errorMessage": "",
-                        "category": "📁 Other",
-                        "size_fetch_attempts": 0,
-                        "download_type": "normal",
-                    }
+                target_queue.downloads_info[gid] = {
+                    "url": url,
+                    "name": clean_name,
+                    "totalLength": 0,
+                    "completedLength": 0,
+                    "status": "waiting",
+                    "files": [{"path": full_path}],
+                    "category": "📁 Other",
+                    "download_type": "normal",
+                }
 
-                    added_gids.append(gid)
+                self._all_downloads[gid] = {
+                    "gid": gid,
+                    "name": clean_name,
+                    "status": "waiting",
+                    "totalLength": 0,
+                    "completedLength": 0,
+                    "downloadSpeed": 0,
+                    "connections": 0,
+                    "files": [{"path": full_path}],
+                    "errorMessage": "",
+                    "category": "📁 Other",
+                    "size_fetch_attempts": 0,
+                    "download_type": "normal",
+                }
 
+                added_gids.append(gid)
+
+        self.store.save()
+        self._refresh_queue_list()
+        self._refresh_table()
+        self._update_shutdown_button_state()
+
+        if queue_name == "__direct__":
+            target_queue.paused = False
+            for gid in added_gids:
+
+                def start_direct_download(gid=gid):
+                    try:
+                        self.worker.resume_requested.emit(gid)
+                        self._all_downloads[gid]["status"] = "active"
+                        if gid in target_queue.downloads_info:
+                            target_queue.downloads_info[gid]["status"] = "active"
+                    except Exception as e:
+                        print(f"⚠️ Could not resume: {e}")
+                    self._open_progress_dialog(gid)
+
+                QTimer.singleShot(500, lambda gid=gid: start_direct_download(gid))
             self.store.save()
-            self._refresh_queue_list()
-            self._refresh_table()
-            self._update_shutdown_button_state()
-
-            if queue_name == "__direct__":
-                target_queue.paused = False
+        else:
+            if target_queue.paused:
                 for gid in added_gids:
-
-                    def start_direct_download(gid=gid):
-                        try:
-                            self.worker.resume_requested.emit(gid)
-                            self._all_downloads[gid]["status"] = "active"
-                            if gid in target_queue.downloads_info:
-                                target_queue.downloads_info[gid]["status"] = "active"
-                        except Exception as e:
-                            print(f"⚠️ Could not resume: {e}")
-                        self._open_progress_dialog(gid)
-
-                    QTimer.singleShot(500, lambda gid=gid: start_direct_download(gid))
+                    try:
+                        self.worker.pause_requested.emit(gid)
+                        if gid in self._all_downloads:
+                            self._all_downloads[gid]["status"] = "paused"
+                            self._all_downloads[gid]["downloadSpeed"] = 0
+                        if gid in target_queue.downloads_info:
+                            target_queue.downloads_info[gid]["status"] = "paused"
+                    except Exception as e:
+                        print(f"⚠️ Could not pause {gid}: {e}")
                 self.store.save()
-            else:
-                if target_queue.paused:
-                    for gid in added_gids:
-                        try:
-                            self.worker.pause_requested.emit(gid)
-                            if gid in self._all_downloads:
-                                self._all_downloads[gid]["status"] = "paused"
-                                self._all_downloads[gid]["downloadSpeed"] = 0
-                            if gid in target_queue.downloads_info:
-                                target_queue.downloads_info[gid]["status"] = "paused"
-                        except Exception as e:
-                            print(f"⚠️ Could not pause {gid}: {e}")
-                    self.store.save()
 
     def _remove_selected(self) -> None:
         selected = self.table.selectionModel().selectedRows()
@@ -2633,7 +2689,7 @@ class MainWindow(QMainWindow):
         if clip and ("youtube.com" in clip or "youtu.be" in clip):
             dlg.url_edit.setText(clip)
 
-        dlg.exec()
+        self._show_singleton_dialog("youtube_download", dlg)
 
     def _add_youtube_to_queue(self, download_data: Dict[str, Any]) -> None:
         print("🎯 _add_youtube_to_queue CALLED")
@@ -2923,72 +2979,75 @@ class MainWindow(QMainWindow):
 
     def _open_settings(self) -> None:
         dlg = SettingsDialog(self.store.settings, self)
-        if dlg.exec():
+        self._show_singleton_dialog(
+            "app_settings", dlg, on_accepted=self._process_settings
+        )
 
-            old_ssl = self.store.settings.get("disable_ssl_verify", False)
-            old_port = self.store.settings.get("aria2_port", 6800)
-            old_host = self.store.settings.get("aria2_host", "http://localhost")
-            old_secret = self.store.settings.get("aria2_secret", "")
+    def _process_settings(self, dlg: "SettingsDialog") -> None:
+        old_ssl = self.store.settings.get("disable_ssl_verify", False)
+        old_port = self.store.settings.get("aria2_port", 6800)
+        old_host = self.store.settings.get("aria2_host", "http://localhost")
+        old_secret = self.store.settings.get("aria2_secret", "")
 
-            s = dlg.get_settings()
-            self.store.settings.update(s)
-            self.store.save()
+        s = dlg.get_settings()
+        self.store.settings.update(s)
+        self.store.save()
 
-            theme = self.store.settings.get("theme", "auto")
-            setup_style(QApplication.instance(), theme)
+        theme = self.store.settings.get("theme", "auto")
+        setup_style(QApplication.instance(), theme)
 
-            new_ssl = self.store.settings.get("disable_ssl_verify", False)
-            new_port = self.store.settings.get("aria2_port", 6800)
-            new_host = self.store.settings.get("aria2_host", "http://localhost")
-            new_secret = self.store.settings.get("aria2_secret", "")
+        new_ssl = self.store.settings.get("disable_ssl_verify", False)
+        new_port = self.store.settings.get("aria2_port", 6800)
+        new_host = self.store.settings.get("aria2_host", "http://localhost")
+        new_secret = self.store.settings.get("aria2_secret", "")
 
-            needs_restart = (
-                old_ssl != new_ssl
-                or old_port != new_port
-                or old_host != new_host
-                or old_secret != new_secret
+        needs_restart = (
+            old_ssl != new_ssl
+            or old_port != new_port
+            or old_host != new_host
+            or old_secret != new_secret
+        )
+
+        if needs_restart:
+
+            reply = QMessageBox.information(
+                self,
+                "Restart Required",
+                "Some settings (SSL, Port, Host, Secret) require restarting aria2.\n\n"
+                "Please restart FelfelDM for changes to take effect.\n\n"
+                "Do you want to restart now?",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
             )
 
-            if needs_restart:
-
-                reply = QMessageBox.information(
-                    self,
-                    "Restart Required",
-                    "Some settings (SSL, Port, Host, Secret) require restarting aria2.\n\n"
-                    "Please restart FelfelDM for changes to take effect.\n\n"
-                    "Do you want to restart now?",
-                    QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            if reply == QMessageBox.StandardButton.Yes:
+                self.quit_app()
+                self.tray.showMessage(
+                    "FelfelDM",
+                    "✅ aria2 restarted with new settings",
+                    QSystemTrayIcon.MessageIcon.Information,
+                    2000,
+                )
+            else:
+                self.tray.showMessage(
+                    "FelfelDM",
+                    "⚠️ Some settings require restart.\nPlease restart FelfelDM later.",
+                    QSystemTrayIcon.MessageIcon.Warning,
+                    3000,
                 )
 
-                if reply == QMessageBox.StandardButton.Yes:
-                    self.quit_app()
-                    self.tray.showMessage(
-                        "FelfelDM",
-                        "✅ aria2 restarted with new settings",
-                        QSystemTrayIcon.MessageIcon.Information,
-                        2000,
-                    )
-                else:
-                    self.tray.showMessage(
-                        "FelfelDM",
-                        "⚠️ Some settings require restart.\nPlease restart FelfelDM later.",
-                        QSystemTrayIcon.MessageIcon.Warning,
-                        3000,
-                    )
+        else:
 
+            if not self._apply_settings_to_aria2():
+                self._restart_aria2()
             else:
+                self.tray.showMessage(
+                    "FelfelDM",
+                    "Settings applied successfully",
+                    QSystemTrayIcon.MessageIcon.Information,
+                    2000,
+                )
 
-                if not self._apply_settings_to_aria2():
-                    self._restart_aria2()
-                else:
-                    self.tray.showMessage(
-                        "FelfelDM",
-                        "Settings applied successfully",
-                        QSystemTrayIcon.MessageIcon.Information,
-                        2000,
-                    )
-
-            self._refresh_table()
+        self._refresh_table()
 
     def _apply_settings_to_aria2(self) -> bool:
         try:
@@ -3464,43 +3523,40 @@ class MainWindow(QMainWindow):
         if not q or q.name == "__direct__":
             return
 
-        # Block queued signals from the background worker (stats_updated,
-        # etc.) while this modal dialog's nested event loop is running.
-        # Otherwise a stats update can be processed mid-dialog and end up
-        # touching UI state while the user is still editing the form,
-        # which previously caused "wrapped C/C++ object has been deleted"
-        # crashes when reading the form back out after exec().
-        self.worker.blockSignals(True)
-        try:
-            dlg = QueueSettingsDialog(q, self)
-            accepted = dlg.exec()
-            d = dlg._cached_data if accepted else None
-        finally:
-            self.worker.blockSignals(False)
+        dlg = QueueSettingsDialog(q, self)
+        self._show_singleton_dialog(
+            f"queue_settings:{id(q)}",
+            dlg,
+            on_accepted=lambda dlg, q=q: self._process_edit_queue(dlg, q),
+        )
 
-        if accepted and d:
-            q.name = d["name"]
-            q.save_path = d["save_path"]
-            q.max_concurrent = d["max_concurrent"]
-            self.store.settings["max_concurrent"] = d["max_concurrent"]
-            q.schedule_enabled = d["schedule_enabled"]
-            q.schedule_start = d["schedule_start"]
-            q.schedule_end = d["schedule_end"]
-            q.days = d["days"]
-            q.speed_limit = d.get("speed_limit", 0)
-            q.proxy_config = d.get("proxy_config")
-            q.manually_paused = False
+    def _process_edit_queue(self, dlg: "QueueSettingsDialog", q: Queue) -> None:
+        d = dlg._cached_data
+        if not d:
+            return
 
-            if q.proxy_config:
-                self.proxy_manager.set_queue_proxy(q.name, q.proxy_config)
-            else:
-                self.proxy_manager.remove_queue_proxy(q.name)
+        q.name = d["name"]
+        q.save_path = d["save_path"]
+        q.max_concurrent = d["max_concurrent"]
+        self.store.settings["max_concurrent"] = d["max_concurrent"]
+        q.schedule_enabled = d["schedule_enabled"]
+        q.schedule_start = d["schedule_start"]
+        q.schedule_end = d["schedule_end"]
+        q.days = d["days"]
+        q.speed_limit = d.get("speed_limit", 0)
+        q.proxy_config = d.get("proxy_config")
+        q.manually_paused = False
 
-            self.store.save()
-            self._refresh_queue_list()
-            self._update_queue_buttons()
-            self._apply_settings_to_aria2()
-            self._apply_queue_speed_limit(q)
+        if q.proxy_config:
+            self.proxy_manager.set_queue_proxy(q.name, q.proxy_config)
+        else:
+            self.proxy_manager.remove_queue_proxy(q.name)
+
+        self.store.save()
+        self._refresh_queue_list()
+        self._update_queue_buttons()
+        self._apply_settings_to_aria2()
+        self._apply_queue_speed_limit(q)
 
     def _delete_queue(self) -> None:
         q = self._current_queue()
@@ -4265,79 +4321,10 @@ class MainWindow(QMainWindow):
         all_queues = self.store.queues
         dlg = QuickDownloadDialog(all_queues, self)
         dlg.url_edit.setPlainText(url)
-        dlg.setWindowModality(Qt.WindowModality.WindowModal)
 
-        if dlg.exec():
-            d = dlg.get_data()
-            if not d["urls"]:
-                return
-
-            queue_name = d.get("queue_name", "__direct__")
-            target_queue = self._get_or_create_queue(queue_name)
-
-            options = {
-                "dir": d["path"],
-                "split": str(d["connections"]),
-                "max-connection-per-server": str(d["connections"]),
-                "min-split-size": "1M",
-                "continue": "true",
-                "always-resume": "true",
-                "header": ["User-Agent: Mozilla/5.0 ..."],
-            }
-
-            added_gids = []
-            for url in d["urls"]:
-                options_with_pause = options.copy()
-                options_with_pause["pause"] = "true"
-                gid = self.aria2.add_url(url, options_with_pause)
-
-                if gid:
-                    target_queue.downloads.append(gid)
-                    clean_name = self._extract_filename(url)
-                    full_path = os.path.join(d["path"], clean_name)
-
-                    target_queue.downloads_info[gid] = {
-                        "url": url,
-                        "name": clean_name,
-                        "totalLength": 0,
-                        "completedLength": 0,
-                        "status": "waiting",
-                        "files": [{"path": full_path}],
-                        "category": "📁 Other",
-                    }
-
-                    self._all_downloads[gid] = {
-                        "gid": gid,
-                        "name": clean_name,
-                        "status": "waiting",
-                        "totalLength": 0,
-                        "completedLength": 0,
-                        "downloadSpeed": 0,
-                        "connections": 0,
-                        "files": [{"path": full_path}],
-                        "errorMessage": "",
-                        "category": "📁 Other",
-                        "size_fetch_attempts": 0,
-                    }
-
-                    if queue_name == "__direct__":
-                        self.worker.resume_requested.emit(gid)
-                        self._all_downloads[gid]["status"] = "active"
-                    else:
-                        self._all_downloads[gid]["status"] = "paused"
-                        self._all_downloads[gid]["downloadSpeed"] = 0
-
-                    added_gids.append(gid)
-
-            self.store.save()
-            self._refresh_queue_list()
-            self._refresh_table()
-            self._update_shutdown_button_state()
-
-            if len(added_gids) == 1 and queue_name == "__direct__":
-                QTimer.singleShot(
-                    500, lambda: self._open_progress_dialog(added_gids[0])
-                )
+        self._show_singleton_dialog(
+            "quick_download", dlg, on_accepted=self._process_quick_download
+        )
 
     def _add_multiple_urls_from_extension(self, urls: List[str]) -> None:
         visible_queues = [q for q in self.store.queues if q.name != "__direct__"]
@@ -4348,76 +4335,9 @@ class MainWindow(QMainWindow):
         dlg = AddDownloadDialog(visible_queues, default_idx, self)
         dlg.url_edit.setPlainText("\n".join(urls))
 
-        if dlg.exec():
-            d = dlg.get_data()
-            if not d["urls"]:
-                return
-
-            queue_index = d["queue"]
-            if queue_index < 0 or queue_index >= len(visible_queues):
-                QMessageBox.warning(self, "Error", "Selected queue does not exist.")
-                return
-
-            q = visible_queues[queue_index]
-            self._apply_settings_to_aria2()
-
-            options = {
-                "dir": d["path"],
-                "split": str(d["connections"]),
-                "max-connection-per-server": str(d["connections"]),
-                "min-split-size": "1M",
-                "continue": "true",
-                "always-resume": "true",
-                "header": ["User-Agent: Mozilla/5.0 ..."],
-            }
-
-            new_gids = []
-            for url in d["urls"]:
-                options_with_pause = options.copy()
-                options_with_pause["pause"] = "true"
-                gid = self.aria2.add_url(url, options_with_pause)
-
-                if gid:
-                    q.downloads.append(gid)
-                    clean_name = self._extract_filename(url)
-                    full_path = os.path.join(d["path"], clean_name)
-
-                    q.downloads_info[gid] = {
-                        "url": url,
-                        "name": clean_name,
-                        "totalLength": 0,
-                        "completedLength": 0,
-                        "status": "waiting",
-                        "files": [{"path": full_path}],
-                        "category": "📁 Other",
-                    }
-
-                    self._all_downloads[gid] = {
-                        "gid": gid,
-                        "name": clean_name,
-                        "status": "waiting",
-                        "totalLength": 0,
-                        "completedLength": 0,
-                        "downloadSpeed": 0,
-                        "connections": 0,
-                        "files": [{"path": full_path}],
-                        "errorMessage": "",
-                        "category": "📁 Other",
-                        "size_fetch_attempts": 0,
-                    }
-
-                    new_gids.append(gid)
-
-            self.store.save()
-            self._refresh_queue_list()
-            self._refresh_table()
-            self._update_queue_buttons()
-
-            if q.name == "__direct__":
-                for gid in new_gids:
-                    self.worker.resume_requested.emit(gid)
-                    self._all_downloads[gid]["status"] = "active"
-                self._refresh_table()
+        self._show_singleton_dialog(
+            "add_download", dlg, on_accepted=self._process_add_download
+        )
 
     def _process_retries(self) -> None:
         max_retries = self.store.settings.get("max_tries", 5)
