@@ -92,7 +92,14 @@ class AccordionGroup(QWidget):
 
 class AddDownloadDialog(QDialog):
     def __init__(self, queues, default_queue=0, parent=None):
-        super().__init__(parent)
+        # No real Qt parent on purpose: a widget with a Qt parent gets a
+        # "transient for" hint sent to the window manager, which is what
+        # keeps it grouped with the main window (no separate taskbar
+        # entry, tied stacking) even after changing window flags.
+        # DownloadProgressDialog already does this correctly (parent=None)
+        # and behaves as a real independent window — matching that here.
+        super().__init__(None)
+        self._main_window = parent
         self.setWindowTitle("Add Downloads")
         self.setMinimumWidth(620)
         self.setMinimumHeight(420)
@@ -331,7 +338,8 @@ class AddDownloadDialog(QDialog):
 
 class QuickDownloadDialog(QDialog):
     def __init__(self, queues, parent=None):
-        super().__init__(parent)
+        super().__init__(None)
+        self._main_window = parent
         self.setWindowTitle("Quick Download")
         self.setMinimumWidth(600)
         self.setMinimumHeight(400)
@@ -531,7 +539,8 @@ class QuickDownloadDialog(QDialog):
 
 class SingleDownloadDialog(QDialog):
     def __init__(self, parent=None):
-        super().__init__(parent)
+        super().__init__(None)
+        self._main_window = parent
         self.setWindowTitle("Single Download")
         self.setMinimumWidth(560)
         self.setMinimumHeight(380)
@@ -699,7 +708,8 @@ class YouTubeDownloadDialog(QDialog):
     youtube_download_requested = pyqtSignal(dict)
 
     def __init__(self, parent=None, queues=None, default_queue=0):
-        super().__init__(parent)
+        super().__init__(None)
+        self._main_window = parent
         self.setWindowTitle("YouTube Download")
         self.setMinimumWidth(600)
         self.setMinimumHeight(420)
@@ -915,8 +925,8 @@ class YouTubeDownloadDialog(QDialog):
     def _get_proxy_url(self):
         proxy_mode = self.proxy_combo.currentIndex()
         if proxy_mode == 0:
-            if hasattr(self.parent(), "proxy_manager"):
-                proxy = self.parent().proxy_manager.get_proxy_for_queue(None)
+            if hasattr(self._main_window, "proxy_manager"):
+                proxy = self._main_window.proxy_manager.get_proxy_for_queue(None)
                 if proxy and proxy.is_valid():
                     return proxy._build_proxy_url()
         elif proxy_mode == 1:
@@ -1129,7 +1139,8 @@ class YouTubeDownloadDialog(QDialog):
 
 class QueueSettingsDialog(QDialog):
     def __init__(self, queue: Queue, parent=None):
-        super().__init__(parent)
+        super().__init__(None)
+        self._main_window = parent
         self.setWindowTitle(f"Queue Settings — {queue.name}")
         self.setMinimumWidth(540)
         self.setMinimumHeight(440)
@@ -1314,8 +1325,8 @@ class QueueSettingsDialog(QDialog):
     def _load_queue_proxy(self):
         from core.proxy_manager import ProxyManager
 
-        if hasattr(self.parent(), "store"):
-            proxy_mgr = ProxyManager(self.parent().store)
+        if hasattr(self._main_window, "store"):
+            proxy_mgr = ProxyManager(self._main_window.store)
             queue_proxy = proxy_mgr.get_queue_proxy(self.name_edit.text())
             if queue_proxy and queue_proxy.host:
                 self.queue_proxy_cb.setChecked(True)
@@ -1362,7 +1373,8 @@ class QueueSettingsDialog(QDialog):
 
 class SettingsDialog(QDialog):
     def __init__(self, settings, parent=None):
-        super().__init__(parent)
+        super().__init__(None)
+        self._main_window = parent
         self.setWindowTitle("Settings")
         self.setMinimumWidth(540)
         self.setMinimumHeight(460)
@@ -1717,7 +1729,7 @@ class SettingsDialog(QDialog):
         from core.proxy_manager import ProxyManager
 
         proxy_mgr = ProxyManager(
-            self.parent().store if hasattr(self.parent(), "store") else None
+            self._main_window.store if hasattr(self._main_window, "store") else None
         )
 
         if (
@@ -1741,11 +1753,11 @@ class SettingsDialog(QDialog):
         from ui.proxy_dialog import ProxyDialog
         from core.proxy_manager import ProxyManager, ProxyConfig
 
-        if not hasattr(self.parent(), "store"):
+        if not hasattr(self._main_window, "store"):
             QMessageBox.warning(self, "Error", "Data store not available")
             return
 
-        proxy_mgr = ProxyManager(self.parent().store)
+        proxy_mgr = ProxyManager(self._main_window.store)
         current_config = proxy_mgr.global_proxy or ProxyConfig()
 
         dlg = ProxyDialog(current_config, self, "Global Proxy Settings")
@@ -1754,8 +1766,8 @@ class SettingsDialog(QDialog):
             proxy_mgr.set_global_proxy(new_config)
             self._update_proxy_status()
 
-            if hasattr(self.parent(), "aria2"):
-                self.parent().aria2.set_global_proxy(new_config)
+            if hasattr(self._main_window, "aria2"):
+                self._main_window.aria2.set_global_proxy(new_config)
 
             QMessageBox.information(self, "Success", "Proxy settings applied!")
 
