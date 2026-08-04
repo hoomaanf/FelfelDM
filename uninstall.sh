@@ -185,11 +185,11 @@ if [[ "$remove_packages" =~ ^[Yy]$ ]]; then
     echo -e "${YELLOW}Removing packages...${NC}"
     
     # Remove packages (both pip and pacman)
-    pip3 uninstall -y PyQt6 requests yt-dlp keyring appdirs websocket-client cryptography packaging 2>/dev/null || true
-    pip uninstall -y PyQt6 requests yt-dlp keyring appdirs websocket-client cryptography packaging 2>/dev/null || true
+    pip3 uninstall -y PyQt6 requests yt-dlp keyring appdirs cryptography packaging 2>/dev/null || true
+    pip uninstall -y PyQt6 requests yt-dlp keyring appdirs cryptography packaging 2>/dev/null || true
     
     # Also remove from pacman (if installed)
-    sudo pacman -Rsn python-pyqt6 python-requests python-appdirs python-keyring python-websocket-client yt-dlp 2>/dev/null || true
+    sudo pacman -Rsn python-pyqt6 python-requests python-appdirs python-keyring yt-dlp 2>/dev/null || true
     
     echo -e "${GREEN}✅ Packages removed${NC}"
 else

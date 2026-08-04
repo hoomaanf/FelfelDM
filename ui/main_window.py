@@ -92,7 +92,7 @@ class MainWindow(QMainWindow):
         QApplication.processEvents()
 
         self.setWindowTitle("FelfelDM")
-        self.setMinimumSize(1050, 680)
+        self.setMinimumSize(1300, 680)
 
         self.splash.update_status("Setting up queues...", 25)
         QApplication.processEvents()
@@ -282,7 +282,7 @@ class MainWindow(QMainWindow):
     def _build_sidebar(self) -> QWidget:
         sidebar = QWidget()
         sidebar.setObjectName("sidebar")
-        sidebar.setMinimumWidth(180)
+        sidebar.setMinimumWidth(200)
         sidebar.setMaximumWidth(350)
         sb_lay = QVBoxLayout(sidebar)
         sb_lay.setContentsMargins(10, 12, 10, 12)

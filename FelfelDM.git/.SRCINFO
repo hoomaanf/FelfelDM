@@ -13,7 +13,6 @@ pkgbase = felfeldm-git
 	depends = python-requests
 	depends = python-appdirs
 	depends = python-keyring
-	depends = python-websocket-client
 	depends = python-cryptography
 	depends = python-packaging
 	depends = yt-dlp

@@ -15,7 +15,6 @@ depends=(
     python-requests
     python-appdirs
     python-keyring
-    python-websocket-client
     python-cryptography
     python-packaging
     python-jaraco.context
