@@ -1372,12 +1372,12 @@ class MainWindow(QMainWindow):
 
     def _update_speed_display(self) -> None:
         total_speed = 0
-        for gid, dl in self._all_downloads.items():
+
+        for dl in self._all_downloads.values():
             if dl.get("status") == "active":
                 try:
-                    speed = int(dl.get("downloadSpeed", 0))
-                    total_speed += speed
-                except (ValueError, TypeError):
+                    total_speed += int(dl.get("downloadSpeed", 0))
+                except (TypeError, ValueError):
                     pass
 
         self._speed_samples.append(total_speed)
@@ -1386,17 +1386,14 @@ class MainWindow(QMainWindow):
 
         if self._speed_samples:
             sorted_samples = sorted(self._speed_samples)
-            trim_count = max(1, len(sorted_samples) // 5)
-            trimmed = (
-                sorted_samples[trim_count:-trim_count]
-                if len(sorted_samples) > trim_count * 2
-                else sorted_samples
-            )
+            trim = max(1, len(sorted_samples) // 5)
 
-            if trimmed:
-                avg_speed = sum(trimmed) // len(trimmed)
+            if len(sorted_samples) > trim * 2:
+                samples = sorted_samples[trim:-trim]
             else:
-                avg_speed = sum(sorted_samples) // len(sorted_samples)
+                samples = sorted_samples
+
+            avg_speed = sum(samples) // len(samples)
         else:
             avg_speed = total_speed
 
@@ -1407,19 +1404,35 @@ class MainWindow(QMainWindow):
 
         speed_text = format_speed(self._smooth_speed)
 
+        # ---------- UI ----------
         if hasattr(self, "speed_status_label"):
-            self.speed_status_label.setText(speed_text)
+            if self.speed_status_label.text() != speed_text:
+                self.speed_status_label.setText(speed_text)
 
-        if hasattr(self, "speed_icon_label"):
-            if self._smooth_speed > 0:
-                self.speed_icon_label.setPixmap(get_icon("go-down").pixmap(16, 16))
-            else:
-                self.speed_icon_label.setPixmap(
-                    get_icon("media-playback-pause").pixmap(16, 16)
-                )
+        downloading = self._smooth_speed > 0
 
-        self.tray.setToolTip(f"FelfelDM — ⬇ {speed_text}")
+        if getattr(self, "_last_speed_icon", None) != downloading:
+            self._last_speed_icon = downloading
 
+            icon = (
+                get_icon("go-down")
+                if downloading
+                else get_icon("media-playback-pause")
+            )
+            self.speed_icon_label.setPixmap(icon.pixmap(16, 16))
+
+        # ---------- Tray ----------
+        now = time.monotonic()
+
+        tooltip = f"FelfelDM — ⬇ {speed_text}"
+
+        if (
+            now - getattr(self, "_last_tooltip_time", 0) >= 1.0
+            and tooltip != getattr(self, "_last_tooltip", "")
+        ):
+            self._last_tooltip = tooltip
+            self._last_tooltip_time = now
+            self.tray.setToolTip(tooltip)
     def _update_progress_dialog(self) -> None:
         try:
             if self._progress_dialog is not None:
