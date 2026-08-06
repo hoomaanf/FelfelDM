@@ -1360,15 +1360,14 @@ class MainWindow(QMainWindow):
             for gid in q.downloads
         )
 
-        if all_complete:
-            self.shutdown_cb.setEnabled(False)
-            if self.shutdown_cb.isChecked():
-                self.shutdown_cb.setChecked(False)
-                self.store.settings["shutdown_after_finish"] = False
-                self.store.save()
-            return
-
-        self.shutdown_cb.setEnabled(True)
+        # Only gray out the checkbox for *this* view when this queue's own
+        # downloads are done — never force-uncheck the underlying global
+        # "shutdown after finish" setting here. That setting is evaluated
+        # across ALL queues by _check_already_complete(); un-checking it
+        # just because the queue you happen to be LOOKING AT right now is
+        # finished would silently cancel shutdown for some other queue
+        # that's still downloading in the background.
+        self.shutdown_cb.setEnabled(not all_complete)
 
     def _update_speed_display(self) -> None:
         total_speed = 0
@@ -1507,20 +1506,7 @@ class MainWindow(QMainWindow):
         self._update_progress_dialog()
 
         if self.shutdown_cb.isChecked():
-            stat = result.get("stat", {})
-            total_active = int(stat.get("numActive", 0))
-            total_waiting = int(stat.get("numWaiting", 0))
-            if total_active == 0 and total_waiting == 0:
-                has_any_download = any(q.downloads for q in self.store.queues)
-                if has_any_download and not self._shutdown_dialog_shown:
-                    self._shutdown_dialog_shown = True
-                    self.tray.showMessage(
-                        "🌶️ FelfelDM",
-                        "✅ All downloads completed!\n🛑 System will shut down in 20 seconds.",
-                        QSystemTrayIcon.MessageIcon.Information,
-                        5000,
-                    )
-                    self._show_shutdown_countdown()
+            self._check_already_complete()
 
     def _update_downloads_from_stats(self, downloads_list: List[Dict]) -> None:
         saved_data = {}
@@ -3697,21 +3683,47 @@ class MainWindow(QMainWindow):
             if gid not in target_queue.downloads:
                 target_queue.downloads.append(gid)
 
-                if gid in source_queue.downloads_info:
-                    info = source_queue.downloads_info.pop(gid)
-                    target_queue.downloads_info[gid] = info
+            if gid in source_queue.downloads_info:
+                info = source_queue.downloads_info.pop(gid)
+                target_queue.downloads_info[gid] = info
 
+            # Reconcile the download's *actual* aria2-side pause state with
+            # the target queue's state. Previously this only updated our
+            # local bookkeeping (self._all_downloads[gid]["status"]) and
+            # never told aria2 to actually pause/resume — so a download
+            # moved into an active queue would show "active" in the UI but
+            # stay paused in aria2 forever (it would never finish, so
+            # "shutdown when all downloads complete" would never fire), and
+            # a download moved into a paused queue would keep silently
+            # downloading in the background.
+            was_paused = (
+                self._all_downloads.get(gid, {}).get("status") == "paused"
+            )
+
+            if target_queue.paused:
+                if not was_paused:
+                    self.worker.pause_requested.emit(gid)
                 if gid in self._all_downloads:
-                    if target_queue.paused:
-                        self._all_downloads[gid]["status"] = "paused"
-                        self._all_downloads[gid]["downloadSpeed"] = 0
-                    else:
-                        self._all_downloads[gid]["status"] = "active"
+                    self._all_downloads[gid]["status"] = "paused"
+                    self._all_downloads[gid]["downloadSpeed"] = 0
+                if gid in target_queue.downloads_info:
+                    target_queue.downloads_info[gid]["status"] = "paused"
+            else:
+                if was_paused:
+                    self.worker.resume_requested.emit(gid)
+                if gid in self._all_downloads:
+                    self._all_downloads[gid]["status"] = "active"
+                if gid in target_queue.downloads_info:
+                    target_queue.downloads_info[gid]["status"] = "active"
 
         self.store.save()
         self._refresh_queue_list()
         self._refresh_table()
         self._update_queue_buttons()
+        # Also carry over the destination queue's speed limit, so moved
+        # downloads are governed by it right away instead of whatever
+        # limit (or lack of one) applied in the source queue.
+        self._apply_queue_speed_limit(target_queue)
 
     def _restore_downloads(self) -> None:
         print("🔄 Loading downloads from storage...")
