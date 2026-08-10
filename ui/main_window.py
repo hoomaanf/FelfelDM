@@ -3732,7 +3732,6 @@ class MainWindow(QMainWindow):
         self.aria2.on_error = None
 
         try:
-
             if not self.aria2.is_connected():
                 print("⏳ Waiting for aria2 to connect...")
                 for attempt in range(15):
@@ -3745,11 +3744,34 @@ class MainWindow(QMainWindow):
             for q in self.store.queues:
                 for gid in q.downloads[:]:
                     info = q.downloads_info.get(gid, {})
+                    status = info.get("status", "")
+
+                    if status in ["complete", "completed"]:
+                        print(f"✅ Removing completed download: {gid}")
+                        q.downloads.remove(gid)
+                        if gid in q.downloads_info:
+                            del q.downloads_info[gid]
+                        if gid in self._all_downloads:
+                            del self._all_downloads[gid]
+                        self.store.save()
+                        continue
 
                     if not info and self.aria2.is_connected():
                         try:
                             status_data = self.aria2.get_status(gid)
                             if status_data:
+                                aria_status = status_data.get("status", "")
+                                if aria_status in ["complete", "completed"]:
+                                    print(
+                                        f"✅ Removing completed download (aria2): {gid}"
+                                    )
+                                    q.downloads.remove(gid)
+                                    if gid in q.downloads_info:
+                                        del q.downloads_info[gid]
+                                    if gid in self._all_downloads:
+                                        del self._all_downloads[gid]
+                                    self.store.save()
+                                    continue
                                 info = {
                                     "name": "Unknown",
                                     "totalLength": int(
@@ -3768,7 +3790,6 @@ class MainWindow(QMainWindow):
 
                     total_length = int(info.get("totalLength", 0))
                     if total_length == 0:
-
                         files = info.get("files", [])
                         if files and files[0].get("length"):
                             try:
@@ -3776,7 +3797,6 @@ class MainWindow(QMainWindow):
                             except (ValueError, TypeError):
                                 pass
                     if total_length == 0:
-
                         try:
                             if self.aria2.is_connected():
                                 status_data = self.aria2.get_status(gid)
@@ -3828,7 +3848,6 @@ class MainWindow(QMainWindow):
             self._pause_all_aria2_downloads()
 
         finally:
-
             self.aria2.on_error = original_on_error
 
     def _pause_all_aria2_downloads(self) -> None:
@@ -3838,6 +3857,11 @@ class MainWindow(QMainWindow):
             print("⚠️ aria2 not connected, skipping pause")
             return
 
+        ui_gids = set()
+        for q in self.store.queues:
+            for gid in q.downloads:
+                ui_gids.add(gid)
+
         paused_count = 0
         for q in self.store.queues:
             for gid in q.downloads:
@@ -3846,15 +3870,28 @@ class MainWindow(QMainWindow):
                     if result:
                         paused_count += 1
                     else:
-
                         status_data = self.aria2.get_status(gid)
                         if status_data:
                             status = status_data.get("status", "")
                             if status in ["complete", "removed"]:
                                 print(f"   ⏭️ {gid[:8]}... already {status}")
                 except Exception as e:
-
                     pass
+
+        try:
+            active_downloads = self.aria2.tell_active() or []
+            for dl in active_downloads:
+                gid = dl.get("gid")
+                if gid and gid not in ui_gids:
+                    print(f"🗑️ Pausing orphan download: {gid}")
+                    try:
+                        self.aria2.pause(gid)
+                        self.aria2.remove(gid)
+                        self.aria2._call("aria2.removeDownloadResult", [gid])
+                    except Exception as e:
+                        print(f"⚠️ Could not remove orphan {gid}: {e}")
+        except Exception as e:
+            print(f"⚠️ Error cleaning orphan downloads: {e}")
 
         for q in self.store.queues:
             q.paused = True
@@ -3862,7 +3899,7 @@ class MainWindow(QMainWindow):
 
         self.store.save()
         print(f"✅ Paused {paused_count} download(s) in aria2")
-
+  
     def _clear_completed_downloads(self) -> None:
         q = self._current_queue()
         if not q:
