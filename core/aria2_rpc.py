@@ -54,7 +54,7 @@ class Aria2RPC:
         if params is None:
             params = []
 
-        if self.secret:
+        if self.secret and method != "system.multicall":
             params = [f"token:{self.secret}"] + params
 
         payload = {
@@ -217,6 +217,38 @@ class Aria2RPC:
 
         return self._call("aria2.tellStatus", [gid])
 
+    def get_status_multi(self, gids: List[str]) -> Dict[str, Optional[Dict]]:
+        """Fetch tellStatus for many gids in a single multicall round trip
+        instead of one aria2.tellStatus call per gid. Returns a dict keyed
+        by gid; a gid aria2 doesn't know about (or a fault) maps to None,
+        matching get_status()'s behavior for a missing download."""
+        real_gids = [g for g in gids if g and not self._is_youtube_gid(g)]
+        if not real_gids:
+            return {}
+
+        calls = [
+            {"methodName": "aria2.tellStatus", "params": [gid]} for gid in real_gids
+        ]
+        results = self.multicall(calls)
+
+        statuses: Dict[str, Optional[Dict]] = {}
+        if not results or len(results) != len(real_gids):
+            # multicall itself failed (or came back malformed) — fall back
+            # to treating every gid as unknown rather than guessing.
+            return {gid: None for gid in real_gids}
+
+        for gid, entry in zip(real_gids, results):
+            # aria2's system.multicall wraps each result the same way
+            # XML-RPC multicall does: a successful call comes back as a
+            # one-item list `[result]`; a failed one comes back as a dict
+            # with faultCode/faultString instead of a list.
+            if isinstance(entry, list) and entry:
+                statuses[gid] = entry[0]
+            else:
+                statuses[gid] = None
+
+        return statuses
+
     def tell_status(self, gid: str) -> Optional[Dict]:
         return self.get_status(gid)
 
@@ -279,6 +311,47 @@ class Aria2RPC:
     def unpause(self, gid: str) -> bool:
         return self.resume(gid)
 
+    def multicall(self, calls: List[Dict[str, Any]]) -> Optional[List]:
+        """Batch several aria2 method calls into a single HTTP round trip
+        via aria2's own system.multicall RPC method. `calls` is a list of
+        {"methodName": "aria2.pause", "params": [gid, ...]} dicts — the
+        auth token, if configured, is added to each inner call here (it
+        must not go on the outer system.multicall params).
+        """
+        if not calls:
+            return []
+
+        formatted = []
+        for call in calls:
+            params = list(call.get("params", []))
+            if self.secret:
+                params = [f"token:{self.secret}"] + params
+            formatted.append({"methodName": call["methodName"], "params": params})
+
+        return self._call("system.multicall", [formatted])
+
+    def pause_multi(self, gids: List[str]) -> bool:
+        """Pause many downloads in one RPC round trip instead of one call
+        per gid — used for queue-level pause where looping individual
+        aria2.pause calls causes a visible, cumulative delay."""
+        real_gids = [g for g in gids if g and not self._is_youtube_gid(g)]
+        if not real_gids:
+            return True
+
+        calls = [{"methodName": "aria2.pause", "params": [gid]} for gid in real_gids]
+        result = self.multicall(calls)
+        return result is not None
+
+    def resume_multi(self, gids: List[str]) -> bool:
+        """Resume many downloads in one RPC round trip. See pause_multi."""
+        real_gids = [g for g in gids if g and not self._is_youtube_gid(g)]
+        if not real_gids:
+            return True
+
+        calls = [{"methodName": "aria2.unpause", "params": [gid]} for gid in real_gids]
+        result = self.multicall(calls)
+        return result is not None
+
     def remove(self, gid: str) -> bool:
         if not gid:
             return False
@@ -322,6 +395,25 @@ class Aria2RPC:
             options = {"max-download-limit": f"{speed_kb}K"}
 
         result = self._call("aria2.changeOption", [gid, options])
+        return result is not None
+
+    def set_speed_limit_multi(self, gids: List[str], speed_kb: int) -> bool:
+        """Apply the same per-download speed limit to many gids in one
+        multicall round trip (e.g. when a queue's speed limit needs to be
+        applied to every download in it after starting the queue)."""
+        real_gids = [g for g in gids if g and not self._is_youtube_gid(g)]
+        if not real_gids:
+            return True
+
+        limit = "0" if speed_kb <= 0 else f"{speed_kb}K"
+        calls = [
+            {
+                "methodName": "aria2.changeOption",
+                "params": [gid, {"max-download-limit": limit}],
+            }
+            for gid in real_gids
+        ]
+        result = self.multicall(calls)
         return result is not None
 
     def change_option(self, gid: str, options: Dict) -> bool:

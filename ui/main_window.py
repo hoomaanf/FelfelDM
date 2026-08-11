@@ -37,6 +37,16 @@ from core.proxy_manager import ProxyManager
 
 
 class MainWindow(QMainWindow):
+    # Aria2RPC.on_error can be invoked from any thread that happens to be
+    # running an RPC call when it fails (the GUI thread, BackendWorker,
+    # QueueOperationWorker, RetryWorker, ...). _on_aria2_error touches
+    # real widgets (tray, status label), so it must never run outside the
+    # GUI thread. Routing it through this signal makes that safe: emit()
+    # is fine from any thread, and Qt auto-queues the delivery to
+    # _on_aria2_error (connected below) onto this object's own thread —
+    # the GUI thread, since MainWindow itself lives there.
+    _aria2_error_signal = pyqtSignal(str)
+
     def __init__(self) -> None:
         super().__init__()
         self._init_variables()
@@ -82,6 +92,15 @@ class MainWindow(QMainWindow):
         self._completed_gids: Set[str] = set()
         self._queue_list_dirty = True
         self._open_dialogs: Dict[str, QDialog] = {}
+        # gid -> (expected_status, expires_at). When we optimistically set
+        # a download's status locally (pause/resume button clicked, before
+        # aria2 has actually confirmed it), a stats poll that was already
+        # in flight can arrive right after and overwrite it with the old
+        # status — making the table look like it "undoes itself" for a
+        # second before catching up. This lets the stats-merge step ignore
+        # a conflicting status/speed for a gid until it's confirmed or the
+        # entry expires.
+        self._pending_status: Dict[str, tuple] = {}
 
     def _init_ui(self) -> None:
         theme_setting: str = self.store.settings.get("theme", "auto")
@@ -121,7 +140,8 @@ class MainWindow(QMainWindow):
 
         self.proxy_manager = ProxyManager(self.store)
         self._apply_proxy_to_aria2()
-        self.aria2.on_error = self._on_aria2_error
+        self._aria2_error_signal.connect(self._on_aria2_error)
+        self.aria2.on_error = self._aria2_error_signal.emit
 
         self.splash.update_status("Connecting to aria2...", 45)
         QApplication.processEvents()
@@ -694,21 +714,31 @@ class MainWindow(QMainWindow):
         q.manually_paused = True
         self.store.save()
 
+        gids_to_pause = []
         for gid in q.downloads:
             if gid in self._all_downloads:
                 current_status = self._all_downloads[gid].get("status", "")
 
                 if current_status in ["active", "waiting", "downloading"]:
-                    self.worker.pause_requested.emit(gid)
+                    gids_to_pause.append(gid)
                     self._all_downloads[gid]["status"] = "paused"
                     self._all_downloads[gid]["downloadSpeed"] = 0
+                    self._mark_pending_status(gid, "paused")
                     if gid in q.downloads_info:
                         q.downloads_info[gid]["status"] = "paused"
                 elif current_status in ["error", "stopped"]:
 
                     self._all_downloads[gid]["status"] = "paused"
+                    self._mark_pending_status(gid, "paused")
                     if gid in q.downloads_info:
                         q.downloads_info[gid]["status"] = "paused"
+
+        # One multicall round trip for the whole queue instead of one
+        # pause_requested signal (and one blocking aria2 RPC) per download —
+        # looping that individually is what caused the visible delay when
+        # pausing a queue with several downloads in it.
+        if gids_to_pause:
+            self.worker.pause_multi_requested.emit(gids_to_pause)
 
         self.store.save()
         self._refresh_table()
@@ -777,11 +807,15 @@ class MainWindow(QMainWindow):
                 QMessageBox.StandardButton.Ok,
             )
 
+    def _mark_pending_status(self, gid: str, status: str, ttl: float = 3.0) -> None:
+        self._pending_status[gid] = (status, time.time() + ttl)
+
     def _on_download_status_changed(self, gid: str, status: str) -> None:
         if gid in self._all_downloads:
             self._all_downloads[gid]["status"] = status
             if status == "paused":
                 self._all_downloads[gid]["downloadSpeed"] = 0
+        self._mark_pending_status(gid, status)
 
         for q in self.store.queues:
             if gid in q.downloads_info:
@@ -1414,9 +1448,7 @@ class MainWindow(QMainWindow):
             self._last_speed_icon = downloading
 
             icon = (
-                get_icon("go-down")
-                if downloading
-                else get_icon("media-playback-pause")
+                get_icon("go-down") if downloading else get_icon("media-playback-pause")
             )
             self.speed_icon_label.setPixmap(icon.pixmap(16, 16))
 
@@ -1425,13 +1457,13 @@ class MainWindow(QMainWindow):
 
         tooltip = f"FelfelDM — ⬇ {speed_text}"
 
-        if (
-            now - getattr(self, "_last_tooltip_time", 0) >= 1.0
-            and tooltip != getattr(self, "_last_tooltip", "")
+        if now - getattr(self, "_last_tooltip_time", 0) >= 1.0 and tooltip != getattr(
+            self, "_last_tooltip", ""
         ):
             self._last_tooltip = tooltip
             self._last_tooltip_time = now
             self.tray.setToolTip(tooltip)
+
     def _update_progress_dialog(self) -> None:
         try:
             if self._progress_dialog is not None:
@@ -1563,6 +1595,22 @@ class MainWindow(QMainWindow):
 
                 old_status = self._all_downloads[gid].get("status", "")
                 new_status = dl.get("status", "")
+
+                pending = self._pending_status.get(gid)
+                if pending:
+                    expected_status, expires_at = pending
+                    if new_status == expected_status or time.time() > expires_at:
+                        del self._pending_status[gid]
+                    else:
+                        # This poll's data predates our optimistic update
+                        # (e.g. user just clicked pause/resume) — keep the
+                        # status/speed we already set locally instead of
+                        # letting stale data flash it back for a moment,
+                        # but still take other fields (size, files, ...).
+                        dl = dict(dl)
+                        dl.pop("status", None)
+                        dl.pop("downloadSpeed", None)
+                        new_status = old_status
 
                 if new_status in ["complete", "completed"] and old_status not in [
                     "complete",
@@ -3696,9 +3744,7 @@ class MainWindow(QMainWindow):
             # "shutdown when all downloads complete" would never fire), and
             # a download moved into a paused queue would keep silently
             # downloading in the background.
-            was_paused = (
-                self._all_downloads.get(gid, {}).get("status") == "paused"
-            )
+            was_paused = self._all_downloads.get(gid, {}).get("status") == "paused"
 
             if target_queue.paused:
                 if not was_paused:
@@ -3899,7 +3945,7 @@ class MainWindow(QMainWindow):
 
         self.store.save()
         print(f"✅ Paused {paused_count} download(s) in aria2")
-  
+
     def _clear_completed_downloads(self) -> None:
         q = self._current_queue()
         if not q:

@@ -21,10 +21,13 @@ class BackendWorker(QThread):
 
     resume_requested = pyqtSignal(str)
     pause_requested = pyqtSignal(str)
+    pause_multi_requested = pyqtSignal(list)
+    resume_multi_requested = pyqtSignal(list)
     remove_requested = pyqtSignal(str)
     add_url_requested = pyqtSignal(str, dict)
     re_add_requested = pyqtSignal(str)
     set_speed_limit_requested = pyqtSignal(str, int)
+    set_speed_limit_multi_requested = pyqtSignal(list, int)
     save_session_requested = pyqtSignal()
     shutdown_requested = pyqtSignal()
 
@@ -57,6 +60,12 @@ class BackendWorker(QThread):
         self.pause_requested.connect(
             self._on_pause_requested, Qt.ConnectionType.QueuedConnection
         )
+        self.pause_multi_requested.connect(
+            self._on_pause_multi_requested, Qt.ConnectionType.QueuedConnection
+        )
+        self.resume_multi_requested.connect(
+            self._on_resume_multi_requested, Qt.ConnectionType.QueuedConnection
+        )
         self.remove_requested.connect(
             self._on_remove_requested, Qt.ConnectionType.QueuedConnection
         )
@@ -68,6 +77,9 @@ class BackendWorker(QThread):
         )
         self.set_speed_limit_requested.connect(
             self._on_set_speed_limit, Qt.ConnectionType.QueuedConnection
+        )
+        self.set_speed_limit_multi_requested.connect(
+            self._on_set_speed_limit_multi, Qt.ConnectionType.QueuedConnection
         )
         self.save_session_requested.connect(
             self._on_save_session, Qt.ConnectionType.QueuedConnection
@@ -368,6 +380,22 @@ class BackendWorker(QThread):
         except Exception as e:
             print(f"⚠️ [Worker] Pause failed for {gid}: {e}")
 
+    @pyqtSlot(list)
+    def _on_pause_multi_requested(self, gids: list):
+        try:
+            self.aria2.pause_multi(gids)
+            print(f"⏸️ [Worker] Paused {len(gids)} download(s) in one round trip")
+        except Exception as e:
+            print(f"⚠️ [Worker] Bulk pause failed: {e}")
+
+    @pyqtSlot(list)
+    def _on_resume_multi_requested(self, gids: list):
+        try:
+            self.aria2.resume_multi(gids)
+            print(f"▶️ [Worker] Resumed {len(gids)} download(s) in one round trip")
+        except Exception as e:
+            print(f"⚠️ [Worker] Bulk resume failed: {e}")
+
     @pyqtSlot(str)
     def _on_remove_requested(self, gid: str):
         try:
@@ -434,6 +462,14 @@ class BackendWorker(QThread):
             print(f"⚡ [Worker] Speed limit set for {gid}: {limit}")
         except Exception as e:
             print(f"⚠️ [Worker] Set speed limit failed: {e}")
+
+    @pyqtSlot(list, int)
+    def _on_set_speed_limit_multi(self, gids: list, speed_kb: int):
+        try:
+            self.aria2.set_speed_limit_multi(gids, speed_kb)
+            print(f"⚡ [Worker] Speed limit set for {len(gids)} download(s)")
+        except Exception as e:
+            print(f"⚠️ [Worker] Bulk set speed limit failed: {e}")
 
     @pyqtSlot()
     def _on_save_session(self):
