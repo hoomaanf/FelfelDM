@@ -24,6 +24,8 @@ local_server = None
 
 APP_ID = f"FelfelDM_{os.getenv('USER', 'default')}"
 
+os.environ.setdefault("DISPLAY", ":0")
+
 
 def signal_handler(sig, frame):
     """Handle SIGINT and SIGTERM signals"""

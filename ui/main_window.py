@@ -3293,7 +3293,9 @@ class MainWindow(QMainWindow):
                 pass
             self._progress_dialog = None
 
-        self._progress_dialog = DownloadProgressDialog(gid, dl_data, None)
+        self._progress_dialog = DownloadProgressDialog(
+            gid, dl_data, parent=None, main_window=self
+        )
 
         self._progress_dialog.setWindowFlags(
             Qt.WindowType.Window
@@ -3786,13 +3788,15 @@ class MainWindow(QMainWindow):
                         print(f"✅ aria2 connected after {attempt+1} attempts")
                         break
 
+            auto_clear = self.store.settings.get("auto_clear_completed", False)
+
             restored_count = 0
             for q in self.store.queues:
                 for gid in q.downloads[:]:
                     info = q.downloads_info.get(gid, {})
                     status = info.get("status", "")
 
-                    if status in ["complete", "completed"]:
+                    if auto_clear and status in ["complete", "completed"]:
                         print(f"✅ Removing completed download: {gid}")
                         q.downloads.remove(gid)
                         if gid in q.downloads_info:
@@ -3807,7 +3811,10 @@ class MainWindow(QMainWindow):
                             status_data = self.aria2.get_status(gid)
                             if status_data:
                                 aria_status = status_data.get("status", "")
-                                if aria_status in ["complete", "completed"]:
+                                if auto_clear and aria_status in [
+                                    "complete",
+                                    "completed",
+                                ]:
                                     print(
                                         f"✅ Removing completed download (aria2): {gid}"
                                     )
@@ -3820,6 +3827,7 @@ class MainWindow(QMainWindow):
                                     continue
                                 info = {
                                     "name": "Unknown",
+                                    "status": aria_status,
                                     "totalLength": int(
                                         status_data.get("totalLength", 0)
                                     ),
@@ -3853,7 +3861,11 @@ class MainWindow(QMainWindow):
                         except:
                             pass
 
-                    status = "paused"
+                    info_status = info.get("status", "")
+                    if info_status in ["complete", "completed", "error", "removed"]:
+                        status = info_status
+                    else:
+                        status = "paused"
                     completed_length = int(info.get("completedLength", 0))
                     files = info.get("files", [])
                     download_type = info.get("download_type", "normal")
@@ -3889,7 +3901,7 @@ class MainWindow(QMainWindow):
                     restored_count += 1
 
             self.store.save()
-            print(f"✅ Loaded {restored_count} download(s) (all paused)")
+            print(f"✅ Loaded {restored_count} download(s)")
 
             self._pause_all_aria2_downloads()
 

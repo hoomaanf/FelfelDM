@@ -1,6 +1,6 @@
 # core/queue_worker.py
 
-from PyQt6.QtCore import QThread, pyqtSignal, QTimer, QEventLoop
+from PyQt6.QtCore import QThread, pyqtSignal
 import time
 
 
@@ -218,22 +218,27 @@ class RetryWorker(QThread):
         self.worker = main_window.worker
         self._all_downloads = main_window._all_downloads
         self._should_stop = False
-        self._loop = QEventLoop()
 
         self.retry_delay = main_window.store.settings.get("retry_delay", 1.0)
         self.retry_delay_ms = int(self.retry_delay * 1000)
 
     def stop(self):
         self._should_stop = True
-        if self._loop and self._loop.isRunning():
-            self._loop.quit()
 
     def _wait(self, ms: int):
-        if self._should_stop:
-            return
-        self._loop = QEventLoop()
-        QTimer.singleShot(ms, self._loop.quit)
-        self._loop.exec()
+        # Plain blocking sleep in small chunks, checking the stop flag as
+        # we go — this replaces a previous QEventLoop + QTimer.singleShot
+        # based wait. That pattern creates Qt objects whose thread
+        # affinity depends on exactly which thread is executing at the
+        # moment, and could trigger "QObject::startTimer: Timers cannot
+        # be started from another thread". msleep() is a plain blocking
+        # call with no QObject involved, so it can't hit that issue.
+        remaining = ms
+        step = 50
+        while remaining > 0 and not self._should_stop:
+            chunk = min(step, remaining)
+            self.msleep(chunk)
+            remaining -= chunk
 
     def run(self):
         try:

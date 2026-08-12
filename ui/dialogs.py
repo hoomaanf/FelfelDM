@@ -2055,9 +2055,17 @@ class DownloadProgressDialog(QDialog):
     cancel_requested = pyqtSignal(str)
     cancel_with_delete_requested = pyqtSignal(str)
 
-    def __init__(self, gid, dl_data, parent=None):
+    def __init__(self, gid, dl_data, parent=None, main_window=None):
         super().__init__(parent)
         self.gid = gid
+        # Qt parent is intentionally left None by the caller (see
+        # main_window.py) so this stays a true independent window, not
+        # tied to the main window's stacking. That means self.parent()
+        # is always None — so we take a plain reference here instead,
+        # the same way the other independent dialogs do, to still be
+        # able to reach main_window._find_download_folder() as a
+        # fallback when we don't have a fresh file path ourselves.
+        self._main_window = main_window
         self.setWindowTitle("Download Progress")
         self.setMinimumWidth(480)
         self.setWindowFlags(
@@ -2167,16 +2175,11 @@ class DownloadProgressDialog(QDialog):
                 folder_path = os.path.dirname(self._file_path)
 
             # 2. اگر _file_path وجود نداشت، از MainWindow بپرس
-            if not folder_path and self.parent():
-                # پیدا کردن MainWindow در زنجیره والدین
-                main_window = self.parent()
-                while main_window and not hasattr(main_window, "_find_download_folder"):
-                    main_window = main_window.parent()
-                if main_window and hasattr(main_window, "_find_download_folder"):
-                    try:
-                        folder_path = main_window._find_download_folder(self.gid)
-                    except Exception:
-                        pass
+            if not folder_path and self._main_window is not None:
+                try:
+                    folder_path = self._main_window._find_download_folder(self.gid)
+                except Exception:
+                    pass
 
             # 3. fallback به Downloads
             if not folder_path:
@@ -2229,6 +2232,10 @@ class DownloadProgressDialog(QDialog):
         speed = int(dl_data.get("downloadSpeed", 0))
         status = dl_data.get("status", "unknown")
         name = dl_data.get("name", "")
+
+        files = dl_data.get("files", [])
+        if files and files[0].get("path"):
+            self._file_path = files[0]["path"]
 
         if status == "complete" and not self._is_complete:
             self._is_complete = True
