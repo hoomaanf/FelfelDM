@@ -69,7 +69,7 @@ class MainWindow(QMainWindow):
         self._cleared_gids: Set[str] = set()
         self._pending_pause: Set[str] = set()
         self._shutdown_dialog_shown: bool = False
-        self._progress_dialog: Optional[QDialog] = None
+        self._progress_dialogs: Dict[str, DownloadProgressDialog] = {}
         self._youtube_dialog: Optional[QDialog] = None
         self._shutdown_dialog: Optional[QDialog] = None
         self._speed_samples: List[int] = []
@@ -1464,20 +1464,6 @@ class MainWindow(QMainWindow):
             self._last_tooltip_time = now
             self.tray.setToolTip(tooltip)
 
-    def _update_progress_dialog(self) -> None:
-        try:
-            if self._progress_dialog is not None:
-                dialog = self._progress_dialog
-                if dialog.isVisible():
-                    gid = dialog.gid
-                    if gid in self._all_downloads:
-                        status = self._all_downloads[gid].get("status", "")
-                        if status != "waiting":
-                            dialog.update_data(self._all_downloads[gid])
-        except Exception as e:
-            print(f"Progress dialog update error: {e}")
-            self._progress_dialog = None
-
     def _on_queue_changed(self, idx: int) -> None:
         if idx >= 0:
             self._current_queue_idx = idx
@@ -1512,7 +1498,6 @@ class MainWindow(QMainWindow):
                 for gid, data in self._all_downloads.items()
                 if data.get("download_type") != "youtube"
             )
-
             if has_error:
                 self._process_retries()
 
@@ -1527,19 +1512,22 @@ class MainWindow(QMainWindow):
         self._update_toggle_button()
         self._update_progress_bar()
 
-        if (
-            self._details_visible
-            and hasattr(self, "details_panel")
-            and self.details_panel is not None
-        ):
+        if self._details_visible and hasattr(self, "details_panel") and self.details_panel is not None:
             self._update_details_panel()
 
         self._manage_schedules()
-        self._update_progress_dialog()
+
+        # ===== به‌روزرسانی همه دیالوگ‌های پیشرفت =====
+        for gid, dialog in list(self._progress_dialogs.items()):
+            try:
+                if dialog.isVisible() and gid in self._all_downloads:
+                    dialog.update_data(self._all_downloads[gid])
+            except (RuntimeError, AttributeError):
+                self._progress_dialogs.pop(gid, None)
+        # ============================================
 
         if self.shutdown_cb.isChecked():
             self._check_already_complete()
-
     def _update_downloads_from_stats(self, downloads_list: List[Dict]) -> None:
         saved_data = {}
         for gid, data in self._all_downloads.items():
@@ -3286,41 +3274,49 @@ class MainWindow(QMainWindow):
     def _open_progress_dialog(self, gid: str) -> None:
         dl_data = self._all_downloads.get(gid, {})
 
-        if self._progress_dialog is not None:
+        if gid in self._progress_dialogs:
+            dialog = self._progress_dialogs[gid]
             try:
-                self._progress_dialog.close()
-            except Exception:
-                pass
-            self._progress_dialog = None
+                if dialog.isVisible():
+                    dialog.raise_()
+                    dialog.activateWindow()
+                    return
+            except RuntimeError:
+                del self._progress_dialogs[gid]
 
-        self._progress_dialog = DownloadProgressDialog(
-            gid, dl_data, parent=None, main_window=self
-        )
+        dialog = DownloadProgressDialog(gid, dl_data, parent=None, main_window=self)
 
-        self._progress_dialog.setWindowFlags(
+        dialog.setWindowFlags(
             Qt.WindowType.Window
             | Qt.WindowType.WindowCloseButtonHint
             | Qt.WindowType.WindowMinimizeButtonHint
             | Qt.WindowType.WindowMaximizeButtonHint
         )
-        self._progress_dialog.setWindowModality(Qt.WindowModality.NonModal)
+        dialog.setWindowModality(Qt.WindowModality.NonModal)
 
-        self._progress_dialog.pause_requested.connect(self._pause_from_dialog)
-        self._progress_dialog.resume_requested.connect(self._resume_from_dialog)
-        self._progress_dialog.cancel_requested.connect(self._cancel_from_dialog)
-        self._progress_dialog.cancel_with_delete_requested.connect(
+        dialog.pause_requested.connect(self._pause_from_dialog)
+        dialog.resume_requested.connect(self._resume_from_dialog)
+        dialog.cancel_requested.connect(self._cancel_from_dialog)
+        dialog.cancel_with_delete_requested.connect(
             self._cancel_with_delete_from_dialog
         )
-        self._progress_dialog.finished.connect(self._on_progress_dialog_closed)
 
-        self._progress_dialog.show()
-        self._center_dialog_on_screen(self._progress_dialog)
+        # ===== این رو درست کن =====
+        dialog.finished.connect(
+            lambda result: self._on_progress_dialog_closed(gid, result)
+        )
+        # =========================
+
+        self._progress_dialogs[gid] = dialog
+        dialog.show()
+        self._center_dialog_on_screen(dialog)
 
         if dl_data.get("totalLength", 0) == 0:
-            self._progress_dialog.info_labels["size"].setText("Getting size...")
+            dialog.info_labels["size"].setText("Getting size...")
 
-    def _on_progress_dialog_closed(self) -> None:
-        self._progress_dialog = None
+    def _on_progress_dialog_closed(self, gid: str, result=None) -> None:
+        if gid in self._progress_dialogs:
+            del self._progress_dialogs[gid]
 
     def _pause_from_dialog(self, gid: str) -> None:
         if not gid or gid not in self._all_downloads:
@@ -3806,41 +3802,24 @@ class MainWindow(QMainWindow):
                         self.store.save()
                         continue
 
-                    if not info and self.aria2.is_connected():
-                        try:
-                            status_data = self.aria2.get_status(gid)
-                            if status_data:
-                                aria_status = status_data.get("status", "")
-                                if auto_clear and aria_status in [
-                                    "complete",
-                                    "completed",
-                                ]:
-                                    print(
-                                        f"✅ Removing completed download (aria2): {gid}"
-                                    )
-                                    q.downloads.remove(gid)
-                                    if gid in q.downloads_info:
-                                        del q.downloads_info[gid]
-                                    if gid in self._all_downloads:
-                                        del self._all_downloads[gid]
-                                    self.store.save()
-                                    continue
-                                info = {
-                                    "name": "Unknown",
-                                    "status": aria_status,
-                                    "totalLength": int(
-                                        status_data.get("totalLength", 0)
-                                    ),
-                                    "completedLength": int(
-                                        status_data.get("completedLength", 0)
-                                    ),
-                                    "files": status_data.get("files", []),
-                                    "category": "📁 Other",
-                                    "download_type": "normal",
-                                }
-                                q.downloads_info[gid] = info
-                        except Exception as e:
-                            print(f"⚠️ Could not get status for {gid}: {e}")
+                    if not info:
+                        # Don't block the GUI thread on an aria2 RPC here —
+                        # restore with sane defaults and let the worker
+                        # thread's normal polling (which already re-derives
+                        # this exact info for any gid with totalLength==0,
+                        # see _get_complete_download_info/_fetch_size_for_gid
+                        # in core/worker.py) fill it in within the first
+                        # poll tick after startup, asynchronously.
+                        info = {
+                            "name": "Unknown",
+                            "status": "paused",
+                            "totalLength": 0,
+                            "completedLength": 0,
+                            "files": [],
+                            "category": "📁 Other",
+                            "download_type": "normal",
+                        }
+                        q.downloads_info[gid] = info
 
                     total_length = int(info.get("totalLength", 0))
                     if total_length == 0:
@@ -3850,16 +3829,13 @@ class MainWindow(QMainWindow):
                                 total_length = int(files[0]["length"])
                             except (ValueError, TypeError):
                                 pass
-                    if total_length == 0:
-                        try:
-                            if self.aria2.is_connected():
-                                status_data = self.aria2.get_status(gid)
-                                if status_data:
-                                    aria2_total = int(status_data.get("totalLength", 0))
-                                    if aria2_total > 0:
-                                        total_length = aria2_total
-                        except:
-                            pass
+                    # No live aria2 RPC fallback here on purpose — if we
+                    # still don't have a size, the worker thread's poll
+                    # loop picks this gid up (totalLength == 0) and fetches
+                    # it asynchronously via _fetch_size_for_gid, same as
+                    # it always does. Blocking the GUI thread here with a
+                    # synchronous get_status() per download was the actual
+                    # cause of slow restores with many downloads.
 
                     info_status = info.get("status", "")
                     if info_status in ["complete", "completed", "error", "removed"]:
@@ -3915,26 +3891,19 @@ class MainWindow(QMainWindow):
             print("⚠️ aria2 not connected, skipping pause")
             return
 
-        ui_gids = set()
+        all_gids = []
         for q in self.store.queues:
             for gid in q.downloads:
-                ui_gids.add(gid)
+                all_gids.append(gid)
+        ui_gids = set(all_gids)
 
         paused_count = 0
-        for q in self.store.queues:
-            for gid in q.downloads:
-                try:
-                    result = self.aria2.pause(gid)
-                    if result:
-                        paused_count += 1
-                    else:
-                        status_data = self.aria2.get_status(gid)
-                        if status_data:
-                            status = status_data.get("status", "")
-                            if status in ["complete", "removed"]:
-                                print(f"   ⏭️ {gid[:8]}... already {status}")
-                except Exception as e:
-                    pass
+        if all_gids:
+            try:
+                if self.aria2.pause_multi(all_gids):
+                    paused_count = len(all_gids)
+            except Exception as e:
+                print(f"⚠️ Bulk pause on restore failed: {e}")
 
         try:
             active_downloads = self.aria2.tell_active() or []
@@ -4327,12 +4296,14 @@ class MainWindow(QMainWindow):
         self.store.save()
 
         shutdown_dialog.update_status("Closing dialogs...", 60)
-        if self._progress_dialog is not None:
+        for gid, dialog in list(self._progress_dialogs.items()):
             try:
-                self._progress_dialog.close()
+                dialog.close()
+                dialog.deleteLater()
             except Exception:
                 pass
-            self._progress_dialog = None
+        self._progress_dialogs.clear()
+        
         if self._youtube_dialog is not None:
             try:
                 self._youtube_dialog.close()
