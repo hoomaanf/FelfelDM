@@ -92,15 +92,10 @@ class MainWindow(QMainWindow):
         self._completed_gids: Set[str] = set()
         self._queue_list_dirty = True
         self._open_dialogs: Dict[str, QDialog] = {}
-        # gid -> (expected_status, expires_at). When we optimistically set
-        # a download's status locally (pause/resume button clicked, before
-        # aria2 has actually confirmed it), a stats poll that was already
-        # in flight can arrive right after and overwrite it with the old
-        # status — making the table look like it "undoes itself" for a
-        # second before catching up. This lets the stats-merge step ignore
-        # a conflicting status/speed for a gid until it's confirmed or the
-        # entry expires.
         self._pending_status: Dict[str, tuple] = {}
+        self.tray_icon_normal = None
+        self.tray_icon_active = None
+        self._last_tray_state = False
 
     def _init_ui(self) -> None:
         theme_setting: str = self.store.settings.get("theme", "auto")
@@ -606,16 +601,21 @@ class MainWindow(QMainWindow):
     def _build_tray(self) -> None:
         self.tray = QSystemTrayIcon(self)
 
-        icon_paths = [get_resource_path("logo/icon512.png")]
-
-        for path in icon_paths:
-            if os.path.exists(path):
-                self.tray.setIcon(QIcon(path))
-                print(f"✅ Tray icon loaded from: {path}")
-                break
+        # آیکون عادی
+        normal_path = get_resource_path("logo/icon512.png")
+        if os.path.exists(normal_path):
+            self.tray_icon_normal = QIcon(normal_path)
         else:
-            self.tray.setIcon(get_icon("download-manager"))
-            print("⚠️ Tray icon: Using Papirus fallback")
+            self.tray_icon_normal = get_icon("download-manager")
+
+        # آیکون وقتی دانلود فعاله
+        active_path = get_resource_path("logo/tray-active.png")
+        if os.path.exists(active_path):
+            self.tray_icon_active = QIcon(active_path)
+        else:
+            self.tray_icon_active = self.tray_icon_normal
+
+        self.tray.setIcon(self.tray_icon_normal)
 
         menu = QMenu()
         menu.addAction(get_icon("window"), "Show", self.show)
@@ -1405,9 +1405,12 @@ class MainWindow(QMainWindow):
 
     def _update_speed_display(self) -> None:
         total_speed = 0
+        has_active = False
 
         for dl in self._all_downloads.values():
-            if dl.get("status") == "active":
+            status = dl.get("status", "")
+            if status in ["active", "downloading"]:
+                has_active = True
                 try:
                     total_speed += int(dl.get("downloadSpeed", 0))
                 except (TypeError, ValueError):
@@ -1420,12 +1423,10 @@ class MainWindow(QMainWindow):
         if self._speed_samples:
             sorted_samples = sorted(self._speed_samples)
             trim = max(1, len(sorted_samples) // 5)
-
             if len(sorted_samples) > trim * 2:
                 samples = sorted_samples[trim:-trim]
             else:
                 samples = sorted_samples
-
             avg_speed = sum(samples) // len(samples)
         else:
             avg_speed = total_speed
@@ -1437,7 +1438,6 @@ class MainWindow(QMainWindow):
 
         speed_text = format_speed(self._smooth_speed)
 
-        # ---------- UI ----------
         if hasattr(self, "speed_status_label"):
             if self.speed_status_label.text() != speed_text:
                 self.speed_status_label.setText(speed_text)
@@ -1446,23 +1446,35 @@ class MainWindow(QMainWindow):
 
         if getattr(self, "_last_speed_icon", None) != downloading:
             self._last_speed_icon = downloading
-
             icon = (
                 get_icon("go-down") if downloading else get_icon("media-playback-pause")
             )
             self.speed_icon_label.setPixmap(icon.pixmap(16, 16))
 
-        # ---------- Tray ----------
         now = time.monotonic()
 
-        tooltip = f"FelfelDM — ⬇ {speed_text}"
+        if hasattr(self, "tray") and self.tray.isVisible():
+            if has_active and hasattr(self, "tray_icon_active"):
+                if self.tray.icon().cacheKey() != self.tray_icon_active.cacheKey():
+                    self.tray.setIcon(self.tray_icon_active)
+            else:
+                if (
+                    hasattr(self, "tray_icon_normal")
+                    and self.tray.icon().cacheKey() != self.tray_icon_normal.cacheKey()
+                ):
+                    self.tray.setIcon(self.tray_icon_normal)
 
-        if now - getattr(self, "_last_tooltip_time", 0) >= 1.0 and tooltip != getattr(
-            self, "_last_tooltip", ""
-        ):
-            self._last_tooltip = tooltip
-            self._last_tooltip_time = now
-            self.tray.setToolTip(tooltip)
+            if has_active:
+                tooltip = f"FelfelDM - Downloading ({speed_text})"
+            else:
+                tooltip = "FelfelDM - Ready"
+
+            if now - getattr(
+                self, "_last_tooltip_time", 0
+            ) >= 1.0 and tooltip != getattr(self, "_last_tooltip", ""):
+                self._last_tooltip = tooltip
+                self._last_tooltip_time = now
+                self.tray.setToolTip(tooltip)
 
     def _on_queue_changed(self, idx: int) -> None:
         if idx >= 0:
@@ -1481,6 +1493,8 @@ class MainWindow(QMainWindow):
             self.status_lbl.setStyleSheet("color: #e74c3c; font-weight: bold;")
             if hasattr(self, "speed_status_label"):
                 self.speed_status_label.setText("0 B/s")
+            if hasattr(self, "tray") and hasattr(self, "tray_icon_normal"):
+                self.tray.setIcon(self.tray_icon_normal)
             return
 
         self.status_lbl.setText("● Connected")
@@ -1512,22 +1526,25 @@ class MainWindow(QMainWindow):
         self._update_toggle_button()
         self._update_progress_bar()
 
-        if self._details_visible and hasattr(self, "details_panel") and self.details_panel is not None:
+        if (
+            self._details_visible
+            and hasattr(self, "details_panel")
+            and self.details_panel is not None
+        ):
             self._update_details_panel()
 
         self._manage_schedules()
 
-        # ===== به‌روزرسانی همه دیالوگ‌های پیشرفت =====
         for gid, dialog in list(self._progress_dialogs.items()):
             try:
                 if dialog.isVisible() and gid in self._all_downloads:
                     dialog.update_data(self._all_downloads[gid])
             except (RuntimeError, AttributeError):
                 self._progress_dialogs.pop(gid, None)
-        # ============================================
 
         if self.shutdown_cb.isChecked():
             self._check_already_complete()
+
     def _update_downloads_from_stats(self, downloads_list: List[Dict]) -> None:
         saved_data = {}
         for gid, data in self._all_downloads.items():
@@ -4303,7 +4320,7 @@ class MainWindow(QMainWindow):
             except Exception:
                 pass
         self._progress_dialogs.clear()
-        
+
         if self._youtube_dialog is not None:
             try:
                 self._youtube_dialog.close()
