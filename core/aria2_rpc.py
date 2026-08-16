@@ -161,6 +161,7 @@ class Aria2RPC:
                 "--save-session-interval=60",
                 "--timeout=5",
                 "--connect-timeout=5",
+                "--pause=true"
             ]
 
             if disable_ssl_verify:

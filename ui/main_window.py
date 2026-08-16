@@ -4,6 +4,7 @@ import subprocess
 import re
 import uuid
 import shutil
+import signal
 from datetime import datetime
 from typing import Dict, List, Optional, Any, Set
 
@@ -227,6 +228,10 @@ class MainWindow(QMainWindow):
             session_file = os.path.join(
                 os.path.expanduser("~/.config/felfelDM"), "aria2.session"
             )
+            pid_file = os.path.join(
+                os.path.expanduser("~/.config/felfelDM"), "aria2.pid"
+            )
+
             os.makedirs(os.path.dirname(session_file), exist_ok=True)
             if not os.path.exists(session_file):
                 open(session_file, "w").close()
@@ -248,6 +253,8 @@ class MainWindow(QMainWindow):
                 f"--save-session={session_file}",
                 f"--input-file={session_file}",
                 "--save-session-interval=60",
+                "--pause=true",
+                f"--pid-file={pid_file}",
             ]
 
             if self.store.settings.get("disable_ssl_verify", False):
@@ -267,6 +274,42 @@ class MainWindow(QMainWindow):
                 "aria2 Not Found",
                 "aria2 is not installed.",
             )
+
+    def _stop_own_aria2(self) -> None:
+        """Stop only the aria2 instance we started"""
+        pid_file = os.path.join(os.path.expanduser("~/.config/felfelDM"), "aria2.pid")
+
+        if not os.path.exists(pid_file):
+            print("⚠️ No PID file found, skipping aria2 shutdown")
+            return
+
+        try:
+            with open(pid_file, "r") as f:
+                pid = int(f.read().strip())
+
+            print(f"🛑 Stopping aria2 with PID: {pid}")
+
+            os.kill(pid, signal.SIGTERM)
+
+            for _ in range(10):
+                try:
+                    os.kill(pid, 0)
+                    time.sleep(0.2)
+                except OSError:
+                    break
+
+            if os.path.exists(pid_file):
+                os.remove(pid_file)
+            print(f"✅ aria2 (PID: {pid}) stopped successfully")
+
+        except FileNotFoundError:
+            print("⚠️ PID file not found")
+        except ProcessLookupError:
+            print("⚠️ Process already terminated")
+            if os.path.exists(pid_file):
+                os.remove(pid_file)
+        except Exception as e:
+            print(f"⚠️ Error stopping aria2: {e}")
 
     def _build_ui(self) -> None:
         central = QWidget()
@@ -3125,8 +3168,6 @@ class MainWindow(QMainWindow):
             else:
                 options["check-certificate"] = "true"
 
-            print("apply setting", self.store.settings.get("disable_ssl_verify", False))
-
             self.aria2.change_global_option(options)
 
             return True
@@ -3802,31 +3843,23 @@ class MainWindow(QMainWindow):
                         break
 
             auto_clear = self.store.settings.get("auto_clear_completed", False)
-
             restored_count = 0
+            needs_save = False
+
             for q in self.store.queues:
-                for gid in q.downloads[:]:
+                to_remove = []
+
+                for gid in q.downloads:
                     info = q.downloads_info.get(gid, {})
                     status = info.get("status", "")
 
                     if auto_clear and status in ["complete", "completed"]:
-                        print(f"✅ Removing completed download: {gid}")
-                        q.downloads.remove(gid)
-                        if gid in q.downloads_info:
-                            del q.downloads_info[gid]
-                        if gid in self._all_downloads:
-                            del self._all_downloads[gid]
-                        self.store.save()
+                        print(f"✅ Marking completed download for removal: {gid}")
+                        to_remove.append(gid)
+                        needs_save = True
                         continue
 
                     if not info:
-                        # Don't block the GUI thread on an aria2 RPC here —
-                        # restore with sane defaults and let the worker
-                        # thread's normal polling (which already re-derives
-                        # this exact info for any gid with totalLength==0,
-                        # see _get_complete_download_info/_fetch_size_for_gid
-                        # in core/worker.py) fill it in within the first
-                        # poll tick after startup, asynchronously.
                         info = {
                             "name": "Unknown",
                             "status": "paused",
@@ -3837,6 +3870,7 @@ class MainWindow(QMainWindow):
                             "download_type": "normal",
                         }
                         q.downloads_info[gid] = info
+                        needs_save = True
 
                     total_length = int(info.get("totalLength", 0))
                     if total_length == 0:
@@ -3846,19 +3880,13 @@ class MainWindow(QMainWindow):
                                 total_length = int(files[0]["length"])
                             except (ValueError, TypeError):
                                 pass
-                    # No live aria2 RPC fallback here on purpose — if we
-                    # still don't have a size, the worker thread's poll
-                    # loop picks this gid up (totalLength == 0) and fetches
-                    # it asynchronously via _fetch_size_for_gid, same as
-                    # it always does. Blocking the GUI thread here with a
-                    # synchronous get_status() per download was the actual
-                    # cause of slow restores with many downloads.
 
                     info_status = info.get("status", "")
                     if info_status in ["complete", "completed", "error", "removed"]:
                         status = info_status
                     else:
                         status = "paused"
+
                     completed_length = int(info.get("completedLength", 0))
                     files = info.get("files", [])
                     download_type = info.get("download_type", "normal")
@@ -3893,8 +3921,18 @@ class MainWindow(QMainWindow):
                     q.downloads_info[gid]["totalLength"] = total_length
                     restored_count += 1
 
-            self.store.save()
+                for gid in to_remove:
+                    q.downloads.remove(gid)
+                    if gid in q.downloads_info:
+                        del q.downloads_info[gid]
+                    if gid in self._all_downloads:
+                        del self._all_downloads[gid]
+
+            if needs_save:
+                self.store.save()
+
             print(f"✅ Loaded {restored_count} download(s)")
+            print(f"📊 _all_downloads has {len(self._all_downloads)} entries")
 
             self._pause_all_aria2_downloads()
 
@@ -4341,12 +4379,9 @@ class MainWindow(QMainWindow):
         try:
             if self.aria2:
                 self.aria2.save_session()
-                self.aria2.shutdown()
-        except Exception:
-            try:
-                subprocess.run(["pkill", "-f", "aria2c"], capture_output=True)
-            except:
-                pass
+                self._stop_own_aria2()
+        except Exception as e:
+            print(f"⚠️ Error during aria2 shutdown: {e}")
 
         shutdown_dialog.update_status("Closing data store...", 90)
         if hasattr(self.store, "shutdown"):
