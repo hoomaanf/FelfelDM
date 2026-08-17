@@ -3244,53 +3244,33 @@ class MainWindow(QMainWindow):
         if not self.shutdown_cb.isChecked() or self._shutdown_dialog_shown:
             return
 
-        try:
-            stat = self.aria2.get_global_stat() or {}
-            if int(stat.get("numActive", 0)) > 0 or int(stat.get("numWaiting", 0)) > 0:
-                return
-        except:
-            pass
+        total = 0
+        complete = 0
 
-        has_active = False
         for q in self.store.queues:
             for gid in q.downloads:
-                if gid in self._all_downloads:
-                    status = self._all_downloads[gid].get("status", "")
-                    if status in ["active", "waiting", "downloading"]:
-                        has_active = True
-                        break
-            if has_active:
-                break
+                total += 1
+                status = self._all_downloads.get(gid, {}).get("status", "")
 
-        if has_active:
+                if status in ["active", "waiting", "downloading"]:
+                    return
+
+                if status in ["complete", "completed", "error", "removed"]:
+                    complete += 1
+
+        if total == 0:
             return
 
-        has_any = False
-        all_complete = True
-        for q in self.store.queues:
-            if q.downloads:
-                has_any = True
-                for gid in q.downloads:
-                    if gid in self._all_downloads:
-                        status = self._all_downloads[gid].get("status", "")
-                        if status not in ["complete", "completed", "error", "removed"]:
-                            all_complete = False
-                            break
-                    else:
-                        all_complete = False
-                        break
-                if not all_complete:
-                    break
-
-        if has_any and all_complete and not self._shutdown_dialog_shown:
-            self._shutdown_dialog_shown = True
-            self.tray.showMessage(
-                "🌶️ FelfelDM",
-                "✅ All downloads completed!\n🛑 System will shut down in 20 seconds.",
-                QSystemTrayIcon.MessageIcon.Information,
-                5000,
-            )
-            self._show_shutdown_countdown()
+        if complete == total:
+            if not self._shutdown_dialog_shown:
+                self._shutdown_dialog_shown = True
+                self.tray.showMessage(
+                    "🌶️ FelfelDM",
+                    "✅ All downloads completed!\n🛑 System will shut down in 20 seconds.",
+                    QSystemTrayIcon.MessageIcon.Information,
+                    5000,
+                )
+                self._show_shutdown_countdown()
 
     def _show_shutdown_countdown(self) -> None:
         if self._shutdown_dialog:
@@ -3359,11 +3339,9 @@ class MainWindow(QMainWindow):
             self._cancel_with_delete_from_dialog
         )
 
-        # ===== این رو درست کن =====
         dialog.finished.connect(
             lambda result: self._on_progress_dialog_closed(gid, result)
         )
-        # =========================
 
         self._progress_dialogs[gid] = dialog
         dialog.show()
@@ -3394,14 +3372,29 @@ class MainWindow(QMainWindow):
             return
 
         real_status = self._all_downloads[gid].get("status", "")
-        if real_status in ["paused", "error"]:
-            if real_status == "error":
-                self._re_add_download(gid)
-                return
+        download_type = self._all_downloads[gid].get("download_type", "normal")
 
+        if download_type == "youtube":
+            self._resume_youtube_download(gid)
+            return
+
+        if real_status == "error":
+            print(f"🔄 Retrying error download from dialog: {gid}")
+            self._retry_single_download(gid)
+            return
+
+        if real_status == "paused":
             self.worker.resume_requested.emit(gid)
             self._all_downloads[gid]["status"] = "active"
-            self.store.save()
+            self.store.mark_dirty()
+            self._refresh_table()
+            self._update_queue_buttons()
+            return
+
+        if real_status in ["waiting", "stopped"]:
+            self.worker.resume_requested.emit(gid)
+            self._all_downloads[gid]["status"] = "active"
+            self.store.mark_dirty()
             self._refresh_table()
             self._update_queue_buttons()
 
@@ -3473,13 +3466,76 @@ class MainWindow(QMainWindow):
         if not gid:
             return
 
-        if (
-            gid in self._all_downloads
-            and self._all_downloads[gid].get("download_type") == "youtube"
-        ):
-            self._resume_youtube_download(gid)
-        else:
-            self.worker.resume_requested.emit(gid)
+        if gid in self._all_downloads:
+            download_type = self._all_downloads[gid].get("download_type", "normal")
+            real_status = self._all_downloads[gid].get("status", "")
+
+            if download_type == "youtube":
+                self._resume_youtube_download(gid)
+                return
+
+            if real_status == "error":
+                print(f"🔄 Retrying error download: {gid}")
+                self._retry_single_download(gid)
+                return
+
+            if real_status == "paused":
+                self.worker.resume_requested.emit(gid)
+                self._all_downloads[gid]["status"] = "active"
+                self.store.mark_dirty()
+                self._refresh_table()
+                self._update_queue_buttons()
+                return
+
+            if real_status == "waiting":
+                self.worker.resume_requested.emit(gid)
+                self._all_downloads[gid]["status"] = "active"
+                self.store.mark_dirty()
+                self._refresh_table()
+                self._update_queue_buttons()
+
+    def _retry_single_download(self, gid: str) -> None:
+        """Retry a single error download"""
+        if not gid or gid not in self._all_downloads:
+            return
+
+        if gid in self._retrying_gids:
+            print(f"⏳ Already retrying {gid}")
+            return
+
+        max_retries = self.store.settings.get("max_tries", 5)
+        error_count = self._to_int(self._all_downloads[gid].get("error_count", 0))
+
+        if error_count >= max_retries:
+            print(f"❌ Max retries reached for {gid}")
+            QMessageBox.warning(
+                self,
+                "Max Retries Reached",
+                f"This download has failed {max_retries} times.\n"
+                f"Please check the URL and try again manually.",
+                QMessageBox.StandardButton.Ok,
+            )
+            return
+
+        print(f"🔄 Retrying {gid} (attempt {error_count + 1}/{max_retries})")
+
+        # Reset error state
+        self._all_downloads[gid]["status"] = "waiting"
+        self._all_downloads[gid]["errorMessage"] = ""
+
+        # Re-add the download
+        self.worker.re_add_requested.emit(gid)
+
+        # Update UI
+        self._refresh_table()
+        self._update_queue_buttons()
+
+        self.tray.showMessage(
+            "FelfelDM",
+            f"🔄 Retrying download (attempt {error_count + 1}/{max_retries})",
+            QSystemTrayIcon.MessageIcon.Information,
+            2000,
+        )
 
     def _re_add_download(self, gid: str) -> Optional[str]:
         if self.worker is None:
@@ -3499,17 +3555,21 @@ class MainWindow(QMainWindow):
 
         download_type = self._all_downloads.get(gid, {}).get("download_type", "normal")
 
-        if real_status in ["active", "waiting", "downloading"]:
-            if download_type == "youtube":
+        if download_type == "youtube":
+            if real_status in ["active", "waiting", "downloading"]:
                 self._pause_youtube_download(gid)
-            else:
-                self._pause_selected()
-
-        elif real_status == "paused":
-            if download_type == "youtube":
+            elif real_status == "paused":
                 self._resume_youtube_download(gid)
-            else:
-                self._resume_selected()
+            return
+
+        if real_status == "error":
+            self._retry_single_download(gid)
+            return
+
+        if real_status in ["active", "waiting", "downloading"]:
+            self._pause_selected()
+        elif real_status == "paused":
+            self._resume_selected()
 
     def _open_folder(self, gid: str) -> None:
         try:
