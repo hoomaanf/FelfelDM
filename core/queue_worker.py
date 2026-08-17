@@ -78,18 +78,22 @@ class QueueOperationWorker(QThread):
                 self.status_update.emit(f"❌ Status check failed: {str(e)[:30]}")
 
             to_resume = []
+            to_readd = []
             for gid in normal_gids:
                 status_data = statuses.get(gid)
-
                 if not status_data:
-                    self.status_update.emit(f"Re-adding: {gid[:8]}...")
-                    self.worker.re_add_requested.emit(gid)
+                    to_readd.append(gid)
+                    self.download_status_changed.emit(gid, "waiting")
                     resumed_count += 1
                     continue
 
                 real_status = status_data.get("status", "unknown")
 
-                if real_status in ["paused", "waiting", "error"]:
+                if real_status == "error":
+                    to_readd.append(gid)
+                    self.download_status_changed.emit(gid, "waiting")
+                    resumed_count += 1
+                elif real_status in ["paused", "waiting"]:
                     to_resume.append(gid)
                     self.download_status_changed.emit(gid, "active")
                     resumed_count += 1
@@ -101,13 +105,18 @@ class QueueOperationWorker(QThread):
                         f"Unknown status {real_status}: {gid[:8]}..."
                     )
 
+            for gid in to_readd:
+                self.status_update.emit(f"Re-adding: {gid[:8]}...")
+                self.worker.re_add_requested.emit(gid)
+
             if to_resume:
-                # One multicall to resume everything that needs it, instead
-                # of a separate resume_requested signal (and blocking RPC)
-                # per download.
+                for i, gid in enumerate(to_resume):
+                    try:
+                        self.aria2._call("aria2.changePosition", [gid, i, "POS_SET"])
+                    except Exception as e:
+                        print(f"⚠️ changePosition failed for {gid}: {e}")
                 self.status_update.emit(f"Resuming {len(to_resume)} item(s)...")
                 self.worker.resume_multi_requested.emit(to_resume)
-
             if q and getattr(q, "speed_limit", 0) > 0:
                 try:
                     self.worker.set_speed_limit_multi_requested.emit(

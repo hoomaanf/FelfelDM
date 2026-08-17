@@ -1929,14 +1929,15 @@ class MainWindow(QMainWindow):
         new_gids = []
 
         is_direct = q.name == "__direct__"
-
+        print(f"📂 [Add] Using save path: {d['path']!r}")
+        print(f"📂 [Add] URLs count: {len(d['urls'])}")
         for url in d["urls"]:
             url_options = options.copy()
-
             if not is_direct and q.paused:
                 url_options["pause"] = "true"
 
             gid = self.aria2.add_url(url, url_options)
+            print(f"📂 [Add] GID {gid} → dir={url_options.get('dir')}")
 
             if gid:
                 if gid in self._cleared_gids:
@@ -2427,9 +2428,11 @@ class MainWindow(QMainWindow):
 
         is_direct = queue_name == "__direct__"
         added_gids = []
-
+        print(f"📂 [Add] Using save path: {d['path']!r}")
+        print(f"📂 [Add] URLs count: {len(d['urls'])}")
         for url in d["urls"]:
             url_options = options.copy()
+            print(f"📂 [Add] GID {gid} → dir={url_options.get('dir')}")
 
             if not is_direct and target_queue.paused:
                 url_options["pause"] = "true"
