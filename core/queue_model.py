@@ -43,6 +43,7 @@ class Queue:
             "downloads_info": self.downloads_info,
             "paused": self.paused,
             "speed_limit": self.speed_limit,
+            "manually_paused": self.manually_paused,
         }
 
     @classmethod
@@ -65,6 +66,7 @@ class Queue:
         q.downloads = list(data.get("downloads", []))
         q.downloads_info = data.get("downloads_info", {})
         q.proxy_config = data.get("proxy_config", None)
+        q.manually_paused = data.get("manually_paused", q.paused)
         return q
 
     def is_scheduled_now(self):

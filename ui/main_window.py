@@ -1526,6 +1526,9 @@ class MainWindow(QMainWindow):
             self._update_queue_buttons()
             self._update_shutdown_button_state()
             self._refresh_table()
+            q = self._current_queue()
+            if q and not q.paused:
+                self._apply_settings_to_aria2()
 
     def _on_stats_received(self, result: Dict[str, Any]) -> None:
         if not isinstance(result, dict):
@@ -3158,8 +3161,17 @@ class MainWindow(QMainWindow):
 
     def _apply_settings_to_aria2(self) -> bool:
         try:
-            max_concurrent = self.store.settings.get("max_concurrent", 5)
             max_tries = self.store.settings.get("max_tries", 0)
+
+            q = self._current_queue()
+            if q and q.name != "__direct__" and q.max_concurrent > 0:
+                max_concurrent = q.max_concurrent
+                print(
+                    f"📊 Using queue-specific concurrency: {max_concurrent} (queue: {q.name})"
+                )
+            else:
+                max_concurrent = self.store.settings.get("max_concurrent", 5)
+                print(f"📊 Using global concurrency: {max_concurrent}")
 
             options = {
                 "max-concurrent-downloads": str(max_concurrent),
@@ -3172,9 +3184,9 @@ class MainWindow(QMainWindow):
                 options["check-certificate"] = "true"
 
             self.aria2.change_global_option(options)
-
             return True
-        except Exception:
+        except Exception as e:
+            print(f"⚠️ Error applying settings: {e}")
             return False
 
     def _apply_global_speed_limit(self) -> None:
