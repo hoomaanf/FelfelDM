@@ -175,11 +175,25 @@ class BackendWorker(QThread):
         downloads_snapshot = []
         seen_gids = set()
 
+        valid_gids = set()
+        for q in self.store.queues:
+            valid_gids.update(q.downloads)
+
         for download in all_downloads:
             gid = download.get("gid")
             if not gid or gid in seen_gids:
                 continue
             seen_gids.add(gid)
+
+            if gid not in valid_gids:
+                print(f"🚫 [Worker] Ignoring orphan GID: {gid}")
+                try:
+                    self.aria2.remove(gid)
+                    print(f"🗑️ [Worker] Removed orphan GID from aria2: {gid}")
+                except Exception as e:
+                    print(f"⚠️ [Worker] Could not remove orphan {gid}: {e}")
+                continue
+
             complete_info = self._get_complete_download_info(gid, download)
             if complete_info:
                 downloads_snapshot.append(complete_info)
@@ -334,7 +348,7 @@ class BackendWorker(QThread):
             from core.file_size_fetcher import get_file_size
             from utils.helpers import get_category_from_filename
 
-            print(f"📏 [Worker] Fetching size for {gid}: {url[:50]}...")
+            print(f"📏 [Worker] Fetching size for {gid}: {url}")
 
             size = get_file_size(url, timeout=10)
             if size is not None and size < 0:
