@@ -1901,6 +1901,9 @@ class MainWindow(QMainWindow):
             return
 
         q = visible_queues[queue_index]
+
+        q.save_path = d["path"]
+
         self._apply_settings_to_aria2()
 
         proxy_mode = d.get("proxy_mode", 0)
@@ -1940,7 +1943,6 @@ class MainWindow(QMainWindow):
                 url_options["pause"] = "true"
 
             gid = self.aria2.add_url(url, url_options)
-            print(f"📂 [Add] GID {gid} → dir={url_options.get('dir')}")
 
             if gid:
                 if gid in self._cleared_gids:
@@ -2404,7 +2406,7 @@ class MainWindow(QMainWindow):
 
         queue_name = d.get("queue_name", "__direct__")
         target_queue = self._get_or_create_queue(queue_name)
-
+        target_queue.save_path = d["path"]
         options = {
             "dir": d["path"],
             "split": str(d["connections"]),
@@ -2435,7 +2437,6 @@ class MainWindow(QMainWindow):
         print(f"📂 [Add] URLs count: {len(d['urls'])}")
         for url in d["urls"]:
             url_options = options.copy()
-            print(f"📂 [Add] GID {gid} → dir={url_options.get('dir')}")
 
             if not is_direct and target_queue.paused:
                 url_options["pause"] = "true"
@@ -2815,6 +2816,8 @@ class MainWindow(QMainWindow):
             target_queue = Queue(queue_name, paused=True)
             self.store.queues.append(target_queue)
             self.store.save()
+
+        target_queue.save_path = download_data["save_path"]
 
         download_id = str(uuid.uuid4())
 
@@ -3967,6 +3970,12 @@ class MainWindow(QMainWindow):
                     download_type = info.get("download_type", "normal")
                     category = info.get("category", "📁 Other")
                     name = info.get("name", "Unknown")
+
+                    # ===== اگر files خالی بود و q.save_path داشت، از آن استفاده کن =====
+                    if not files or not files[0].get("path"):
+                        if name and q.save_path:
+                            files = [{"path": os.path.join(q.save_path, name)}]
+                    # ==============================================================
 
                     if name == "Unknown":
                         if files and files[0].get("path"):
