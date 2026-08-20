@@ -1902,7 +1902,9 @@ class MainWindow(QMainWindow):
 
         q = visible_queues[queue_index]
 
-        q.save_path = d["path"]
+        # Note: intentionally NOT touching q.save_path here. The path chosen
+        # in this dialog is per-download only; the queue's own default save
+        # location (set via Queue Settings) must stay untouched.
 
         self._apply_settings_to_aria2()
 
@@ -1967,6 +1969,7 @@ class MainWindow(QMainWindow):
                     "files": [{"path": full_path}],
                     "category": "📁 Other",
                     "download_type": "normal",
+                    "save_path": d["path"],
                 }
 
                 new_gids.append(gid)
@@ -1985,6 +1988,7 @@ class MainWindow(QMainWindow):
                     "category": "📁 Other",
                     "size_fetch_attempts": 0,
                     "download_type": "normal",
+                    "save_path": d["path"],
                 }
 
                 if q and getattr(q, "speed_limit", 0) > 0:
@@ -2406,7 +2410,9 @@ class MainWindow(QMainWindow):
 
         queue_name = d.get("queue_name", "__direct__")
         target_queue = self._get_or_create_queue(queue_name)
-        target_queue.save_path = d["path"]
+        # Intentionally not overwriting target_queue.save_path: the path
+        # picked here applies to this batch of downloads only, not to the
+        # queue's own default location.
         options = {
             "dir": d["path"],
             "split": str(d["connections"]),
@@ -2462,6 +2468,7 @@ class MainWindow(QMainWindow):
                     "files": [{"path": full_path}],
                     "category": "📁 Other",
                     "download_type": "normal",
+                    "save_path": d["path"],
                 }
 
                 self._all_downloads[gid] = {
@@ -2477,6 +2484,7 @@ class MainWindow(QMainWindow):
                     "category": "📁 Other",
                     "size_fetch_attempts": 0,
                     "download_type": "normal",
+                    "save_path": d["path"],
                 }
 
                 added_gids.append(gid)
@@ -2612,7 +2620,7 @@ class MainWindow(QMainWindow):
         for q in self.store.queues:
             if gid in q.downloads_info:
                 info = q.downloads_info[gid]
-                save_path = q.save_path
+                save_path = info.get("save_path") or q.save_path
                 name = info.get("name", "").strip()
                 url = info.get("url", "")
                 download_type = info.get("download_type", "normal")
@@ -2817,7 +2825,10 @@ class MainWindow(QMainWindow):
             self.store.queues.append(target_queue)
             self.store.save()
 
-        target_queue.save_path = download_data["save_path"]
+        # Intentionally not overwriting target_queue.save_path: the location
+        # chosen in the YouTube dialog belongs to this download only. It is
+        # stored on the download record itself (youtube_data / downloads_info
+        # below), not on the queue's default.
 
         download_id = str(uuid.uuid4())
 
@@ -2872,6 +2883,7 @@ class MainWindow(QMainWindow):
             "category": "🎬 YouTube",
             "download_type": "youtube",
             "real_path": full_path,
+            "save_path": download_data["save_path"],
             "yt_options": youtube_data["yt_options"],
         }
 
@@ -2888,6 +2900,7 @@ class MainWindow(QMainWindow):
             "download_type": "youtube",
             "files": [{"path": full_path}],
             "real_path": full_path,
+            "save_path": download_data["save_path"],
         }
 
         self.store.save()
@@ -3611,8 +3624,9 @@ class MainWindow(QMainWindow):
                 files = info.get("files", [])
                 if files and files[0].get("path"):
                     return os.path.dirname(files[0]["path"])
-                if q.save_path and os.path.exists(q.save_path):
-                    return q.save_path
+                dl_save_path = info.get("save_path") or q.save_path
+                if dl_save_path and os.path.exists(dl_save_path):
+                    return dl_save_path
 
         saved_data = self.store.get_youtube_download(gid)
         if saved_data:
@@ -3971,10 +3985,11 @@ class MainWindow(QMainWindow):
                     category = info.get("category", "📁 Other")
                     name = info.get("name", "Unknown")
 
-                    # ===== اگر files خالی بود و q.save_path داشت، از آن استفاده کن =====
+                    # ===== اگر files خالی بود، از save_path خود دانلود (در صورت وجود) یا q.save_path استفاده کن =====
                     if not files or not files[0].get("path"):
-                        if name and q.save_path:
-                            files = [{"path": os.path.join(q.save_path, name)}]
+                        dl_save_path = info.get("save_path") or q.save_path
+                        if name and dl_save_path:
+                            files = [{"path": os.path.join(dl_save_path, name)}]
                     # ==============================================================
 
                     if name == "Unknown":

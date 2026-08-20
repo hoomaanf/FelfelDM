@@ -61,6 +61,7 @@ _PERSISTED_DOWNLOAD_FIELDS = (
     "size_fetch_attempts",
     "real_path",
     "yt_options",
+    "save_path",
 )
 
 

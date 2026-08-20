@@ -68,7 +68,9 @@ class Aria2Handler(QObject):
                 if old_gid in q.downloads_info:
                     info = q.downloads_info[old_gid]
                     url = info.get("url")
-                    save_path = q.save_path
+                    # Prefer the download's own save location; fall back to
+                    # the queue's default only if it wasn't set explicitly.
+                    save_path = info.get("save_path") or q.save_path
                     speed_limit = getattr(q, "speed_limit", 0)
                     break
 
