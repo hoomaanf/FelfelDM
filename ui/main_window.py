@@ -97,6 +97,7 @@ class MainWindow(QMainWindow):
         self.tray_icon_normal = None
         self.tray_icon_active = None
         self._last_tray_state = False
+        self._startup_complete = False
 
     def _init_ui(self) -> None:
         theme_setting: str = self.store.settings.get("theme", "auto")
@@ -173,11 +174,13 @@ class MainWindow(QMainWindow):
 
         self.speed_update_timer = QTimer()
         self.speed_update_timer.timeout.connect(self._update_speed_display)
-        self.speed_update_timer.start(100)
+        self.speed_update_timer.start(300)
 
         self.splash.update_status("Ready!", 100)
         QApplication.processEvents()
         QTimer.singleShot(800, self._close_splash)
+
+        self._startup_complete = False
 
     def _init_services(self) -> None:
         if self.splash:
@@ -3272,6 +3275,10 @@ class MainWindow(QMainWindow):
             self._check_already_complete()
 
     def _check_already_complete(self) -> None:
+
+        if not self._startup_complete:
+            return
+
         if not self.shutdown_cb.isChecked() or self._shutdown_dialog_shown:
             return
 

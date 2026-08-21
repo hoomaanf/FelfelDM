@@ -147,7 +147,7 @@ class BackendWorker(QThread):
                 if not self.aria2.is_connected():
                     if not self.aria2.start_aria2():
                         self.stats_updated.emit({"connected": False})
-                        self.msleep(100)
+                        self.msleep(300)
                         continue
 
                 snapshot = self._build_runtime_snapshot()
@@ -157,7 +157,7 @@ class BackendWorker(QThread):
                 self.aria2_error.emit(str(e))
                 self.stats_updated.emit({"connected": False})
 
-            self.msleep(100)
+            self.msleep(300)
 
     def stop(self):
         self.running = False

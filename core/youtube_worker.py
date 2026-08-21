@@ -186,7 +186,7 @@ class YouTubeWorker(QThread):
         if self.process:
             try:
                 self.process.terminate()
-                time.sleep(0.1)
+                time.sleep(0.3)
                 if self.process.poll() is None:
                     self.process.kill()
             except:

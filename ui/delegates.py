@@ -1,8 +1,5 @@
-# ui/delegates.py
-
 from PyQt6.QtWidgets import (
     QStyledItemDelegate,
-    QStyleOptionProgressBar,
     QApplication,
     QStyle,
 )
@@ -27,21 +24,19 @@ class ProgressDelegate(QStyledItemDelegate):
                     window_color = palette.color(QPalette.ColorRole.Window)
                     is_dark = window_color.lightness() < 128
 
-                    # ===== تنظیم رنگ‌ها با کنتراست بهتر =====
                     if is_dark:
-                        # حالت تاریک
-                        bg_color = QColor(55, 55, 60)      # پس‌زمینه تیره
-                        text_color = QColor(255, 255, 255)  # متن سفید
-                        border_color = QColor(70, 70, 75)   # حاشیه تیره
+
+                        bg_color = QColor(55, 55, 60)
+                        text_color = QColor(255, 255, 255)
+                        border_color = QColor(70, 70, 75)
                     else:
-                        # حالت روشن - پس‌زمینه روشن‌تر از سطر
-                        bg_color = QColor(230, 230, 235)    # پس‌زمینه روشن
-                        text_color = QColor(30, 30, 33)     # متن تیره
-                        border_color = QColor(200, 200, 205) # حاشیه روشن
+
+                        bg_color = QColor(230, 230, 235)
+                        text_color = QColor(30, 30, 33)
+                        border_color = QColor(200, 200, 205)
 
                     rect_f = QRectF(rect)
 
-                    # ===== رسم پس‌زمینه با حاشیه =====
                     main_path = QPainterPath()
                     main_path.addRoundedRect(rect_f, 6.0, 6.0)
 
@@ -49,7 +44,6 @@ class ProgressDelegate(QStyledItemDelegate):
                     painter.setPen(QPen(border_color, 1))
                     painter.drawPath(main_path)
 
-                    # ===== رسم پیشرفت =====
                     if val > 0:
                         fill_rect = QRect(
                             rect.x(),
@@ -58,18 +52,16 @@ class ProgressDelegate(QStyledItemDelegate):
                             rect.height(),
                         )
 
-                        # ===== رنگ‌های پیشرفت =====
                         if val < 30:
-                            painter.setBrush(QBrush(QColor(231, 76, 60)))   # قرمز
+                            painter.setBrush(QBrush(QColor(231, 76, 60)))
                         elif val < 70:
-                            painter.setBrush(QBrush(QColor(241, 196, 15)))  # زرد
+                            painter.setBrush(QBrush(QColor(241, 196, 15)))
                         else:
-                            painter.setBrush(QBrush(QColor(46, 204, 113)))  # سبز
+                            painter.setBrush(QBrush(QColor(46, 204, 113)))
 
                         painter.setClipPath(main_path)
                         painter.drawRect(fill_rect)
 
-                    # ===== رسم متن =====
                     painter.setPen(QPen(text_color))
                     painter.drawText(rect, Qt.AlignmentFlag.AlignCenter, f"{val}%")
 
