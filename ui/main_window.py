@@ -25,6 +25,9 @@ from ui.dialogs import *
 from ui.table_model import DownloadTableModel
 from ui.delegates import ProgressDelegate
 from ui.youtube_progress import YouTubeProgressDialog
+from ui.export_dialog import ExportDialog
+from ui.export_manager import ExportManager
+
 from utils.helpers import (
     format_size,
     format_speed,
@@ -98,6 +101,7 @@ class MainWindow(QMainWindow):
         self.tray_icon_active = None
         self._last_tray_state = False
         self._startup_complete = False
+        self.export_manager = ExportManager(self)
 
     def _init_ui(self) -> None:
         theme_setting: str = self.store.settings.get("theme", "auto")
@@ -612,6 +616,13 @@ class MainWindow(QMainWindow):
         add_action.triggered.connect(self._add_download)
         add_action.setShortcut("Ctrl+N")
         file_menu.addAction(add_action)
+
+        file_menu.addSeparator()
+
+        export_action = QAction(get_icon("document-save"), "Export Downloads", self)
+        export_action.triggered.connect(self._export_downloads)
+        export_action.setShortcut("Ctrl+E")
+        file_menu.addAction(export_action)
 
         file_menu.addSeparator()
 
@@ -2313,6 +2324,7 @@ class MainWindow(QMainWindow):
             ("Ctrl+,", "Settings"),
             ("F5", "Refresh"),
             ("F1", "Show shortcuts"),
+            ("Ctrl+E", "Export Downloads"),
         ]
 
         msg = "<h3>Keyboard Shortcuts</h3><br>"
@@ -4757,3 +4769,27 @@ class MainWindow(QMainWindow):
             pass
 
         print(f"⚠️ Could not play sound: {sound_path}")
+
+    def _export_downloads(self):
+        """Open export dialog"""
+        queues_with_downloads = [q for q in self.store.queues if q.downloads]
+        if not queues_with_downloads:
+            QMessageBox.information(self, "Export", "No downloads to export.")
+            return
+
+        dialog = ExportDialog(queues_with_downloads, self)
+        if dialog.exec() == QDialog.DialogCode.Accepted:
+            data = dialog.get_data()
+            success, message = self.export_manager.export_downloads(
+                data["queue"], data["format"], data["path"], data["include_headers"]
+            )
+
+            if success:
+                self.tray.showMessage(
+                    "FelfelDM",
+                    f"✅ {message}",
+                    QSystemTrayIcon.MessageIcon.Information,
+                    3000,
+                )
+            else:
+                QMessageBox.critical(self, "Export Failed", message)

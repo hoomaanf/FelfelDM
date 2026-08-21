@@ -10,3 +10,5 @@ from .dialogs import (
 from .table_model import DownloadTableModel
 from .delegates import ProgressDelegate
 from .proxy_dialog import ProxyDialog, QueueProxyDialog
+from .export_dialog import ExportDialog
+from .export_manager import ExportManager
