@@ -907,6 +907,7 @@ class MainWindow(QMainWindow):
         )
 
         self._refresh_table()
+        self._queue_list_dirty = True
         self._refresh_queue_list()
         self._update_queue_status()
         self._update_queue_buttons()
@@ -2402,6 +2403,7 @@ class MainWindow(QMainWindow):
 
             self.store.save()
             self._refresh_table()
+            self._queue_list_dirty = True
             self._refresh_queue_list()
             self._update_queue_buttons()
             self._update_status_stats()
@@ -2505,6 +2507,7 @@ class MainWindow(QMainWindow):
                 added_gids.append(gid)
 
         self.store.save()
+        self._queue_list_dirty = True
         self._refresh_queue_list()
         self._refresh_table()
         self._update_shutdown_button_state()
@@ -2932,6 +2935,7 @@ class MainWindow(QMainWindow):
                 }
             )
 
+        self._queue_list_dirty = True
         self._refresh_queue_list()
         self._refresh_table()
         self._update_queue_buttons()
@@ -3013,6 +3017,7 @@ class MainWindow(QMainWindow):
         self.store.save()
 
         self._refresh_table()
+        self._queue_list_dirty = True
         self._refresh_queue_list()
         self._update_queue_buttons()
 
@@ -3463,6 +3468,7 @@ class MainWindow(QMainWindow):
 
         self.store.save()
         self._refresh_table()
+        self._queue_list_dirty = True
         self._refresh_queue_list()
         self._progress_dialog = None
 
@@ -3494,6 +3500,7 @@ class MainWindow(QMainWindow):
 
         self.store.save()
         self._refresh_table()
+        self._queue_list_dirty = True
         self._refresh_queue_list()
         self._progress_dialog = None
 
@@ -3738,6 +3745,7 @@ class MainWindow(QMainWindow):
             new_queue = Queue(name.strip(), paused=True)
             self.store.queues.append(new_queue)
             self.store.save()
+            self._queue_list_dirty = True
             self._refresh_queue_list()
             self._update_queue_buttons()
 
@@ -3776,6 +3784,7 @@ class MainWindow(QMainWindow):
             self.proxy_manager.remove_queue_proxy(q.name)
 
         self.store.save()
+        self._queue_list_dirty = True
         self._refresh_queue_list()
         self._update_queue_buttons()
         self._apply_settings_to_aria2()
@@ -3794,6 +3803,7 @@ class MainWindow(QMainWindow):
             self.store.queues.pop(self._current_queue_idx)
             self._current_queue_idx = 0
             self.store.save()
+            self._queue_list_dirty = True
             self._refresh_queue_list()
             self._update_queue_buttons()
 
@@ -3806,6 +3816,7 @@ class MainWindow(QMainWindow):
         self._current_queue_idx = current_row - 1
 
         self.store.save()
+        self._queue_list_dirty = True
         self._refresh_queue_list()
         self.queue_list.setCurrentRow(self._current_queue_idx)
         self._on_queue_changed(self._current_queue_idx)
@@ -3819,6 +3830,7 @@ class MainWindow(QMainWindow):
         self._current_queue_idx = current_row + 1
 
         self.store.save()
+        self._queue_list_dirty = True
         self._refresh_queue_list()
         self.queue_list.setCurrentRow(self._current_queue_idx)
         self._on_queue_changed(self._current_queue_idx)
@@ -3930,6 +3942,7 @@ class MainWindow(QMainWindow):
                     target_queue.downloads_info[gid]["status"] = "active"
 
         self.store.save()
+        self._queue_list_dirty = True
         self._refresh_queue_list()
         self._refresh_table()
         self._update_queue_buttons()
@@ -4139,6 +4152,7 @@ class MainWindow(QMainWindow):
                 del self._all_downloads[gid]
 
         self.store.save()
+        self._queue_list_dirty = True
         self._refresh_queue_list()
         self._refresh_table()
         self._update_queue_buttons()
@@ -4157,6 +4171,7 @@ class MainWindow(QMainWindow):
                     q.paused = False
                     q.manually_paused = False
                     self.store.save()
+                    self._queue_list_dirty = True
                     self._refresh_queue_list()
 
                     for gid in q.downloads:
@@ -4181,6 +4196,7 @@ class MainWindow(QMainWindow):
                     q.paused = True
                     q.manually_paused = False
                     self.store.save()
+                    self._queue_list_dirty = True
                     self._refresh_queue_list()
 
                     for gid in q.downloads:
@@ -4317,6 +4333,7 @@ class MainWindow(QMainWindow):
                     self._retry_done.add(old_gid)
 
                     self._refresh_table()
+                    self._queue_list_dirty = True
                     self._refresh_queue_list()
                     self._update_queue_buttons()
 
