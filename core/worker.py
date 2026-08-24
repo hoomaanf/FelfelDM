@@ -438,8 +438,6 @@ class BackendWorker(QThread):
                 if old_gid in q.downloads_info:
                     info = q.downloads_info[old_gid]
                     url = info.get("url")
-                    # Prefer the download's own save location; fall back to
-                    # the queue's default only if it wasn't set explicitly.
                     save_path = info.get("save_path") or q.save_path
                     speed_limit = getattr(q, "speed_limit", 0)
                     break
@@ -455,13 +453,13 @@ class BackendWorker(QThread):
                 "max-connection-per-server": "8",
                 "continue": "true",
                 "always-resume": "true",
+                "pause": "false", 
             }
             if speed_limit > 0:
                 options["max-download-limit"] = f"{speed_limit}K"
 
             new_gid = self.aria2.add_url(url, options)
             if new_gid:
-                self.aria2.resume(new_gid)
                 print(f"🔄 [Worker] Re-added {old_gid} -> {new_gid}")
                 self.operation_result.emit("re_add", new_gid)
             else:

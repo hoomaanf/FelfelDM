@@ -92,12 +92,7 @@ class AccordionGroup(QWidget):
 
 class AddDownloadDialog(QDialog):
     def __init__(self, queues, default_queue=0, parent=None):
-        # No real Qt parent on purpose: a widget with a Qt parent gets a
-        # "transient for" hint sent to the window manager, which is what
-        # keeps it grouped with the main window (no separate taskbar
-        # entry, tied stacking) even after changing window flags.
-        # DownloadProgressDialog already does this correctly (parent=None)
-        # and behaves as a real independent window — matching that here.
+
         super().__init__(None)
         self._main_window = parent
         self.setWindowTitle("Add Downloads")
@@ -255,8 +250,7 @@ class AddDownloadDialog(QDialog):
         self._path_user_edited = True
 
     def _on_queue_selection_changed(self, index):
-        # Keep "Save to" in sync with the selected queue's default location,
-        # unless the user has explicitly typed or browsed to a custom path.
+
         if not self._path_user_edited:
             self.path_edit.setText(self._default_path_for_index(index))
 
@@ -793,8 +787,6 @@ class YouTubeDownloadDialog(QDialog):
         self.queue_combo.currentIndexChanged.connect(self._on_queue_selection_changed)
         opts_acc.addWidget(self.queue_combo)
 
-        # Now that the queue combo has a selection, sync the save path to it
-        # (the field was created earlier with a placeholder default).
         self._on_queue_selection_changed(self.queue_combo.currentIndex())
         self._path_user_edited = False
 
@@ -1294,11 +1286,7 @@ class QueueSettingsDialog(QDialog):
         self._cached_data = None
 
     def _on_accept(self):
-        # Read every widget value right now, before the dialog closes.
-        # A queued signal from the background worker thread (stats_updated)
-        # can be processed while this dialog's nested event loop is still
-        # running, so we must not wait until after exec() returns to read
-        # from the widgets.
+
         self._cached_data = self.get_queue_data()
         self.accept()
 
@@ -1631,12 +1619,10 @@ class SettingsDialog(QDialog):
         notif_group = QGroupBox("Download Completion Sound")
         notif_group_layout = QVBoxLayout(notif_group)
 
-        # چک‌باکس فعال/غیرفعال
         self.sound_enabled_cb = QCheckBox("Play sound when download completes")
         self.sound_enabled_cb.setChecked(settings.get("sound_enabled", True))
         notif_group_layout.addWidget(self.sound_enabled_cb)
 
-        # انتخاب فایل صدا
         sound_file_row = QHBoxLayout()
         sound_file_row.setSpacing(6)
         sound_file_row.addWidget(QLabel("Sound file:"))
@@ -1659,7 +1645,6 @@ class SettingsDialog(QDialog):
 
         notif_group_layout.addLayout(sound_file_row)
 
-        # اطلاعات
         info_label = QLabel("Supported formats: WAV, MP3, OGG, FLAC")
         info_label.setStyleSheet("color: #95a5a6; font-size: 11px;")
         notif_group_layout.addWidget(info_label)
@@ -2058,13 +2043,7 @@ class DownloadProgressDialog(QDialog):
     def __init__(self, gid, dl_data, parent=None, main_window=None):
         super().__init__(parent)
         self.gid = gid
-        # Qt parent is intentionally left None by the caller (see
-        # main_window.py) so this stays a true independent window, not
-        # tied to the main window's stacking. That means self.parent()
-        # is always None — so we take a plain reference here instead,
-        # the same way the other independent dialogs do, to still be
-        # able to reach main_window._find_download_folder() as a
-        # fallback when we don't have a fresh file path ourselves.
+
         self._main_window = main_window
         self.setWindowTitle("Download Progress")
         self.setMinimumWidth(480)
@@ -2081,11 +2060,9 @@ class DownloadProgressDialog(QDialog):
         self._is_complete = False
         self._file_path = None
 
-        # ===== تشخیص تم =====
         from utils.style import detect_system_theme
 
         self._is_dark = detect_system_theme()
-        # ====================
 
         main_layout = QVBoxLayout(self)
         main_layout.setSpacing(4)
@@ -2117,10 +2094,9 @@ class DownloadProgressDialog(QDialog):
         ]
 
         self.info_labels = {}
-        # ===== رنگ‌های پویا برای لیبل‌ها =====
+
         label_color = "#a6adc8" if self._is_dark else "#4a4a5a"
         value_color = "#cdd6f4" if self._is_dark else "#1e1e2a"
-        # ===================================
 
         for i, (icon_name, label, key) in enumerate(items):
             icon_lbl = QLabel()
@@ -2166,22 +2142,25 @@ class DownloadProgressDialog(QDialog):
                 self._file_path = files[0]["path"]
             self.update_data(dl_data)
 
+    def set_gid(self, new_gid: str) -> None:
+        self.gid = new_gid
+        self._is_complete = False
+        self._status = "active"
+        self.setWindowTitle("Download Progress")
+
     def _on_action_clicked(self):
         if self._is_complete:
             folder_path = None
 
-            # 1. از _file_path
             if self._file_path and os.path.exists(self._file_path):
                 folder_path = os.path.dirname(self._file_path)
 
-            # 2. اگر _file_path وجود نداشت، از MainWindow بپرس
             if not folder_path and self._main_window is not None:
                 try:
                     folder_path = self._main_window._find_download_folder(self.gid)
                 except Exception:
                     pass
 
-            # 3. fallback به Downloads
             if not folder_path:
                 folder_path = os.path.expanduser("~/Downloads")
 
@@ -2286,7 +2265,6 @@ class DownloadProgressDialog(QDialog):
 
         self.info_labels["connections"].setText(str(dl_data.get("connections", 0)))
 
-        # ===== رنگ وضعیت (بهبود یافته برای Light Mode) =====
         if self._is_dark:
             status_colors = {
                 "active": "#89b4fa",
@@ -2300,14 +2278,14 @@ class DownloadProgressDialog(QDialog):
             }
         else:
             status_colors = {
-                "active": "#1a5fb4",  # آبی پررنگ
+                "active": "#1a5fb4",
                 "downloading": "#1a5fb4",
-                "waiting": "#4a4a5a",  # خاکستری تیره
-                "paused": "#b8870a",  # طلایی تیره
-                "complete": "#26a269",  # سبز پررنگ
+                "waiting": "#4a4a5a",
+                "paused": "#b8870a",
+                "complete": "#26a269",
                 "completed": "#26a269",
-                "error": "#c01c28",  # قرمز پررنگ
-                "removed": "#6a6a7a",  # خاکستری متوسط
+                "error": "#c01c28",
+                "removed": "#6a6a7a",
             }
 
         status_texts = {

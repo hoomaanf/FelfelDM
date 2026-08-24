@@ -19,7 +19,6 @@ from core import (
     BackendWorker,
     TempDB,
     QueueOperationWorker,
-    RetryWorker,
 )
 from ui.dialogs import *
 from ui.table_model import DownloadTableModel
@@ -41,14 +40,6 @@ from core.proxy_manager import ProxyManager
 
 
 class MainWindow(QMainWindow):
-    # Aria2RPC.on_error can be invoked from any thread that happens to be
-    # running an RPC call when it fails (the GUI thread, BackendWorker,
-    # QueueOperationWorker, RetryWorker, ...). _on_aria2_error touches
-    # real widgets (tray, status label), so it must never run outside the
-    # GUI thread. Routing it through this signal makes that safe: emit()
-    # is fine from any thread, and Qt auto-queues the delivery to
-    # _on_aria2_error (connected below) onto this object's own thread —
-    # the GUI thread, since MainWindow itself lives there.
     _aria2_error_signal = pyqtSignal(str)
 
     def __init__(self) -> None:
@@ -73,6 +64,7 @@ class MainWindow(QMainWindow):
         self._cleared_gids: Set[str] = set()
         self._pending_pause: Set[str] = set()
         self._shutdown_dialog_shown: bool = False
+        self._retry_mapping: Dict[str, str] = {}
         self._progress_dialogs: Dict[str, DownloadProgressDialog] = {}
         self._youtube_dialog: Optional[QDialog] = None
         self._shutdown_dialog: Optional[QDialog] = None
@@ -85,7 +77,6 @@ class MainWindow(QMainWindow):
         self.worker: Optional[BackendWorker] = None
         self._first_stats_received = False
         self._retry_enabled = False
-        self._retry_workers: Dict[str, RetryWorker] = {}
         self._queue_worker: Optional[QueueOperationWorker] = None
         self.local_server: Optional[LocalServer] = None
         self.speed_update_timer: Optional[QTimer] = None
@@ -658,14 +649,12 @@ class MainWindow(QMainWindow):
     def _build_tray(self) -> None:
         self.tray = QSystemTrayIcon(self)
 
-        # آیکون عادی
         normal_path = get_resource_path("logo/icon512.png")
         if os.path.exists(normal_path):
             self.tray_icon_normal = QIcon(normal_path)
         else:
             self.tray_icon_normal = get_icon("download-manager")
 
-        # آیکون وقتی دانلود فعاله
         active_path = get_resource_path("logo/tray-active.png")
         if os.path.exists(active_path):
             self.tray_icon_active = QIcon(active_path)
@@ -725,15 +714,28 @@ class MainWindow(QMainWindow):
         if not self._validate_queue_start(q):
             return
 
+        error_gids = []
+        normal_gids = []
+
         for gid in q.downloads:
+            if gid in self._all_downloads:
+                status = self._all_downloads[gid].get("status", "")
+                if status in ["error", "stopped"]:
+                    error_gids.append(gid)
+                else:
+                    normal_gids.append(gid)
+
+        for gid in error_gids:
+            print(f"🔄 Retrying error download from queue start: {gid}")
+            self._retry_single_download(gid)
+
+        for gid in normal_gids:
             if gid in self._all_downloads:
                 self._all_downloads[gid]["error_count"] = 0
                 self._all_downloads[gid]["errorMessage"] = ""
-
-                if self._all_downloads[gid]["status"] in ["error", "stopped"]:
-                    self._all_downloads[gid]["status"] = "waiting"
-                    if gid in q.downloads_info:
-                        q.downloads_info[gid]["status"] = "waiting"
+                self._all_downloads[gid]["status"] = "waiting"
+                if gid in q.downloads_info:
+                    q.downloads_info[gid]["status"] = "waiting"
 
         q.manually_paused = False
         self._apply_settings_to_aria2()
@@ -742,9 +744,18 @@ class MainWindow(QMainWindow):
         self._queue_list_dirty = True
         self._refresh_queue_list()
 
-        self._queue_worker = QueueOperationWorker(q, "start", self)
-        self._connect_queue_worker_signals()
-        self._queue_worker.start()
+        if normal_gids:
+            temp_queue = Queue(q.name, paused=False)
+            temp_queue.downloads = normal_gids
+            for gid in normal_gids:
+                if gid in q.downloads_info:
+                    temp_queue.downloads_info[gid] = q.downloads_info[gid]
+
+            self._queue_worker = QueueOperationWorker(temp_queue, "start", self)
+            self._connect_queue_worker_signals()
+            self._queue_worker.start()
+        else:
+            self._queue_worker = None
 
         self.start_queue_btn.setEnabled(False)
         self.pause_queue_btn.setEnabled(False)
@@ -790,10 +801,6 @@ class MainWindow(QMainWindow):
                     if gid in q.downloads_info:
                         q.downloads_info[gid]["status"] = "paused"
 
-        # One multicall round trip for the whole queue instead of one
-        # pause_requested signal (and one blocking aria2 RPC) per download —
-        # looping that individually is what caused the visible delay when
-        # pausing a queue with several downloads in it.
         if gids_to_pause:
             self.worker.pause_multi_requested.emit(gids_to_pause)
 
@@ -1452,13 +1459,6 @@ class MainWindow(QMainWindow):
             for gid in q.downloads
         )
 
-        # Only gray out the checkbox for *this* view when this queue's own
-        # downloads are done — never force-uncheck the underlying global
-        # "shutdown after finish" setting here. That setting is evaluated
-        # across ALL queues by _check_already_complete(); un-checking it
-        # just because the queue you happen to be LOOKING AT right now is
-        # finished would silently cancel shutdown for some other queue
-        # that's still downloading in the background.
         self.shutdown_cb.setEnabled(not all_complete)
 
     def _update_speed_display(self) -> None:
@@ -1668,11 +1668,7 @@ class MainWindow(QMainWindow):
                     if new_status == expected_status or time.time() > expires_at:
                         del self._pending_status[gid]
                     else:
-                        # This poll's data predates our optimistic update
-                        # (e.g. user just clicked pause/resume) — keep the
-                        # status/speed we already set locally instead of
-                        # letting stale data flash it back for a moment,
-                        # but still take other fields (size, files, ...).
+
                         dl = dict(dl)
                         dl.pop("status", None)
                         dl.pop("downloadSpeed", None)
@@ -1845,13 +1841,7 @@ class MainWindow(QMainWindow):
         self._open_dialogs[key] = dlg
         dlg.setWindowModality(Qt.WindowModality.NonModal)
         dlg.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose, True)
-        # Qt.WindowType.Dialog already includes the Window bit, so merely
-        # OR-ing in Window changes nothing — the window manager still sees
-        # the X11/Wayland "dialog" type hint and keeps it tied to the main
-        # window (no separate taskbar entry, grouped stacking). We have to
-        # fully replace the flags with a plain top-level window's flags,
-        # same as DownloadProgressDialog already does elsewhere in this
-        # file, to get a genuinely independent window.
+
         dlg.setWindowFlags(
             Qt.WindowType.Window
             | Qt.WindowType.WindowCloseButtonHint
@@ -1916,10 +1906,6 @@ class MainWindow(QMainWindow):
             return
 
         q = visible_queues[queue_index]
-
-        # Note: intentionally NOT touching q.save_path here. The path chosen
-        # in this dialog is per-download only; the queue's own default save
-        # location (set via Queue Settings) must stay untouched.
 
         self._apply_settings_to_aria2()
 
@@ -2427,9 +2413,7 @@ class MainWindow(QMainWindow):
 
         queue_name = d.get("queue_name", "__direct__")
         target_queue = self._get_or_create_queue(queue_name)
-        # Intentionally not overwriting target_queue.save_path: the path
-        # picked here applies to this batch of downloads only, not to the
-        # queue's own default location.
+
         options = {
             "dir": d["path"],
             "split": str(d["connections"]),
@@ -2842,11 +2826,6 @@ class MainWindow(QMainWindow):
             target_queue = Queue(queue_name, paused=True)
             self.store.queues.append(target_queue)
             self.store.save()
-
-        # Intentionally not overwriting target_queue.save_path: the location
-        # chosen in the YouTube dialog belongs to this download only. It is
-        # stored on the download record itself (youtube_data / downloads_info
-        # below), not on the queue's default.
 
         download_id = str(uuid.uuid4())
 
@@ -3552,7 +3531,6 @@ class MainWindow(QMainWindow):
                 self._update_queue_buttons()
 
     def _retry_single_download(self, gid: str) -> None:
-        """Retry a single error download"""
         if not gid or gid not in self._all_downloads:
             return
 
@@ -3564,35 +3542,26 @@ class MainWindow(QMainWindow):
         error_count = self._to_int(self._all_downloads[gid].get("error_count", 0))
 
         if error_count >= max_retries:
-            print(f"❌ Max retries reached for {gid}")
             QMessageBox.warning(
                 self,
                 "Max Retries Reached",
-                f"This download has failed {max_retries} times.\n"
-                f"Please check the URL and try again manually.",
-                QMessageBox.StandardButton.Ok,
+                f"This download has failed {max_retries} times.",
             )
             return
 
         print(f"🔄 Retrying {gid} (attempt {error_count + 1}/{max_retries})")
 
-        # Reset error state
         self._all_downloads[gid]["status"] = "waiting"
         self._all_downloads[gid]["errorMessage"] = ""
+        self._all_downloads[gid]["error_count"] = error_count + 1
 
-        # Re-add the download
+        self._retrying_gids.add(gid)
+        self._retry_mapping[gid] = ""
+
         self.worker.re_add_requested.emit(gid)
 
-        # Update UI
         self._refresh_table()
         self._update_queue_buttons()
-
-        self.tray.showMessage(
-            "FelfelDM",
-            f"🔄 Retrying download (attempt {error_count + 1}/{max_retries})",
-            QSystemTrayIcon.MessageIcon.Information,
-            2000,
-        )
 
     def _re_add_download(self, gid: str) -> Optional[str]:
         if self.worker is None:
@@ -3914,15 +3883,6 @@ class MainWindow(QMainWindow):
                 info = source_queue.downloads_info.pop(gid)
                 target_queue.downloads_info[gid] = info
 
-            # Reconcile the download's *actual* aria2-side pause state with
-            # the target queue's state. Previously this only updated our
-            # local bookkeeping (self._all_downloads[gid]["status"]) and
-            # never told aria2 to actually pause/resume — so a download
-            # moved into an active queue would show "active" in the UI but
-            # stay paused in aria2 forever (it would never finish, so
-            # "shutdown when all downloads complete" would never fire), and
-            # a download moved into a paused queue would keep silently
-            # downloading in the background.
             was_paused = self._all_downloads.get(gid, {}).get("status") == "paused"
 
             if target_queue.paused:
@@ -3946,9 +3906,7 @@ class MainWindow(QMainWindow):
         self._refresh_queue_list()
         self._refresh_table()
         self._update_queue_buttons()
-        # Also carry over the destination queue's speed limit, so moved
-        # downloads are governed by it right away instead of whatever
-        # limit (or lack of one) applied in the source queue.
+
         self._apply_queue_speed_limit(target_queue)
 
     def _restore_downloads(self) -> None:
@@ -4017,12 +3975,10 @@ class MainWindow(QMainWindow):
                     category = info.get("category", "📁 Other")
                     name = info.get("name", "Unknown")
 
-                    # ===== اگر files خالی بود، از save_path خود دانلود (در صورت وجود) یا q.save_path استفاده کن =====
                     if not files or not files[0].get("path"):
                         dl_save_path = info.get("save_path") or q.save_path
                         if name and dl_save_path:
                             files = [{"path": os.path.join(dl_save_path, name)}]
-                    # ==============================================================
 
                     if name == "Unknown":
                         if files and files[0].get("path"):
@@ -4280,6 +4236,8 @@ class MainWindow(QMainWindow):
                 self.store.update_youtube_status(yt_id, status)
 
     def _on_worker_operation_result(self, operation: str, result: Any) -> None:
+        """Handle results from worker operations (re_add, add_url, etc.)"""
+
         if operation == "re_add" and result is not None:
             print(f"✅ Re-add result: {result}")
 
@@ -4287,20 +4245,28 @@ class MainWindow(QMainWindow):
                 new_gid = result
 
                 old_gid = None
-                for gid in list(self._retrying_gids):
-
-                    if gid in self._all_downloads:
+                for gid, mapped_gid in list(self._retry_mapping.items()):
+                    if not mapped_gid:
                         old_gid = gid
                         break
 
+                if not old_gid:
+                    for gid in list(self._retrying_gids):
+                        if gid in self._all_downloads:
+                            old_gid = gid
+                            break
+
                 if old_gid and new_gid and old_gid != new_gid:
                     print(f"✅ Re-add successful: {old_gid} -> {new_gid}")
+
+                    self._retry_mapping[old_gid] = new_gid
 
                     if old_gid in self._all_downloads:
                         self._all_downloads[new_gid] = self._all_downloads.pop(old_gid)
                         self._all_downloads[new_gid]["gid"] = new_gid
                         self._all_downloads[new_gid]["status"] = "active"
                         self._all_downloads[new_gid]["error_count"] = 0
+                        self._all_downloads[new_gid]["errorMessage"] = ""
 
                     for q in self.store.queues:
                         if old_gid in q.downloads:
@@ -4310,36 +4276,73 @@ class MainWindow(QMainWindow):
                             q.downloads_info[new_gid] = q.downloads_info.pop(old_gid)
                             q.downloads_info[new_gid]["status"] = "active"
                             q.downloads_info[new_gid]["error_count"] = 0
+                            q.downloads_info[new_gid]["errorMessage"] = ""
 
                     self.store.save()
 
                     if old_gid in self._retrying_gids:
                         self._retrying_gids.remove(old_gid)
-
-                    if old_gid in self._retry_workers:
-                        del self._retry_workers[old_gid]
+                    if old_gid in self._retry_mapping:
+                        del self._retry_mapping[old_gid]
 
                     if old_gid in self._retry_done:
                         self._retry_done.remove(old_gid)
 
-                    if new_gid in self._retrying_gids:
-                        self._retrying_gids.remove(new_gid)
+                    if old_gid in self._progress_dialogs:
+                        dialog = self._progress_dialogs.pop(old_gid)
+                        try:
+                            dialog.set_gid(new_gid)
+                            self._progress_dialogs[new_gid] = dialog
 
-                    if new_gid in self._retry_workers:
-                        del self._retry_workers[new_gid]
+                            data = self._all_downloads.get(new_gid, {})
+                            if data:
+                                dialog.update_data(data)
 
-                    self._retry_done.add(new_gid)
+                            try:
+                                dialog.finished.disconnect()
+                            except Exception:
+                                pass
+                            dialog.finished.connect(
+                                lambda result, g=new_gid: self._on_progress_dialog_closed(
+                                    g, result
+                                )
+                            )
+                        except RuntimeError:
 
-                    self._retry_done.add(old_gid)
+                            QTimer.singleShot(
+                                100, lambda: self._open_progress_dialog(new_gid)
+                            )
+
+                    QTimer.singleShot(
+                        100, lambda: self.worker.resume_requested.emit(new_gid)
+                    )
 
                     self._refresh_table()
                     self._queue_list_dirty = True
                     self._refresh_queue_list()
                     self._update_queue_buttons()
 
-                    print(
-                        f"✅ [Retry] Cleaned up: {old_gid} and {new_gid} added to _retry_done"
+                    self.tray.showMessage(
+                        "FelfelDM",
+                        f"✅ Download retried successfully",
+                        QSystemTrayIcon.MessageIcon.Information,
+                        2000,
                     )
+
+                    print(f"✅ [Retry] Complete: {old_gid} -> {new_gid}")
+                else:
+                    print(
+                        f"⚠️ [Retry] Could not find old GID for retry, new_gid={new_gid}"
+                    )
+                    try:
+                        self.aria2.remove(new_gid)
+                    except Exception as e:
+                        print(f"⚠️ [Retry] Could not remove orphan {new_gid}: {e}")
+
+        elif operation == "add_url" and result is not None:
+            print(f"✅ Add URL result: {result}")
+        else:
+            print(f"ℹ️ [Worker] Operation result: {operation} -> {result}")
 
     def _show_about(self) -> None:
         dialog = QDialog(self)
@@ -4446,16 +4449,7 @@ class MainWindow(QMainWindow):
             self.speed_update_timer.stop()
 
         shutdown_dialog.update_status("Stopping retry workers...", 20)
-        for gid, worker in list(self._retry_workers.items()):
-            try:
-                if hasattr(worker, "stop"):
-                    worker.stop()
-                if worker.isRunning():
-                    worker.quit()
-                    worker.wait(1000)
-            except Exception:
-                pass
-        self._retry_workers.clear()
+
         self._retrying_gids.clear()
 
         shutdown_dialog.update_status("Saving session...", 30)
@@ -4628,102 +4622,21 @@ class MainWindow(QMainWindow):
 
     def _process_retries(self) -> None:
         max_retries = self.store.settings.get("max_tries", 5)
-
-        to_retry = []
-
         for gid, data in list(self._all_downloads.items()):
-
             if data.get("download_type") == "youtube":
                 continue
-
-            if gid in self._retry_done:
-                continue
-
             if gid in self._retrying_gids:
                 continue
-
-            if gid in self._retry_workers:
-                worker = self._retry_workers[gid]
-                if worker.isRunning():
-                    continue
-
             status = data.get("status", "")
             error_msg = data.get("errorMessage", "")
-
             if status in ["error", "stopped"] and error_msg:
                 error_count = self._to_int(data.get("error_count", 0))
-
                 if error_count < max_retries:
-                    to_retry.append(gid)
+                    self._retry_single_download(gid)
                 else:
-                    print(f"❌ [Retry] Max retries reached for: {gid}")
                     data["status"] = "error"
-                    self._retry_done.add(gid)
-
-        for gid in to_retry:
-
-            if gid in self._retry_done:
-                continue
-            if gid in self._retrying_gids:
-                continue
-            if gid in self._retry_workers:
-                continue
-
-            error_count = self._to_int(
-                self._all_downloads.get(gid, {}).get("error_count", 0)
-            )
-            print(
-                f"🔄 [Retry] Starting retry for {gid} (attempt {error_count + 1}/{max_retries})"
-            )
-
-            retry_worker = RetryWorker(gid, self, max_retries)
-            retry_worker.progress.connect(self._on_retry_progress)
-            retry_worker.status_update.connect(self._on_retry_status)
-            retry_worker.finished.connect(self._on_retry_finished)
-
-            self._retry_workers[gid] = retry_worker
-            self._retrying_gids.add(gid)
-            retry_worker.start()
-
-    def _on_retry_progress(self, gid: str, attempt: int) -> None:
-        if gid in self._all_downloads:
-            self._all_downloads[gid]["error_count"] = attempt
-            self._refresh_table()
-
-    def _on_retry_status(self, gid: str, status: str) -> None:
-        print(f"📢 [Retry] {gid}: {status}")
-        self.status_label.setText(f"🔄 {status}")
-
-        if gid in self._all_downloads:
-            if "✅" in status:
-                self._all_downloads[gid]["status"] = "active"
-                self._all_downloads[gid]["error_count"] = 0
-            elif "❌" in status:
-                self._all_downloads[gid]["status"] = "error"
-
-            self._refresh_table()
-
-    def _on_retry_finished(self, gid: str, success: bool) -> None:
-        print(f"🏁 [Retry] Finished for {gid}: {'Success' if success else 'Failed'}")
-
-        if gid in self._retry_workers:
-            del self._retry_workers[gid]
-        if gid in self._retrying_gids:
-            self._retrying_gids.remove(gid)
-
-        self._retry_done.add(gid)
-
-        if success:
-            if gid in self._all_downloads:
-                self._all_downloads[gid]["status"] = "active"
-                self._all_downloads[gid]["error_count"] = 0
-        else:
-            if gid in self._all_downloads:
-                self._all_downloads[gid]["status"] = "error"
-
-        self._refresh_table()
-        self._update_queue_status()
-        self._update_queue_buttons()
+                    if gid not in self._retry_done:
+                        self._retry_done.add(gid)
 
     def _get_aria2_status(self, gid: str) -> Optional[Dict]:
         try:
