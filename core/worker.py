@@ -293,7 +293,6 @@ class BackendWorker(QThread):
         status_list = []
         try:
             with self.youtube_lock:
-                print(f"📤 [Worker] _get_youtube_status: {len(self.youtube_downloads)} items: {[k[:8] for k in self.youtube_downloads.keys()]}")
                 for download_id, info in self.youtube_downloads.items():
                     status_list.append(
                         {

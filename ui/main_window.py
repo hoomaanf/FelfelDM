@@ -4297,10 +4297,6 @@ class MainWindow(QMainWindow):
                                     self._all_downloads[gid]["status"] = "paused"
 
     def _update_youtube_dialogs(self, youtube_downloads: List[Dict]) -> None:
-        if youtube_downloads:
-            print(
-                f"📥 [MainWindow] Updating dialogs with {len(youtube_downloads)} items: {[y.get('id', '?')[:8] for y in youtube_downloads]}"
-            )
         for yt_data in youtube_downloads:
             if not isinstance(yt_data, dict):
                 continue
@@ -4308,7 +4304,7 @@ class MainWindow(QMainWindow):
             yt_id = yt_data.get("id")
             if not yt_id:
                 continue
-            
+
             if yt_id in self._cancelling_youtube:
                 print(f"⏭️ [MainWindow] Skipping cancelling download: {yt_id[:8]}")
                 continue
