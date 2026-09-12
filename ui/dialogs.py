@@ -70,6 +70,15 @@ class AccordionGroup(QWidget):
 
     def _toggle(self):
         self.set_expanded(not self._expanded)
+        self._update_parent_dialog_size()
+
+    def _update_parent_dialog_size(self):
+        try:
+            parent = self.window()
+            if parent and hasattr(parent, "adjustSize"):
+                QTimer.singleShot(50, parent.adjustSize)
+        except Exception as e:
+            print(f"⚠️ Error updating dialog size: {e}")
 
     def set_expanded(self, expanded):
         self._expanded = expanded
@@ -97,7 +106,8 @@ class AddDownloadDialog(QDialog):
         self._main_window = parent
         self.setWindowTitle("Add Downloads")
         self.setMinimumWidth(620)
-        self.setMinimumHeight(420)
+        self.setMinimumHeight(200)
+        self.setSizeGripEnabled(True)
 
         self.queues = queues
         self.default_queue = default_queue
@@ -336,7 +346,8 @@ class QuickDownloadDialog(QDialog):
         self._main_window = parent
         self.setWindowTitle("Quick Download")
         self.setMinimumWidth(600)
-        self.setMinimumHeight(400)
+        self.setMinimumHeight(200)
+        self.setSizeGripEnabled(True)
 
         self.queues = queues
         self._custom_proxy = None
@@ -537,7 +548,8 @@ class SingleDownloadDialog(QDialog):
         self._main_window = parent
         self.setWindowTitle("Single Download")
         self.setMinimumWidth(560)
-        self.setMinimumHeight(380)
+        self.setMinimumHeight(200)
+        self.setSizeGripEnabled(True)
 
         self._custom_proxy = None
 
@@ -706,7 +718,8 @@ class YouTubeDownloadDialog(QDialog):
         self._main_window = parent
         self.setWindowTitle("YouTube Download")
         self.setMinimumWidth(600)
-        self.setMinimumHeight(420)
+        self.setMinimumHeight(200)
+        self.setSizeGripEnabled(True)
 
         self.queues = queues or []
         self.default_queue = default_queue
@@ -779,9 +792,10 @@ class YouTubeDownloadDialog(QDialog):
         opts_acc.addLayout(cookie_row)
 
         self.queue_combo = QComboBox()
+        self.queue_combo.addItem("Direct Downloads", "__direct__")
         for i, q in enumerate(self.queues):
             if q.name != "__direct__":
-                self.queue_combo.addItem(q.name, i)
+                self.queue_combo.addItem(q.name, q.name)
         if self.default_queue < self.queue_combo.count():
             self.queue_combo.setCurrentIndex(self.default_queue)
         self.queue_combo.currentIndexChanged.connect(self._on_queue_selection_changed)
@@ -869,10 +883,14 @@ class YouTubeDownloadDialog(QDialog):
     def _on_queue_selection_changed(self, _index):
         if self._path_user_edited:
             return
-        queue_idx = self.queue_combo.currentData()
-        if queue_idx is not None and 0 <= queue_idx < len(self.queues):
-            save_path = self.queues[queue_idx].save_path
-            self.path_edit.setText(save_path or os.path.expanduser("~/Downloads"))
+        queue_name = self.queue_combo.currentData()
+        if queue_name == "__direct__":
+            self.path_edit.setText(os.path.expanduser("~/Downloads"))
+            return
+        for q in self.queues:
+            if q.name == queue_name:
+                self.path_edit.setText(q.save_path or os.path.expanduser("~/Downloads"))
+                return
 
     def _browse_cookie(self):
         file_path, _ = QFileDialog.getOpenFileName(
@@ -1058,6 +1076,8 @@ class YouTubeDownloadDialog(QDialog):
         self.fetch_btn.setEnabled(True)
         self.fetch_btn.setText("Get Info")
 
+        QTimer.singleShot(100, self.adjustSize)
+
     def _on_info_fetch_finished(self, success, message):
         if not success:
             self.clear_info_layout()
@@ -1068,6 +1088,8 @@ class YouTubeDownloadDialog(QDialog):
 
         self.fetch_btn.setEnabled(True)
         self.fetch_btn.setText("Get Info")
+
+        QTimer.singleShot(100, self.adjustSize)
 
     def _on_add_to_queue(self):
         data = self.get_data()
@@ -1086,6 +1108,7 @@ class YouTubeDownloadDialog(QDialog):
                 "cookies_path": data.get("cookie_file"),
                 "title": data.get("video_info", {}).get("title", ""),
                 "format_id": data.get("format_id"),
+                "format_spec": data.get("format_spec", "bv+ba/b"),
                 "format_info": data.get("format_info", {}),
             },
             "proxy": data.get("proxy_url"),
@@ -1104,14 +1127,27 @@ class YouTubeDownloadDialog(QDialog):
         if selected_format_id == "best":
             quality = "best"
             format_type = "video"
+        elif selected_format_id == "bestaudio":
+            quality = "best"
+            format_type = "audio"
         else:
             format_info = self._format_map.get(selected_format_id, {})
             if format_info.get("vcodec") and format_info.get("vcodec") != "none":
                 format_type = "video"
                 quality = format_info.get("resolution", "best")
-            else:
+            elif format_info.get("acodec") and format_info.get("acodec") != "none":
                 format_type = "audio"
                 quality = format_info.get("abr", "best")
+            else:
+                format_type = "video"
+                quality = "best"
+
+        if selected_format_id == "best":
+            format_spec = "bv+ba/b"
+        elif selected_format_id == "bestaudio":
+            format_spec = "ba/b"
+        else:
+            format_spec = selected_format_id
 
         return {
             "url": self.url_edit.text().strip(),
@@ -1119,13 +1155,14 @@ class YouTubeDownloadDialog(QDialog):
             "format": format_type,
             "quality": quality,
             "format_id": selected_format_id,
+            "format_spec": format_spec,
             "format_info": self._format_map.get(selected_format_id, {}),
             "cookie_file": self.cookie_edit.text().strip() or None,
             "video_info": self.video_info,
             "proxy_mode": proxy_mode,
             "custom_proxy": self._custom_proxy if proxy_mode == 1 else None,
             "proxy_url": self._get_proxy_url(),
-            "queue_name": self.queue_combo.currentText(),
+            "queue_name": self.queue_combo.currentData(),
         }
 
 
@@ -1135,7 +1172,8 @@ class QueueSettingsDialog(QDialog):
         self._main_window = parent
         self.setWindowTitle(f"Queue Settings — {queue.name}")
         self.setMinimumWidth(540)
-        self.setMinimumHeight(440)
+        self.setMinimumHeight(300)
+        self.setSizeGripEnabled(True)
 
         self.queue = queue
         self._queue_proxy_config = None
@@ -1274,6 +1312,8 @@ class QueueSettingsDialog(QDialog):
 
         main_layout.addWidget(tabs)
 
+        tabs.currentChanged.connect(lambda idx: QTimer.singleShot(50, self.adjustSize))
+
         self._load_queue_proxy()
 
         btn_box = QDialogButtonBox(
@@ -1365,7 +1405,8 @@ class SettingsDialog(QDialog):
         self._main_window = parent
         self.setWindowTitle("Settings")
         self.setMinimumWidth(540)
-        self.setMinimumHeight(460)
+        self.setMinimumHeight(300)
+        self.setSizeGripEnabled(True)
 
         self.settings = settings
 
@@ -1600,6 +1641,8 @@ class SettingsDialog(QDialog):
         tabs.addTab(service_tab, get_icon("applications-system"), "Service")
 
         main_layout.addWidget(tabs)
+
+        tabs.currentChanged.connect(lambda idx: QTimer.singleShot(50, self.adjustSize))
 
         btn_box = QDialogButtonBox(
             QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
@@ -2047,6 +2090,8 @@ class DownloadProgressDialog(QDialog):
         self._main_window = main_window
         self.setWindowTitle("Download Progress")
         self.setMinimumWidth(480)
+        self.setMinimumHeight(200)
+        self.setSizeGripEnabled(True)
         self.setWindowFlags(
             Qt.WindowType.Window
             | Qt.WindowType.WindowCloseButtonHint
@@ -2229,6 +2274,7 @@ class DownloadProgressDialog(QDialog):
             self.show()
             self.raise_()
             self.activateWindow()
+            QTimer.singleShot(50, self.adjustSize)
 
         if name:
             self.name_lbl.setText(name)
@@ -2349,7 +2395,8 @@ class ProxyDialog(QDialog):
         super().__init__(parent)
         self.setWindowTitle(title)
         self.setMinimumWidth(450)
-        self.setMinimumHeight(350)
+        self.setMinimumHeight(200)
+        self.setSizeGripEnabled(True)
 
         self.proxy_config = proxy_config or ProxyConfig()
 

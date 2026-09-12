@@ -7,7 +7,8 @@ import re
 import signal
 import time
 import glob
-from typing import Optional, Dict, Any, Callable
+import shutil
+import sys
 from PyQt6.QtCore import QThread, pyqtSignal
 
 
@@ -22,14 +23,22 @@ class YouTubeWorker(QThread):
     size_fetched = pyqtSignal(int)
 
     def __init__(
-        self, url, output_path, format_type="mp4", cookie_file=None, proxy_url=None
+        self,
+        url,
+        output_path,
+        format_type="mp4",
+        cookie_file=None,
+        proxy_url=None,
+        format_id=None,
+        quality="best",
+        format_spec=None,
     ):
         super().__init__()
         self.url = url
         self.output_path = output_path
         self.format_type = format_type
         self.cookie_file = cookie_file
-        self.proxy_url = proxy_url  # Proxy URL for yt-dlp
+        self.proxy_url = proxy_url
         self.is_fetching_info = False
         self.is_fetching_size = False
         self.process = None
@@ -39,6 +48,50 @@ class YouTubeWorker(QThread):
         self._is_running = False
         self._last_progress = 0
         self._file_size = 0
+        self.format_id = format_id
+        self.quality = quality
+        self.format_spec = format_spec
+
+    def _find_system_ytdlp(self) -> str:
+
+        preferred_paths = [
+            os.path.expanduser("~/.local/bin/yt-dlp"),
+            "/usr/local/bin/yt-dlp",
+            "/usr/bin/yt-dlp",
+            "/bin/yt-dlp",
+            "/snap/bin/yt-dlp",
+            os.path.expanduser("~/bin/yt-dlp"),
+        ]
+
+        venv_bin = os.path.join(sys.prefix, "bin")
+
+        def is_venv_path(path: str) -> bool:
+            if not path:
+                return False
+            try:
+                real = os.path.realpath(path)
+                venv_real = os.path.realpath(venv_bin)
+                return real.startswith(venv_real)
+            except Exception:
+                return False
+
+        for path in preferred_paths:
+            if os.path.isfile(path) and os.access(path, os.X_OK):
+                if not is_venv_path(path):
+                    print(f"✅ Found system yt-dlp: {path}")
+                    return path
+
+        which_result = shutil.which("yt-dlp")
+        if which_result and not is_venv_path(which_result):
+            print(f"✅ Found yt-dlp in PATH: {which_result}")
+            return which_result
+
+        if which_result:
+            print(f"⚠️ Only venv yt-dlp found: {which_result}")
+            return which_result
+
+        print("⚠️ yt-dlp not found, falling back to 'yt-dlp'")
+        return "yt-dlp"
 
     def run(self):
         self._is_running = True
@@ -56,7 +109,6 @@ class YouTubeWorker(QThread):
     def fetch_size(self):
         if self.is_fetching_size:
             return
-
         self.is_fetching_size = True
         self.start()
 
@@ -64,27 +116,35 @@ class YouTubeWorker(QThread):
         try:
             self.status.emit("Getting file size...")
 
-            import shutil
-
-            if not shutil.which("yt-dlp"):
-                print("❌ yt-dlp not found in PATH")
+            ytdlp_path = self._find_system_ytdlp()
+            if not ytdlp_path:
+                print("❌ yt-dlp not found")
                 self.size_fetched.emit(0)
                 return
 
+            format_spec = getattr(self, "format_spec", None)
+            format_id = getattr(self, "format_id", None)
+
             cmd = [
-                "yt-dlp",
+                ytdlp_path,
                 "--skip-download",
                 "--dump-json",
                 "--no-warnings",
-                self.url,
             ]
 
-            # Add proxy if available
+            if format_spec and format_spec not in ("bv+ba/b", "ba/b"):
+                cmd.extend(["-f", format_spec])
+            elif format_spec == "ba/b":
+                cmd.extend(["-f", "ba"])
+            elif format_spec:
+                cmd.extend(["-f", format_spec])
+
+            cmd.append(self.url)
+
             if self.proxy_url:
                 cmd.extend(["--proxy", self.proxy_url])
                 print(f"🌐 Using proxy for size fetch: {self.proxy_url}")
 
-            # Add cookies if available
             if self.cookie_file and os.path.exists(self.cookie_file):
                 cmd.extend(["--cookies", self.cookie_file])
                 print(f"🍪 Using cookies for size fetch: {self.cookie_file}")
@@ -100,7 +160,6 @@ class YouTubeWorker(QThread):
                 self.size_fetched.emit(0)
                 return
 
-            # Parse JSON output
             try:
                 info = json.loads(result.stdout)
             except json.JSONDecodeError as e:
@@ -113,10 +172,35 @@ class YouTubeWorker(QThread):
             if not filesize:
                 filesize = info.get("filesize_approx", 0)
 
+            if format_id and format_id not in ("best", "bestaudio"):
+                requested = info.get("requested_formats", [])
+                if requested:
+                    total = 0
+                    for fmt in requested:
+                        fsize = fmt.get("filesize") or fmt.get("filesize_approx", 0)
+                        if fsize:
+                            total += int(fsize)
+                    if total > 0:
+                        filesize = total
+                        print(f"📏 [SIZE] Using requested_formats size: {total}")
+
+            if not filesize and format_id and format_id not in ("best", "bestaudio"):
+                formats = info.get("formats", [])
+                for fmt in formats:
+                    if str(fmt.get("format_id")) == str(format_id):
+                        fsize = fmt.get("filesize") or fmt.get("filesize_approx", 0)
+                        if fsize:
+                            filesize = int(fsize)
+                            print(
+                                f"📏 [SIZE] Found format {format_id} size: {filesize}"
+                            )
+                            break
+
             if filesize and int(filesize) > 0:
                 self._file_size = int(filesize)
                 print(
-                    f"📏 File size: {self._file_size} bytes ({self._file_size/1024/1024:.2f} MB)"
+                    f"📏 File size: {self._file_size} bytes "
+                    f"({self._file_size/1024/1024:.2f} MB)"
                 )
                 self.size_fetched.emit(self._file_size)
             else:
@@ -144,7 +228,6 @@ class YouTubeWorker(QThread):
         except Exception as e:
             print(f"❌ Size fetch error: {e}")
             import traceback
-
             traceback.print_exc()
             self.size_fetched.emit(0)
         finally:
@@ -152,7 +235,6 @@ class YouTubeWorker(QThread):
             self._is_running = False
 
     def pause(self):
-        """Pause download"""
         if self.process and not self.is_paused and self._is_running:
             self.is_paused = True
             try:
@@ -164,7 +246,6 @@ class YouTubeWorker(QThread):
                 print(f"Pause error: {e}")
 
     def resume(self):
-        """Resume download"""
         if self.process and self.is_paused and self._is_running:
             self.is_paused = False
             try:
@@ -176,13 +257,9 @@ class YouTubeWorker(QThread):
                 print(f"Resume error: {e}")
 
     def cancel(self):
-        """Cancel download and delete partial files"""
         if not self._is_running:
             return
-
         self.is_cancelled = True
-
-        # Kill process
         if self.process:
             try:
                 self.process.terminate()
@@ -191,18 +268,12 @@ class YouTubeWorker(QThread):
                     self.process.kill()
             except:
                 pass
-
-        # Delete partial files
         self._delete_partial_files()
-
-        # Wait for thread to finish
         self.wait()
         self.finished.emit(False, "Download cancelled by user")
 
     def _delete_partial_files(self):
-        """Delete partial downloaded files"""
         try:
-            # Delete .part files
             pattern = os.path.join(self.output_path, "*.part")
             for f in glob.glob(pattern):
                 try:
@@ -211,7 +282,6 @@ class YouTubeWorker(QThread):
                 except:
                     pass
 
-            # Delete .ytdl files
             pattern = os.path.join(self.output_path, "*.ytdl")
             for f in glob.glob(pattern):
                 try:
@@ -220,40 +290,34 @@ class YouTubeWorker(QThread):
                 except:
                     pass
 
-            # Delete .f* files (yt-dlp fragment files)
             pattern = os.path.join(self.output_path, "*.f*")
             for f in glob.glob(pattern):
                 try:
-                    if (
-                        os.path.getsize(f) < 1024 * 1024
-                    ):  # Only delete small fragment files
+                    if os.path.getsize(f) < 1024 * 1024:
                         os.remove(f)
                         print(f"🗑️ Deleted: {f}")
                 except:
                     pass
-
         except Exception as e:
             print(f"Error deleting partial files: {e}")
 
     def _fetch_info(self):
-        """Fetch video information from YouTube"""
         try:
             self.status.emit("Getting video info...")
 
+            ytdlp_path = self._find_system_ytdlp()
             cmd = [
-                "yt-dlp",
+                ytdlp_path,
                 "--skip-download",
                 "--dump-json",
                 "--no-warnings",
                 self.url,
             ]
 
-            # Add proxy if available
             if self.proxy_url:
                 cmd.extend(["--proxy", self.proxy_url])
                 print(f"🌐 Using proxy for info fetch: {self.proxy_url}")
 
-            # Add cookies if available
             if self.cookie_file and os.path.exists(self.cookie_file):
                 cmd.extend(["--cookies", self.cookie_file])
 
@@ -267,9 +331,7 @@ class YouTubeWorker(QThread):
                 self.finished.emit(False, f"Failed to fetch info: {error_msg}")
                 return
 
-            # Parse JSON output
             info = json.loads(result.stdout)
-
             self.progress.emit(100)
             self.info_fetched.emit(info)
             self.finished.emit(True, "Info fetched successfully!")
@@ -293,8 +355,11 @@ class YouTubeWorker(QThread):
             self.status.emit("Preparing download...")
             self.progress.emit(0)
 
+            ytdlp_path = self._find_system_ytdlp()
+            print(f"🎯 yt-dlp resolved to: {ytdlp_path}")
+
             cmd = [
-                "yt-dlp",
+                ytdlp_path,
                 "-o",
                 os.path.join(self.output_path, "%(title)s.%(ext)s"),
                 "--no-playlist",
@@ -308,14 +373,8 @@ class YouTubeWorker(QThread):
             ]
 
             if self.proxy_url:
-                proxy_for_cmd = self.proxy_url
-                if proxy_for_cmd.startswith("http://"):
-                    proxy_for_cmd = proxy_for_cmd.replace("http://", "socks5://")
-                elif proxy_for_cmd.startswith("https://"):
-                    proxy_for_cmd = proxy_for_cmd.replace("https://", "socks5://")
-
-                cmd.extend(["--proxy", proxy_for_cmd])
-                print(f"🌐 Using proxy: {proxy_for_cmd}")
+                cmd.extend(["--proxy", self.proxy_url])
+                print(f"🌐 Using proxy: {self.proxy_url}")
             else:
                 print("ℹ️ No proxy configured")
 
@@ -323,27 +382,41 @@ class YouTubeWorker(QThread):
                 cmd.extend(["--cookies", self.cookie_file])
                 print(f"🍪 Using cookies: {self.cookie_file}")
 
+            format_spec = getattr(self, "format_spec", None)
+
             if self.format_type == "mp3":
                 cmd.extend(["-x", "--audio-format", "mp3", "--audio-quality", "0"])
-            elif self.format_type == "mp4":
-                cmd.extend(["-f", "bv+ba/b"])
+            elif format_spec:
+                cmd.extend(["-f", format_spec])
+            elif self.format_type in ("audio", "m4a"):
+                cmd.extend(["-f", "ba/b"])
             else:
                 cmd.extend(["-f", "bv+ba/b"])
 
             cmd.append(self.url)
-
             print(f"📥 Full command: {' '.join(cmd)}")
-
             self.status.emit("⬇ Downloading...")
 
             env = os.environ.copy()
-            if self.proxy_url:
-                env["HTTP_PROXY"] = self.proxy_url
-                env["HTTPS_PROXY"] = self.proxy_url
-                env["ALL_PROXY"] = self.proxy_url
-                env["http_proxy"] = self.proxy_url
-                env["https_proxy"] = self.proxy_url
-                env["all_proxy"] = self.proxy_url
+
+            extra_paths = [
+                os.path.expanduser("~/.local/bin"),
+                "/usr/local/bin",
+                "/usr/bin",
+                "/bin",
+                "/usr/local/sbin",
+                "/usr/sbin",
+                "/sbin",
+                os.path.expanduser("~/.cargo/bin"),
+            ]
+            current_path = env.get("PATH", "")
+            existing = set(current_path.split(":")) if current_path else set()
+            for p in extra_paths:
+                if p and p not in existing and os.path.exists(p):
+                    current_path = f"{p}:{current_path}" if current_path else p
+                    existing.add(p)
+            env["PATH"] = current_path
+            env["PYTHONUNBUFFERED"] = "1"
 
             self.process = subprocess.Popen(
                 cmd,
@@ -354,11 +427,15 @@ class YouTubeWorker(QThread):
                 env=env,
             )
 
+            error_lines = []
+
             for line in self.process.stdout:
                 if self.is_cancelled:
                     break
                 if self.is_paused:
                     continue
+
+                error_lines.append(line.rstrip())
 
                 if "[download]" in line:
                     percent_match = re.search(r"(\d+\.?\d*)%", line)
@@ -386,13 +463,20 @@ class YouTubeWorker(QThread):
                 self.speed_eta.emit("", "")
                 self.finished.emit(True, "Download completed successfully!")
             else:
-                error = (
-                    self.process.stderr.read()
-                    if self.process.stderr
-                    else "Unknown error"
+                print(f"❌❌❌ yt-dlp FAILED (code {self.process.returncode})")
+                print(f"❌❌❌ CWD: {os.getcwd()}")
+                print(f"❌❌❌ PATH: {env.get('PATH', 'NOT SET')[:300]}")
+                print("❌❌❌ Last 30 lines of output:")
+                for ln in error_lines[-30:]:
+                    print(f"❌   {ln}")
+
+                error_text = (
+                    "\n".join(error_lines[-30:]) if error_lines else "Unknown error"
                 )
                 self.finished.emit(
-                    False, f"Download failed! (code {self.process.returncode})"
+                    False,
+                    f"Download failed! (code {self.process.returncode})\n\n"
+                    f"{error_text[-800:]}",
                 )
 
         except Exception as e:
@@ -405,41 +489,30 @@ class YouTubeWorker(QThread):
         """Set environment variables for proxy as fallback"""
         if not self.proxy_url:
             return
-
         try:
-            # Parse proxy URL
             import urllib.parse
 
             parsed = urllib.parse.urlparse(self.proxy_url)
-
-            # Set HTTP_PROXY and HTTPS_PROXY
             os.environ["HTTP_PROXY"] = self.proxy_url
             os.environ["HTTPS_PROXY"] = self.proxy_url
-
-            # Also set lowercase versions (some tools use these)
             os.environ["http_proxy"] = self.proxy_url
             os.environ["https_proxy"] = self.proxy_url
-
             print(f"🌐 Environment proxy set: {self.proxy_url}")
-
-            # If proxy has auth, set no_proxy for localhost
             if parsed.username:
                 os.environ["NO_PROXY"] = "localhost,127.0.0.1"
                 os.environ["no_proxy"] = "localhost,127.0.0.1"
-
         except Exception as e:
             print(f"⚠️ Error setting proxy env: {e}")
 
     def get_proxy_status(self) -> str:
-        """Get proxy status string for display"""
         if self.proxy_url:
             return f"🌐 Proxy: {self.proxy_url}"
         return "🌐 No proxy"
 
     def get_command(self) -> str:
-        """Get the full command for debugging"""
+        ytdlp_path = self._find_system_ytdlp()
         cmd = [
-            "yt-dlp",
+            ytdlp_path,
             "-o",
             os.path.join(self.output_path, "%(title)s.%(ext)s"),
             "--no-playlist",
@@ -448,43 +521,31 @@ class YouTubeWorker(QThread):
             "--continue",
             self.url,
         ]
-
         if self.proxy_url:
             cmd.extend(["--proxy", self.proxy_url])
-
         if self.cookie_file and os.path.exists(self.cookie_file):
             cmd.extend(["--cookies", self.cookie_file])
-
         return " ".join(cmd)
 
     def test_proxy(self) -> tuple:
-        """Test if proxy is working"""
         if not self.proxy_url:
             return False, "No proxy configured"
-
         try:
             import urllib.request
             import urllib.error
+            import urllib.parse as _up
 
-            # Parse proxy URL
-            parsed = urllib.parse.urlparse(self.proxy_url)
-
-            # Create proxy handler
+            parsed = _up.urlparse(self.proxy_url)
             proxy_handler = urllib.request.ProxyHandler(
                 {"http": self.proxy_url, "https": self.proxy_url}
             )
-
             opener = urllib.request.build_opener(proxy_handler)
             urllib.request.install_opener(opener)
-
-            # Test with google.com
             response = urllib.request.urlopen("https://www.google.com", timeout=10)
-
             if response.status == 200:
                 return True, "Proxy is working"
             else:
                 return False, f"Proxy returned status: {response.status}"
-
         except urllib.error.URLError as e:
             return False, f"Proxy error: {str(e)}"
         except Exception as e:

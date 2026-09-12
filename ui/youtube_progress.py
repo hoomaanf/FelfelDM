@@ -320,6 +320,17 @@ class YouTubeProgressDialog(QDialog):
         elif eta:
             self.speed_eta_label.setText(f"ETA: {eta}")
 
+        if (
+            not self._is_complete
+            and not self._is_paused
+            and progress > 0
+            and progress < 100
+        ):
+            if not self.action_btn.isEnabled():
+                self.action_btn.setEnabled(True)
+                self.action_btn.setIcon(get_icon("media-playback-pause"))
+                self.action_btn.setText(" Pause")
+
     def update_status(self, status: str):
         self._status_text = status
         self.status_label.setText(status)
@@ -400,6 +411,10 @@ class YouTubeProgressDialog(QDialog):
         self._progress_value = value
         self.progress_bar.setValue(value)
         self.progress_bar.setFormat(f"{value}%")
+        if not self._is_complete and not self._is_paused:
+            self.action_btn.setEnabled(True)
+            self.action_btn.setIcon(get_icon("media-playback-pause"))
+            self.action_btn.setText(" Pause")
 
     def _on_status(self, text):
         self._status_text = text
@@ -423,6 +438,7 @@ class YouTubeProgressDialog(QDialog):
         self._is_paused = True
         self.action_btn.setIcon(get_icon("media-playback-start"))
         self.action_btn.setText(" Resume")
+        self.action_btn.setEnabled(True)
         self.status_label.setText("⏸ Paused")
         self.status_label.setStyleSheet("color: #f39c12;")
         print(f"⏸️ [Dialog] Paused state updated")
@@ -431,6 +447,7 @@ class YouTubeProgressDialog(QDialog):
         self._is_paused = False
         self.action_btn.setIcon(get_icon("media-playback-pause"))
         self.action_btn.setText(" Pause")
+        self.action_btn.setEnabled(True)
         self.status_label.setText("▶ Downloading...")
         self.status_label.setStyleSheet("color: #3daee9;")
         print(f"▶️ [Dialog] Resumed state updated")
@@ -482,6 +499,10 @@ class YouTubeProgressDialog(QDialog):
                 self._worker.resume()
 
     def _on_cancel_clicked(self):
+        print(f"🗑️ [Dialog] _on_cancel_clicked CALLED")
+        print(f"🗑️ [Dialog] _is_complete={self._is_complete}")
+        print(f"🗑️ [Dialog] _is_existing_download={self._is_existing_download}")
+        print(f"🗑️ [Dialog] download_id={self.download_id}")
         if self._is_complete:
             self.accept()
             return
@@ -494,6 +515,7 @@ class YouTubeProgressDialog(QDialog):
                 QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
             )
             if reply == QMessageBox.StandardButton.Yes:
+                print(f"🗑️ [Dialog] Emitting cancel_requested for: {self.download_id}")
                 self.cancel_requested.emit(self.download_id)
                 self.status_label.setText("⏹ Cancelled")
                 self.status_label.setStyleSheet("color: #f39c12;")

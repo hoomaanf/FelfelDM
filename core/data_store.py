@@ -561,6 +561,24 @@ class DataStore:
         self._flush_youtube_downloads()
         return download_id
 
+    def _start_youtube_download(self, download_id: str):
+        print(f"🎬🎬🎬 _start_youtube_download CALLED for: {download_id}")
+        with self.youtube_lock:
+            if download_id not in self.youtube_downloads:
+                return
+            item = self.youtube_downloads[download_id]
+            total_size = item.get("total_size", 0)
+            if total_size == 0:
+                pass
+            else:
+                if item.get("status") in ["downloading", "completed"]:
+                    return
+                url = item["url"]
+                save_path = item["save_path"]
+                format_type = item.get("yt_options", {}).get("format", "mp4")
+                cookie_file = item.get("yt_options", {}).get("cookies_path")
+                proxy_url = item.get("proxy")
+
     def get_youtube_download(self, download_id: str) -> Optional[dict]:
         with self._yt_lock:
             d = self.youtube_downloads.get(download_id)

@@ -293,6 +293,7 @@ class BackendWorker(QThread):
         status_list = []
         try:
             with self.youtube_lock:
+                print(f"📤 [Worker] _get_youtube_status: {len(self.youtube_downloads)} items: {[k[:8] for k in self.youtube_downloads.keys()]}")
                 for download_id, info in self.youtube_downloads.items():
                     status_list.append(
                         {
@@ -453,7 +454,7 @@ class BackendWorker(QThread):
                 "max-connection-per-server": "8",
                 "continue": "true",
                 "always-resume": "true",
-                "pause": "false", 
+                "pause": "false",
             }
             if speed_limit > 0:
                 options["max-download-limit"] = f"{speed_limit}K"
@@ -555,13 +556,20 @@ class BackendWorker(QThread):
             cookie_file = item.get("yt_options", {}).get("cookies_path")
             proxy_url = item.get("proxy")
 
+        format_id = item.get("yt_options", {}).get("format_id")
+        quality = item.get("yt_options", {}).get("quality", "best")
+        yt_opts = item.get("yt_options", {})
         size_worker = YouTubeWorker(
             url=url,
             output_path=save_path,
             format_type=format_type,
             cookie_file=cookie_file,
             proxy_url=proxy_url,
+            format_id=format_id,
+            quality=quality,
+            format_spec=yt_opts.get("format_spec"),
         )
+
         size_worker.size_fetched.connect(
             lambda size: self._on_youtube_size_fetched(download_id, size)
         )
@@ -572,15 +580,35 @@ class BackendWorker(QThread):
 
     def _on_youtube_size_fetched(self, download_id: str, size: int):
         print(f"📏 [SIZE] Received size for {download_id}: {size} bytes")
+
+        should_auto_start = False
         with self.youtube_lock:
             if download_id in self.youtube_downloads:
+                item = self.youtube_downloads[download_id]
                 self.youtube_downloads[download_id]["total_size"] = size
-                self.youtube_downloads[download_id]["status"] = "paused"
-                self.store.update_youtube_download(
-                    download_id,
-                    {"total_size": size, "status": "paused"},
-                )
+
+                current_status = item.get("status", "paused")
+                worker_exists = download_id in self.youtube_workers
+
+                if current_status == "downloading" and not worker_exists:
+                    should_auto_start = True
+                    self.store.update_youtube_download(
+                        download_id,
+                        {"total_size": size},
+                    )
+                else:
+                    self.youtube_downloads[download_id]["status"] = "paused"
+                    self.store.update_youtube_download(
+                        download_id,
+                        {"total_size": size, "status": "paused"},
+                    )
+
         self.youtube_size_fetched.emit(download_id, size)
+
+        if should_auto_start:
+            print(f"🎬 [SIZE] Auto-starting download after size fetch: {download_id}")
+            self._start_youtube_download(download_id)
+
         if download_id in self._size_workers:
             try:
                 worker = self._size_workers[download_id]
@@ -595,13 +623,25 @@ class BackendWorker(QThread):
         print(f"🎬🎬🎬 _start_youtube_download CALLED for: {download_id}")
         with self.youtube_lock:
             if download_id not in self.youtube_downloads:
+                print(f"❌ [START] download_id not in youtube_downloads")
                 return
             item = self.youtube_downloads[download_id]
             total_size = item.get("total_size", 0)
+            status = item.get("status", "paused")
+
+            print(f"🔍 [START] total_size={total_size}, status={status}")
+            print(f"🔍 [START] worker exists: {download_id in self.youtube_workers}")
+
+            if download_id in self.youtube_workers:
+                print(f"⏭️ [START] Worker already exists for {download_id}")
+                return
+
             if total_size == 0:
+                print(f"⚠️ [START] total_size is 0, will fetch size")
                 pass
             else:
-                if item.get("status") in ["downloading", "completed"]:
+                if status == "completed":
+                    print(f"⏭️ [START] Status is completed, skipping")
                     return
                 url = item["url"]
                 save_path = item["save_path"]
@@ -613,12 +653,19 @@ class BackendWorker(QThread):
             self._fetch_youtube_size(download_id)
             return
 
+        print(f"🔨 [START] Creating YouTubeWorker for {download_id}")
+        format_id = item.get("yt_options", {}).get("format_id")
+        quality = item.get("yt_options", {}).get("quality", "best")
+        yt_opts = item.get("yt_options", {})
         worker = YouTubeWorker(
             url=url,
             output_path=save_path,
             format_type=format_type,
             cookie_file=cookie_file,
             proxy_url=proxy_url,
+            format_id=format_id,
+            quality=quality,
+            format_spec=yt_opts.get("format_spec"),
         )
         worker.progress.connect(lambda p: self._on_youtube_progress(download_id, p))
         worker.status.connect(lambda s: self._on_youtube_status(download_id, s))
@@ -632,17 +679,22 @@ class BackendWorker(QThread):
                 self.youtube_downloads[download_id]["status"] = "downloading"
                 self.store.update_youtube_status(download_id, "downloading")
         self.youtube_status.emit(download_id, "downloading")
+        print(f"▶️ [START] Calling worker.start() for {download_id}")
         worker.start()
         print(f"🎬 YouTube download started: {download_id}")
 
     def _resume_youtube_download(self, item: dict):
         download_id = item["id"]
+        yt_options = item.get("yt_options", {})
         worker = YouTubeWorker(
             url=item["url"],
             output_path=item["save_path"],
-            format_type=item.get("yt_options", {}).get("format", "mp4"),
-            cookie_file=item.get("yt_options", {}).get("cookies_path"),
+            format_type=yt_options.get("format", "mp4"),
+            cookie_file=yt_options.get("cookies_path"),
             proxy_url=item.get("proxy"),
+            format_id=yt_options.get("format_id"),
+            quality=yt_options.get("quality", "best"),
+            format_spec=yt_options.get("format_spec"),
         )
         worker.progress.connect(lambda p: self._on_youtube_progress(download_id, p))
         worker.status.connect(lambda s: self._on_youtube_status(download_id, s))

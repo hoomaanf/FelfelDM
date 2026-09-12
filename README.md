@@ -360,51 +360,59 @@ The FelfelDM browser extension shows its status through visual badges on its ico
 
 ```bash
 FelfelDM/
-├── core/                    # Core modules
-│   ├── aria2_rpc.py        # aria2 JSON-RPC client
-│   ├── data_store.py       # Data persistence
-│   ├── download_updater.py # Download status updater
-│   ├── file_size_fetcher.py# File size fetcher
-│   ├── local_server.py     # Local HTTP server for extension
-│   ├── proxy_manager.py    # Proxy configuration
-│   ├── queue_model.py      # Queue data model
-│   ├── temp_db.py          # Temporary in-memory database
-│   ├── worker.py           # Background download worker
-│   ├── youtube_downloader.py # YouTube download core
-│   └── youtube_worker.py   # YouTube download worker
-├── ui/                      # UI components
-│   ├── delegates.py        # Custom table delegates
-│   ├── dialogs.py          # Various dialogs
-│   ├── download_proxy_dialog.py # Proxy configuration dialog
-│   ├── main_window.py      # Main application window
-│   ├── proxy_dialog.py     # Proxy settings dialog
-│   ├── splash.py           # Splash screen
-│   ├── table_model.py      # Download table model
-│   ├── update_dialog.py    # Update dialog
-│   └── youtube_progress.py # YouTube progress dialog
-├── utils/                   # Utilities
-│   ├── helpers.py          # Helper functions
-│   └── style.py            # Theme styles
-├── FelfelDM-extension/      # Browser extension
-│   ├── background.js       # Extension background script
-│   ├── content.js          # Content script
-│   ├── popup.html          # Popup UI
-│   ├── popup.js            # Popup logic
-│   ├── install.sh          # Extension installer
-│   ├── manifest-chrome.json # Chrome manifest
-│   └── manifest-firefox.json # Firefox manifest
-├── FelfelDM.git/            # Arch Linux package files
-│   ├── felfeldm.install    # Arch install script
-│   └── PKGBUILD            # Arch package build file
-├── logo/                    # Application icons
-│   └── icon512.png         # Main icon
-├── screenshots/             # Application screenshots
-│   └── main-window.png     # Main window screenshot
-├── main.py                  # Entry point with CLI support
-├── install.sh               # Installation script
-├── uninstall.sh             # Uninstallation script
-├── requirements.txt         # Python dependencies
-└── README.md                # This file
+    ├── core/                    # Core modules
+    │   ├── __init__.py
+    │   ├── aria2_handler.py     # aria2 handler
+    │   ├── aria2_rpc.py         # aria2 JSON-RPC client
+    │   ├── data_store.py        # Data persistence
+    │   ├── file_size_fetcher.py # File size fetcher
+    │   ├── local_server.py      # Local HTTP server for extension
+    │   ├── proxy_manager.py     # Proxy configuration
+    │   ├── queue_model.py       # Queue data model
+    │   ├── queue_worker.py      # Queue operation worker
+    │   ├── temp_db.py           # Temporary in-memory database
+    │   ├── worker.py            # Background download worker
+    │   ├── youtube_downloader.py # YouTube download core
+    │   └── youtube_worker.py    # YouTube download worker
+    ├── ui/                      # UI components
+    │   ├── __init__.py
+    │   ├── delegates.py         # Custom table delegates
+    │   ├── dialogs.py           # Various dialogs
+    │   ├── download_proxy_dialog.py
+    │   ├── export_dialog.py     # Export dialog
+    │   ├── export_manager.py    # Export manager
+    │   ├── main_window.py       # Main application window
+    │   ├── proxy_dialog.py      # Proxy settings dialog
+    │   ├── splash.py            # Splash screen
+    │   ├── table_model.py       # Download table model
+    │   ├── update_dialog.py     # Update dialog
+    │   └── youtube_progress.py  # YouTube progress dialog
+    ├── utils/                   # Utilities
+    │   ├── __init__.py
+    │   ├── helpers.py           # Helper functions
+    │   └── style.py             # Theme styles
+    ├── FelfelDM-extension/      # Browser extension
+    │   ├── background.js
+    │   ├── content.js
+    │   ├── icons/
+    │   ├── popup.html
+    │   ├── popup.js
+    │   ├── install.sh
+    │   ├── manifest-chrome.json
+    │   └── manifest-firefox.json
+    ├── FelfelDM.git/            # Arch Linux package files
+    │   ├── felfeldm.install
+    │   └── PKGBUILD
+    ├── logo/                    # Application icons
+    │   ├── icon512.png
+    │   └── tray-active.png
+    ├── screenshots/             # Application screenshots
+    │   └── main-window.png
+    ├── main.py                  # Entry point
+    ├── install.sh               # Installation script
+    ├── uninstall.sh             # Uninstallation script
+    ├── requirements.txt         # Python dependencies
+    └── README.md                # This file
 ```
 
 ---

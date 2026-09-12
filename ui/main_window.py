@@ -85,6 +85,7 @@ class MainWindow(QMainWindow):
         self._details_visible = False
         self.details_panel = None
         self._completed_gids: Set[str] = set()
+        self._cancelling_youtube: Set[str] = set()
         self._queue_list_dirty = True
         self._open_dialogs: Dict[str, QDialog] = {}
         self._pending_status: Dict[str, tuple] = {}
@@ -716,10 +717,17 @@ class MainWindow(QMainWindow):
 
         error_gids = []
         normal_gids = []
+        youtube_gids = []
 
         for gid in q.downloads:
             if gid in self._all_downloads:
                 status = self._all_downloads[gid].get("status", "")
+                dtype = self._all_downloads[gid].get("download_type", "normal")
+
+                if dtype == "youtube":
+                    youtube_gids.append(gid)
+                    continue
+
                 if status in ["error", "stopped"]:
                     error_gids.append(gid)
                 else:
@@ -757,6 +765,10 @@ class MainWindow(QMainWindow):
         else:
             self._queue_worker = None
 
+        for gid in youtube_gids:
+            print(f"🎬 Starting YouTube download from queue start: {gid}")
+            self._start_youtube_download(gid)
+
         self.start_queue_btn.setEnabled(False)
         self.pause_queue_btn.setEnabled(False)
 
@@ -786,6 +798,15 @@ class MainWindow(QMainWindow):
         for gid in q.downloads:
             if gid in self._all_downloads:
                 current_status = self._all_downloads[gid].get("status", "")
+                dtype = self._all_downloads[gid].get("download_type", "normal")
+
+                if dtype == "youtube":
+                    if current_status in ["downloading", "active", "waiting"]:
+                        self._pause_youtube_download(gid)
+                        self._all_downloads[gid]["status"] = "paused"
+                        if gid in q.downloads_info:
+                            q.downloads_info[gid]["status"] = "paused"
+                    continue
 
                 if current_status in ["active", "waiting", "downloading"]:
                     gids_to_pause.append(gid)
@@ -795,7 +816,6 @@ class MainWindow(QMainWindow):
                     if gid in q.downloads_info:
                         q.downloads_info[gid]["status"] = "paused"
                 elif current_status in ["error", "stopped"]:
-
                     self._all_downloads[gid]["status"] = "paused"
                     self._mark_pending_status(gid, "paused")
                     if gid in q.downloads_info:
@@ -1469,10 +1489,7 @@ class MainWindow(QMainWindow):
             status = dl.get("status", "")
             if status in ["active", "downloading"]:
                 has_active = True
-                try:
-                    total_speed += int(dl.get("downloadSpeed", 0))
-                except (TypeError, ValueError):
-                    pass
+                total_speed += int(dl.get("downloadSpeed", 0))
 
         self._speed_samples.append(total_speed)
         if len(self._speed_samples) > self._max_samples:
@@ -1817,16 +1834,6 @@ class MainWindow(QMainWindow):
         self.model.update_rows(filtered)
 
     def _show_singleton_dialog(self, key: str, dlg: QDialog, on_accepted=None) -> None:
-        """Show `dlg` as its own independent (non-modal) window, tracked
-        under `key`. If a dialog is already open under this key, just
-        raise/focus that one instead of opening a duplicate.
-
-        `dlg` should already be fully built (fields pre-filled, signals
-        for its own internal logic connected) before calling this.
-        `on_accepted(dlg)`, if given, runs when the dialog is accepted
-        (OK clicked) — read whatever you need from `dlg` inside it,
-        since the dialog is destroyed shortly after.
-        """
         existing = self._open_dialogs.get(key)
         if existing is not None:
             try:
@@ -2601,11 +2608,25 @@ class MainWindow(QMainWindow):
             if gid in self._all_downloads:
                 del self._all_downloads[gid]
 
+        self._reset_speed_if_idle()
+
         self.store.save()
         self._refresh_table()
         self._queue_list_dirty = True
         self._refresh_queue_list()
         self._update_queue_buttons()
+
+    def _reset_speed_if_idle(self) -> None:
+        has_active = any(
+            self._all_downloads.get(g, {}).get("status") in ("active", "downloading")
+            for g in self._all_downloads
+        )
+        if not has_active:
+            self._speed_samples.clear()
+            self._smooth_speed = 0
+            self._last_calculated_global_speed = 0
+            if hasattr(self, "speed_status_label"):
+                self.speed_status_label.setText("0 B/s")
 
     def _delete_download_files(self, gid: str) -> None:
         import glob
@@ -2816,16 +2837,8 @@ class MainWindow(QMainWindow):
         print("🎯 _add_youtube_to_queue CALLED")
 
         queue_name = download_data.get("queue_id", "Default")
-        target_queue = None
-        for q in self.store.queues:
-            if q.name == queue_name:
-                target_queue = q
-                break
 
-        if not target_queue:
-            target_queue = Queue(queue_name, paused=True)
-            self.store.queues.append(target_queue)
-            self.store.save()
+        target_queue = self._get_or_create_queue(queue_name)
 
         download_id = str(uuid.uuid4())
 
@@ -2854,6 +2867,7 @@ class MainWindow(QMainWindow):
                 "format": format_type,
                 "cookies_path": yt_options.get("cookies_path"),
                 "format_id": yt_options.get("format_id"),
+                "format_spec": yt_options.get("format_spec", "bv+ba/b"),
                 "format_info": yt_options.get("format_info", {}),
             },
             "proxy": download_data.get("proxy"),
@@ -2902,6 +2916,16 @@ class MainWindow(QMainWindow):
 
         self.store.save()
 
+        is_direct = queue_name == "__direct__"
+        if is_direct:
+            target_queue.paused = False
+            self._all_downloads[download_id]["status"] = "downloading"
+            target_queue.downloads_info[download_id]["status"] = "downloading"
+
+            self.store.update_youtube_status(download_id, "downloading")
+
+            self.store.save()
+
         if self.worker:
             self.worker.add_youtube_download(
                 {
@@ -2912,6 +2936,11 @@ class MainWindow(QMainWindow):
                     "proxy": download_data.get("proxy"),
                     "queue_id": queue_name,
                 }
+            )
+
+        if is_direct:
+            QTimer.singleShot(
+                300, lambda did=download_id: self._open_youtube_progress_dialog(did)
             )
 
         self._queue_list_dirty = True
@@ -2929,12 +2958,26 @@ class MainWindow(QMainWindow):
 
     def _start_youtube_download(self, download_id: str) -> None:
         if not hasattr(self, "worker") or not self.worker:
+            print(f"⚠️ [MainWindow] No worker available")
             return
 
         data = self.store.get_youtube_download(download_id)
         if not data:
+            print(f"⚠️ [MainWindow] No data for {download_id}")
             return
 
+        worker_exists = False
+        try:
+            with self.worker.youtube_lock:
+                worker_exists = download_id in self.worker.youtube_workers
+        except Exception:
+            worker_exists = False
+
+        if worker_exists:
+            print(f"⏭️ [MainWindow] Worker already exists for {download_id}")
+            return
+
+        print(f"🎬 [MainWindow] Starting YouTube download: {download_id}")
         self.worker.add_youtube_download(
             {
                 "id": download_id,
@@ -2947,7 +2990,7 @@ class MainWindow(QMainWindow):
         )
 
     def _pause_youtube_download(self, download_id: str) -> None:
-        if not hasattr(self, "worker"):
+        if not hasattr(self, "worker") or not self.worker:
             return
 
         self.worker.pause_youtube_download(download_id)
@@ -2955,24 +2998,70 @@ class MainWindow(QMainWindow):
         if download_id in self._all_downloads:
             self._all_downloads[download_id]["status"] = "paused"
 
+        for q in self.store.queues:
+            if download_id in q.downloads_info:
+                q.downloads_info[download_id]["status"] = "paused"
+                break
+
+        self.store.save()
         self._update_queue_buttons()
         self._refresh_table()
 
     def _resume_youtube_download(self, download_id: str) -> None:
-        if not hasattr(self, "worker"):
+        if not hasattr(self, "worker") or not self.worker:
             return
 
-        self.worker.resume_youtube_download(download_id)
+        worker_exists = False
+        try:
+            with self.worker.youtube_lock:
+                worker_exists = download_id in self.worker.youtube_workers
+        except Exception:
+            worker_exists = False
+
+        if worker_exists:
+            print(f"▶️ [MainWindow] Resuming existing worker: {download_id}")
+            self.worker.resume_youtube_download(download_id)
+        else:
+            print(f"🎬 [MainWindow] No active worker, starting fresh: {download_id}")
+            data = self.store.get_youtube_download(download_id)
+            if not data:
+                print(f"⚠️ [MainWindow] No data for {download_id}")
+                return
+            self.worker.add_youtube_download(
+                {
+                    "id": download_id,
+                    "url": data["url"],
+                    "save_path": data["save_path"],
+                    "yt_options": data.get("yt_options", {}),
+                    "proxy": data.get("proxy"),
+                    "queue_id": data.get("queue_id"),
+                }
+            )
 
         if download_id in self._all_downloads:
             self._all_downloads[download_id]["status"] = "downloading"
 
+        for q in self.store.queues:
+            if download_id in q.downloads_info:
+                q.downloads_info[download_id]["status"] = "downloading"
+                break
+
+        self.store.save()
         self._update_queue_buttons()
         self._refresh_table()
 
     def _cancel_youtube_download(self, download_id: str) -> None:
+        print(f"🗑️ [MainWindow] _cancel_youtube_download CALLED for: {download_id}")
+        self._cancelling_youtube.add(download_id)
+        print(
+            f"🗑️ [MainWindow] _all_downloads count BEFORE: {len(self._all_downloads)}"
+        )
+
         if not hasattr(self, "worker"):
+            print(f"⚠️ [MainWindow] No worker")
             return
+
+        print(f"🗑️ [MainWindow] Updating UI first...")
 
         if self._youtube_dialog is not None:
             try:
@@ -2981,7 +3070,8 @@ class MainWindow(QMainWindow):
                 pass
             self._youtube_dialog = None
 
-        self.worker.cancel_youtube_download(download_id)
+        self.store.delete_youtube_download(download_id)
+        self.store.save()
 
         if download_id in self._all_downloads:
             del self._all_downloads[download_id]
@@ -2991,14 +3081,26 @@ class MainWindow(QMainWindow):
                 q.downloads.remove(download_id)
             if download_id in q.downloads_info:
                 del q.downloads_info[download_id]
-
-        self.store.delete_youtube_download(download_id)
         self.store.save()
+
+        print(f"🗑️ [MainWindow] Calling worker.cancel_youtube_download...")
+        try:
+            self.worker.cancel_youtube_download(download_id)
+        except Exception as e:
+            print(f"⚠️ [MainWindow] Error in worker.cancel_youtube_download: {e}")
+
+        self._reset_speed_if_idle()
 
         self._refresh_table()
         self._queue_list_dirty = True
         self._refresh_queue_list()
         self._update_queue_buttons()
+
+        print(f"🗑️ [MainWindow] _all_downloads count AFTER: {len(self._all_downloads)}")
+        print(f"🗑️ [MainWindow] Cancel complete for: {download_id}")
+        QTimer.singleShot(
+            5000, lambda did=download_id: self._cancelling_youtube.discard(did)
+        )
 
     def _on_youtube_progress(self, download_id: str, progress: int) -> None:
         if download_id in self._all_downloads:
@@ -3024,7 +3126,18 @@ class MainWindow(QMainWindow):
             self._all_downloads[download_id]["totalLength"] = size
             self._refresh_table()
 
-    def _on_youtube_finished(self, success: bool, message: str) -> None:
+    def _on_youtube_finished(
+        self, download_id: str, success: bool, message: str
+    ) -> None:
+        print(f"🎬 [MainWindow] YouTube finished: {download_id} success={success}")
+
+        if self._youtube_dialog is not None:
+            try:
+                if getattr(self._youtube_dialog, "download_id", None) == download_id:
+                    self._youtube_dialog.update_finished(success, message)
+            except RuntimeError:
+                self._youtube_dialog = None
+
         if success:
             self.tray.showMessage(
                 "FelfelDM",
@@ -3039,6 +3152,8 @@ class MainWindow(QMainWindow):
                 QSystemTrayIcon.MessageIcon.Warning,
                 3000,
             )
+
+        self._refresh_table()
 
     def _open_youtube_progress_dialog(self, download_id: str) -> None:
         try:
@@ -3445,6 +3560,8 @@ class MainWindow(QMainWindow):
         if gid in self._all_downloads:
             del self._all_downloads[gid]
 
+        self._reset_speed_if_idle()
+
         self.store.save()
         self._refresh_table()
         self._queue_list_dirty = True
@@ -3477,6 +3594,8 @@ class MainWindow(QMainWindow):
         if gid in self._all_downloads:
             del self._all_downloads[gid]
 
+        self._reset_speed_if_idle()
+
         self.store.save()
         self._refresh_table()
         self._queue_list_dirty = True
@@ -3488,13 +3607,13 @@ class MainWindow(QMainWindow):
         if not gid:
             return
 
-        if (
-            gid in self._all_downloads
-            and self._all_downloads[gid].get("download_type") == "youtube"
-        ):
-            self._pause_youtube_download(gid)
-        else:
-            self.worker.pause_requested.emit(gid)
+        if gid in self._all_downloads:
+            dtype = self._all_downloads[gid].get("download_type", "normal")
+            if dtype == "youtube":
+                self._pause_youtube_download(gid)
+                return
+
+        self.worker.pause_requested.emit(gid)
 
     def _resume_selected(self) -> None:
         """Resume selected download only, don't touch queue state"""
@@ -4178,12 +4297,20 @@ class MainWindow(QMainWindow):
                                     self._all_downloads[gid]["status"] = "paused"
 
     def _update_youtube_dialogs(self, youtube_downloads: List[Dict]) -> None:
+        if youtube_downloads:
+            print(
+                f"📥 [MainWindow] Updating dialogs with {len(youtube_downloads)} items: {[y.get('id', '?')[:8] for y in youtube_downloads]}"
+            )
         for yt_data in youtube_downloads:
             if not isinstance(yt_data, dict):
                 continue
 
             yt_id = yt_data.get("id")
             if not yt_id:
+                continue
+            
+            if yt_id in self._cancelling_youtube:
+                print(f"⏭️ [MainWindow] Skipping cancelling download: {yt_id[:8]}")
                 continue
 
             saved_data = self.store.get_youtube_download(yt_id)
@@ -4234,6 +4361,53 @@ class MainWindow(QMainWindow):
 
             if saved_data and saved_data.get("status") != status:
                 self.store.update_youtube_status(yt_id, status)
+
+            self._update_open_youtube_dialog(
+                yt_id, status, progress, speed, eta, total_size
+            )
+
+    def _update_open_youtube_dialog(
+        self,
+        download_id: str,
+        status: str,
+        progress: int,
+        speed: str,
+        eta: str,
+        total_size: int,
+    ) -> None:
+        if self._youtube_dialog is None:
+            return
+
+        try:
+            dialog_id = getattr(self._youtube_dialog, "download_id", None)
+        except RuntimeError:
+            self._youtube_dialog = None
+            return
+
+        if dialog_id != download_id:
+            return
+
+        try:
+            # 1) progress + speed/eta
+            self._youtube_dialog.update_progress(progress, speed, eta)
+
+            # 2) status (pause/resume state)
+            if status == "paused":
+                self._youtube_dialog.update_pause_state(True)
+            elif status in ("downloading", "active"):
+                self._youtube_dialog.update_pause_state(False)
+
+            if status in ("completed", "complete"):
+                self._youtube_dialog.update_finished(
+                    True, "Download completed successfully!"
+                )
+            elif status == "error":
+                msg = self._all_downloads.get(download_id, {}).get(
+                    "errorMessage", "Download failed"
+                )
+                self._youtube_dialog.update_finished(False, msg)
+        except RuntimeError:
+            self._youtube_dialog = None
 
     def _on_worker_operation_result(self, operation: str, result: Any) -> None:
         """Handle results from worker operations (re_add, add_url, etc.)"""
