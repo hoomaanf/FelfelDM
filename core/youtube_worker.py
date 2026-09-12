@@ -151,7 +151,7 @@ class YouTubeWorker(QThread):
 
             print(f"📏 Fetching size with: {' '.join(cmd)}")
 
-            result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+            result = subprocess.run(cmd, capture_output=True, text=True)
 
             if result.returncode != 0:
                 error_msg = result.stderr.strip()
@@ -228,6 +228,7 @@ class YouTubeWorker(QThread):
         except Exception as e:
             print(f"❌ Size fetch error: {e}")
             import traceback
+
             traceback.print_exc()
             self.size_fetched.emit(0)
         finally:
@@ -323,7 +324,7 @@ class YouTubeWorker(QThread):
 
             print(f"🔍 Running: {' '.join(cmd)}")
 
-            result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+            result = subprocess.run(cmd, capture_output=True, text=True)
 
             if result.returncode != 0:
                 error_msg = result.stderr.strip()
