@@ -155,19 +155,11 @@ bash <(curl -s https://raw.githubusercontent.com/hoomaanf/FelfelDM/main/uninstal
 
 ## 🔄 Update
 
-### Update from within the app
-
-1. Run FelfelDM
-2. Go to **Help → About**
-3. Click the **Update** button
-4. A dialog will show the update progress
-5. Restart the app when prompted
-
 ### Update from terminal
 
 ```bash
 # Via AUR (Arch Linux)
-yay -S felfeldm-git
+yay -Suy felfeldm-git
 
 # Via built-in updater
 FelfelDM --update
