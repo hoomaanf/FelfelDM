@@ -26,6 +26,7 @@ from ui.delegates import ProgressDelegate
 from ui.youtube_progress import YouTubeProgressDialog
 from ui.export_dialog import ExportDialog
 from ui.export_manager import ExportManager
+from ui.update_dialog import UpdateDialog
 
 from utils.helpers import (
     format_size,
@@ -4552,18 +4553,51 @@ class MainWindow(QMainWindow):
         btn_layout = QHBoxLayout()
         btn_layout.setSpacing(10)
 
+        update_btn = QPushButton(get_icon("system-software-update"), "Update")
+        update_btn.setMinimumWidth(160)
+        update_btn.clicked.connect(lambda: (dialog.accept(), self._update()))
+
         close_btn = QPushButton("Close")
         close_btn.setMinimumWidth(100)
         close_btn.clicked.connect(dialog.accept)
 
         btn_layout.addStretch()
+        btn_layout.addWidget(update_btn)
         btn_layout.addWidget(close_btn)
         btn_layout.addStretch()
 
         layout.addLayout(btn_layout)
 
         dialog.exec()
+        
+    def _update(self) -> None:
+        """Open the update dialog to install the latest version."""
+        key = "update_dialog"
+        existing = self._open_dialogs.get(key)
+        if existing is not None:
+            try:
+                if existing.isVisible():
+                    existing.raise_()
+                    existing.activateWindow()
+                    return
+            except RuntimeError:
+                self._open_dialogs.pop(key, None)
 
+        from ui.update_dialog import UpdateDialog
+
+        dlg = UpdateDialog(parent=self)
+        dlg.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose, True)
+        self._open_dialogs[key] = dlg
+
+        def _cleanup(*_):
+            if self._open_dialogs.get(key) is dlg:
+                self._open_dialogs.pop(key, None)
+
+        dlg.finished.connect(_cleanup)
+        dlg.show()
+        dlg.raise_()
+        dlg.activateWindow()
+        
     def closeEvent(self, event: QCloseEvent) -> None:
         has_active = False
         for q in self.store.queues:
