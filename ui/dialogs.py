@@ -2088,7 +2088,8 @@ class DownloadProgressDialog(QDialog):
         self.gid = gid
 
         self._main_window = main_window
-        self.setWindowTitle("Download Progress")
+        name = dl_data.get("name", "Download")
+        self.setWindowTitle(name if name else "Download Progress")
         self.setMinimumWidth(480)
         self.setMinimumHeight(200)
         self.setSizeGripEnabled(True)
@@ -2099,7 +2100,6 @@ class DownloadProgressDialog(QDialog):
             | Qt.WindowType.WindowMaximizeButtonHint
         )
         self.setWindowModality(Qt.WindowModality.NonModal)
-        self.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose, True)
 
         self._status = "unknown"
         self._is_complete = False
@@ -2263,7 +2263,7 @@ class DownloadProgressDialog(QDialog):
 
         if status == "complete" and not self._is_complete:
             self._is_complete = True
-            self.setWindowTitle("Download Completed!")
+            self.setWindowTitle(f"✅ {name}" if name else "Download Completed!")
             self.setWindowFlags(
                 Qt.WindowType.Window
                 | Qt.WindowType.WindowCloseButtonHint
@@ -2278,6 +2278,7 @@ class DownloadProgressDialog(QDialog):
 
         if name:
             self.name_lbl.setText(name)
+            self.setWindowTitle(name)
 
         if total > 0:
             pct = int((completed / total) * 100)

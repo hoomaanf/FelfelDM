@@ -36,7 +36,21 @@ class YouTubeProgressDialog(QDialog):
         download_id=None,
     ):
         super().__init__(parent)
-        self.setWindowTitle("YouTube Download")
+
+        title = (
+            video_info.get("title", "YouTube Download")
+            if video_info
+            else "YouTube Download"
+        )
+
+        if (not title or title == "YouTube Download") and download_id and parent:
+            if (
+                hasattr(parent, "_all_downloads")
+                and download_id in parent._all_downloads
+            ):
+                title = parent._all_downloads[download_id].get("name", title)
+
+        self.setWindowTitle(title if title else "YouTube Download")
         self.setMinimumWidth(520)
 
         self.setWindowFlags(
@@ -355,6 +369,12 @@ class YouTubeProgressDialog(QDialog):
             self.title_label.setStyleSheet(
                 "font-size: 15px; font-weight: bold; color: #27ae60;"
             )
+
+            if self.video_info and self.video_info.get("title"):
+                self.setWindowTitle(f"✅ {self.video_info['title']}")
+            else:
+                self.setWindowTitle("✅ Download completed!")
+
             self.status_label.setText(message)
             self.status_label.setStyleSheet("color: #27ae60;")
             self.speed_eta_label.setText("")
@@ -548,6 +568,12 @@ class YouTubeProgressDialog(QDialog):
             self.title_label.setStyleSheet(
                 "font-size: 15px; font-weight: bold; color: #27ae60;"
             )
+
+            if self.video_info and self.video_info.get("title"):
+                self.setWindowTitle(f"✅ {self.video_info['title']}")
+            else:
+                self.setWindowTitle("✅ Download completed!")
+
             self.status_label.setText(message)
             self.status_label.setStyleSheet("color: #27ae60;")
             self.speed_eta_label.setText("")

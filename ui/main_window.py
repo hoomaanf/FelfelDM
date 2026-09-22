@@ -67,7 +67,7 @@ class MainWindow(QMainWindow):
         self._shutdown_dialog_shown: bool = False
         self._retry_mapping: Dict[str, str] = {}
         self._progress_dialogs: Dict[str, DownloadProgressDialog] = {}
-        self._youtube_dialog: Optional[QDialog] = None
+        self._youtube_dialogs: Dict[str, "YouTubeProgressDialog"] = {}
         self._shutdown_dialog: Optional[QDialog] = None
         self._speed_samples: List[int] = []
         self._max_samples: int = 8
@@ -3064,12 +3064,12 @@ class MainWindow(QMainWindow):
 
         print(f"🗑️ [MainWindow] Updating UI first...")
 
-        if self._youtube_dialog is not None:
+        if download_id in self._youtube_dialogs:
             try:
-                self._youtube_dialog.close()
+                self._youtube_dialogs[download_id].close()
             except Exception:
                 pass
-            self._youtube_dialog = None
+            self._youtube_dialogs.pop(download_id, None)
 
         self.store.delete_youtube_download(download_id)
         self.store.save()
@@ -3132,12 +3132,12 @@ class MainWindow(QMainWindow):
     ) -> None:
         print(f"🎬 [MainWindow] YouTube finished: {download_id} success={success}")
 
-        if self._youtube_dialog is not None:
+        if download_id in self._youtube_dialogs:
+            dialog = self._youtube_dialogs[download_id]
             try:
-                if getattr(self._youtube_dialog, "download_id", None) == download_id:
-                    self._youtube_dialog.update_finished(success, message)
+                dialog.update_finished(success, message)
             except RuntimeError:
-                self._youtube_dialog = None
+                self._youtube_dialogs.pop(download_id, None)
 
         if success:
             self.tray.showMessage(
@@ -3161,43 +3161,61 @@ class MainWindow(QMainWindow):
             if not download_id:
                 return
 
-            if self._youtube_dialog is not None:
+            if download_id in self._youtube_dialogs:
+                dialog = self._youtube_dialogs[download_id]
                 try:
-                    self._youtube_dialog.close()
-                    self._youtube_dialog.deleteLater()
-                except Exception:
-                    pass
-                self._youtube_dialog = None
+                    if dialog.isVisible():
+                        dialog.raise_()
+                        dialog.activateWindow()
+                        return
+                    else:
+                        dialog.deleteLater()
+                        del self._youtube_dialogs[download_id]
+                except RuntimeError:
+                    del self._youtube_dialogs[download_id]
 
             data = self.store.get_youtube_download(download_id)
             if not data:
                 QMessageBox.warning(self, "Error", "Download not found")
                 return
 
-            self._youtube_dialog = YouTubeProgressDialog(
+            dialog = YouTubeProgressDialog(
                 url=data["url"],
                 output_path=data["save_path"],
                 format_type=data.get("yt_options", {}).get("format", "mp4"),
                 cookie_file=data.get("yt_options", {}).get("cookies_path"),
                 video_info=data.get("video_info", {}),
-                parent=None,
+                parent=self,
                 proxy_url=data.get("proxy"),
                 download_id=download_id,
             )
 
-            self._youtube_dialog.setWindowFlags(
+            dialog.setWindowFlags(
                 Qt.WindowType.Window
                 | Qt.WindowType.WindowCloseButtonHint
                 | Qt.WindowType.WindowMinimizeButtonHint
             )
-            self._youtube_dialog.setWindowModality(Qt.WindowModality.NonModal)
+            dialog.setWindowModality(Qt.WindowModality.NonModal)
 
-            self._youtube_dialog.pause_requested.connect(self._pause_youtube_download)
-            self._youtube_dialog.resume_requested.connect(self._resume_youtube_download)
-            self._youtube_dialog.cancel_requested.connect(self._cancel_youtube_download)
+            dialog.pause_requested.connect(self._pause_youtube_download)
+            dialog.resume_requested.connect(self._resume_youtube_download)
+            dialog.cancel_requested.connect(self._cancel_youtube_download)
 
-            self._youtube_dialog.show()
-            self._center_dialog_on_screen(self._youtube_dialog)
+            dialog.finished.connect(
+                lambda result, did=download_id: self._on_youtube_dialog_closed(
+                    did, result
+                )
+            )
+
+            self._youtube_dialogs[download_id] = dialog
+            dialog.show()
+            self._center_dialog_on_screen(dialog)
+
+            video_title = (
+                data.get("yt_options", {}).get("title") or data.get("name") or ""
+            )
+            if video_title:
+                dialog.setWindowTitle(video_title)
 
             if download_id in self._all_downloads:
                 dl_data = self._all_downloads[download_id]
@@ -3206,17 +3224,25 @@ class MainWindow(QMainWindow):
                 speed = dl_data.get("speed", "")
                 eta = dl_data.get("eta", "")
 
-                self._youtube_dialog.update_progress(progress, speed, eta)
+                dialog.update_progress(progress, speed, eta)
 
                 if status == "paused":
-                    self._youtube_dialog.update_pause_state(True)
+                    dialog.update_pause_state(True)
                 elif status == "downloading":
-                    self._youtube_dialog.update_pause_state(False)
+                    dialog.update_pause_state(False)
                 elif status == "completed":
-                    self._youtube_dialog.update_finished(True, "Download completed!")
+                    dialog.update_finished(True, "Download completed!")
 
         except Exception as e:
             print(f"❌ Error opening YouTube dialog: {e}")
+
+    def _on_youtube_dialog_closed(self, download_id: str, result=None) -> None:
+        if download_id in self._youtube_dialogs:
+            dialog = self._youtube_dialogs.pop(download_id)
+            try:
+                dialog.deleteLater()
+            except RuntimeError:
+                pass
 
     def _open_settings(self) -> None:
         dlg = SettingsDialog(self.store.settings, self)
@@ -3469,10 +3495,16 @@ class MainWindow(QMainWindow):
                     dialog.raise_()
                     dialog.activateWindow()
                     return
+                else:
+                    dialog.deleteLater()
+                    del self._progress_dialogs[gid]
             except RuntimeError:
                 del self._progress_dialogs[gid]
 
         dialog = DownloadProgressDialog(gid, dl_data, parent=None, main_window=self)
+        name = dl_data.get("name", "")
+        if name:
+            dialog.setWindowTitle(name)
 
         dialog.setWindowFlags(
             Qt.WindowType.Window
@@ -3490,7 +3522,7 @@ class MainWindow(QMainWindow):
         )
 
         dialog.finished.connect(
-            lambda result: self._on_progress_dialog_closed(gid, result)
+            lambda result, g=gid: self._on_progress_dialog_closed(g, result)
         )
 
         self._progress_dialogs[gid] = dialog
@@ -3502,7 +3534,11 @@ class MainWindow(QMainWindow):
 
     def _on_progress_dialog_closed(self, gid: str, result=None) -> None:
         if gid in self._progress_dialogs:
-            del self._progress_dialogs[gid]
+            dialog = self._progress_dialogs.pop(gid)
+            try:
+                dialog.deleteLater()
+            except RuntimeError:
+                pass
 
     def _pause_from_dialog(self, gid: str) -> None:
         if not gid or gid not in self._all_downloads:
@@ -4372,39 +4408,28 @@ class MainWindow(QMainWindow):
         eta: str,
         total_size: int,
     ) -> None:
-        if self._youtube_dialog is None:
+        if download_id not in self._youtube_dialogs:
             return
+
+        dialog = self._youtube_dialogs[download_id]
 
         try:
-            dialog_id = getattr(self._youtube_dialog, "download_id", None)
-        except RuntimeError:
-            self._youtube_dialog = None
-            return
+            dialog.update_progress(progress, speed, eta)
 
-        if dialog_id != download_id:
-            return
-
-        try:
-            # 1) progress + speed/eta
-            self._youtube_dialog.update_progress(progress, speed, eta)
-
-            # 2) status (pause/resume state)
             if status == "paused":
-                self._youtube_dialog.update_pause_state(True)
+                dialog.update_pause_state(True)
             elif status in ("downloading", "active"):
-                self._youtube_dialog.update_pause_state(False)
+                dialog.update_pause_state(False)
 
             if status in ("completed", "complete"):
-                self._youtube_dialog.update_finished(
-                    True, "Download completed successfully!"
-                )
+                dialog.update_finished(True, "Download completed successfully!")
             elif status == "error":
                 msg = self._all_downloads.get(download_id, {}).get(
                     "errorMessage", "Download failed"
                 )
-                self._youtube_dialog.update_finished(False, msg)
+                dialog.update_finished(False, msg)
         except RuntimeError:
-            self._youtube_dialog = None
+            self._youtube_dialogs.pop(download_id, None)
 
     def _on_worker_operation_result(self, operation: str, result: Any) -> None:
         """Handle results from worker operations (re_add, add_url, etc.)"""
@@ -4569,7 +4594,7 @@ class MainWindow(QMainWindow):
         layout.addLayout(btn_layout)
 
         dialog.exec()
-        
+
     def _update(self) -> None:
         """Open the update dialog to install the latest version."""
         key = "update_dialog"
@@ -4597,7 +4622,7 @@ class MainWindow(QMainWindow):
         dlg.show()
         dlg.raise_()
         dlg.activateWindow()
-        
+
     def closeEvent(self, event: QCloseEvent) -> None:
         has_active = False
         for q in self.store.queues:
@@ -4692,12 +4717,13 @@ class MainWindow(QMainWindow):
                 pass
         self._progress_dialogs.clear()
 
-        if self._youtube_dialog is not None:
+        for dlg in list(self._youtube_dialogs.items()):
             try:
-                self._youtube_dialog.close()
+                dlg.close()
+                dlg.deleteLater()
             except Exception:
                 pass
-            self._youtube_dialog = None
+        self._youtube_dialogs.clear()
 
         shutdown_dialog.update_status("Stopping backend...", 70)
         if hasattr(self, "worker") and self.worker:
