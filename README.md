@@ -63,6 +63,33 @@ bash <(curl -s https://raw.githubusercontent.com/hoomaanf/FelfelDM/main/install.
 - 📋 **Details Panel** — View download details (name, size, downloaded, status, path) with quick actions
 - ⌨️ **Keyboard Shortcuts** — Full keyboard navigation for power users
 
+### 🎯 Preview Sizes Before Downloading
+
+No need to add the file to see its size! When you enter URLs:
+
+- **Full file list with exact sizes** — See every file with its precise size before downloading
+- **Per-row checkbox** — Select only the files you want (click anywhere in the cell)
+- **Select All / Deselect All** — Quick selection buttons
+- **Total selected size** — See the total size of your selection at the bottom of the dialog
+- **Smart Add button** — The Download button is only enabled when at least one file is selected
+
+### ⚡ Parallel Size Fetching
+
+Previously, file sizes were fetched one by one with delays. Now, with **5 parallel threads**:
+
+- All file sizes are fetched in just a few seconds
+- Works both in the Add Download dialog **and** in the main window table
+- Uses the full `FileSizeFetcher` logic (HEAD → RANGE → STREAM → yt-dlp fallback)
+
+### 🗑️ Delete Files Without UI Freezing
+
+The "Remove & Delete Files" operation no longer freezes the UI:
+
+- **Instant operations** for downloads that never started (nothing on disk to delete)
+- **Background deletion** for partial downloads — files are deleted in a separate thread
+- **Batch RPC** to aria2 instead of dozens of individual requests
+- **Progress feedback** in the status bar during deletion
+
 ### Queue Management
 
 - 📋 **Queue Status** — Real-time status display for each queue (Running, Paused, Idle, Empty)
@@ -90,6 +117,8 @@ bash <(curl -s https://raw.githubusercontent.com/hoomaanf/FelfelDM/main/install.
 - 🔄 **Download Resume** — Resume interrupted downloads from where they stopped
 - 🔄 **In-App Update** — Update FelfelDM directly from the application (Help → About → Update)
 - ⚡ **Optimized Performance** — Reduced RPC calls for better responsiveness
+- 🚀 **Parallel Size Fetching** — Fetch sizes for multiple URLs in parallel
+- 🎯 **Preview Before Download** — See file sizes and select files before adding them
 
 ### YouTube Download Features
 
@@ -105,6 +134,7 @@ bash <(curl -s https://raw.githubusercontent.com/hoomaanf/FelfelDM/main/install.
 - 🎬 **YouTube Category** — YouTube downloads are visually distinguished in the queue
 - 📁 **Custom Output** — Choose where to save downloaded files
 - 🖥️ **Standalone Dialog** — Independent progress dialog for YouTube downloads
+- 🪟 **Multiple Dialogs** — Open multiple YouTube progress dialogs simultaneously
 
 ---
 
@@ -155,6 +185,10 @@ bash <(curl -s https://raw.githubusercontent.com/hoomaanf/FelfelDM/main/uninstal
 
 ## 🔄 Update
 
+### Update from inside the app
+
+Open the **About** dialog from the Help menu → click the **Update** button. The updater will download and install the latest version automatically.
+
 ### Update from terminal
 
 ```bash
@@ -196,8 +230,10 @@ FelfelDM --update
 #### Regular Downloads:
 1. Click **Download** button or press `Ctrl+N`
 2. Enter URLs (one per line)
-3. Select queue and options
-4. Click OK
+3. Wait for file sizes to be fetched (a few seconds)
+4. Review the list and select the files you want
+5. Choose queue and options
+6. Click **Download** or **Add to Queue**
 
 #### YouTube Downloads:
 1. Click **YouTube** button in the toolbar
@@ -205,6 +241,19 @@ FelfelDM --update
 3. Select quality and format
 4. Choose queue and save location
 5. Click Download
+
+### Preview Sizes Before Downloading
+
+When you paste multiple URLs into the Add Download dialog:
+
+- The dialog splits into a **left panel** (URLs) and a **right panel** (file list)
+- Each file is displayed in a table with its **name**, **size**, and **status**
+- You can **check/uncheck** files individually (click anywhere in the checkbox column)
+- Use **Select All / Deselect All** for bulk operations
+- The **total size** of your selection is shown at the bottom
+- The **Add to Queue / Download** button is only enabled when at least one file is selected
+
+The **progress bar** at the top shows fetch progress. When all sizes are fetched, it shows "✅ All sizes fetched".
 
 ### Details Panel
 
@@ -352,38 +401,39 @@ The FelfelDM browser extension shows its status through visual badges on its ico
 
 ```bash
 FelfelDM/
-    ├── core/                    # Core modules
+    ├── core/                          # Core modules
     │   ├── __init__.py
-    │   ├── aria2_handler.py     # aria2 handler
-    │   ├── aria2_rpc.py         # aria2 JSON-RPC client
-    │   ├── data_store.py        # Data persistence
-    │   ├── file_size_fetcher.py # File size fetcher
-    │   ├── local_server.py      # Local HTTP server for extension
-    │   ├── proxy_manager.py     # Proxy configuration
-    │   ├── queue_model.py       # Queue data model
-    │   ├── queue_worker.py      # Queue operation worker
-    │   ├── temp_db.py           # Temporary in-memory database
-    │   ├── worker.py            # Background download worker
-    │   ├── youtube_downloader.py # YouTube download core
-    │   └── youtube_worker.py    # YouTube download worker
-    ├── ui/                      # UI components
+    │   ├── aria2_handler.py           # aria2 handler
+    │   ├── aria2_rpc.py               # aria2 JSON-RPC client
+    │   ├── data_store.py              # Data persistence
+    │   ├── file_size_fetcher.py       # File size fetcher (HEAD → RANGE → STREAM → yt-dlp)
+    │   ├── local_server.py            # Local HTTP server for extension
+    │   ├── proxy_manager.py           # Proxy configuration
+    │   ├── queue_model.py             # Queue data model
+    │   ├── queue_worker.py            # Queue operation worker
+    │   ├── size_fetcher_worker.py     # Parallel size fetcher (5 threads)
+    │   ├── temp_db.py                 # Temporary in-memory database
+    │   ├── worker.py                  # Background download worker
+    │   ├── youtube_downloader.py      # YouTube download core
+    │   └── youtube_worker.py          # YouTube download worker
+    ├── ui/                            # UI components
     │   ├── __init__.py
-    │   ├── delegates.py         # Custom table delegates
-    │   ├── dialogs.py           # Various dialogs
+    │   ├── delegates.py               # Custom table delegates
+    │   ├── dialogs.py                 # Various dialogs (with unified AddDownloadDialog)
     │   ├── download_proxy_dialog.py
-    │   ├── export_dialog.py     # Export dialog
-    │   ├── export_manager.py    # Export manager
-    │   ├── main_window.py       # Main application window
-    │   ├── proxy_dialog.py      # Proxy settings dialog
-    │   ├── splash.py            # Splash screen
-    │   ├── table_model.py       # Download table model
-    │   ├── update_dialog.py     # Update dialog
-    │   └── youtube_progress.py  # YouTube progress dialog
-    ├── utils/                   # Utilities
+    │   ├── export_dialog.py           # Export dialog
+    │   ├── export_manager.py          # Export manager
+    │   ├── main_window.py             # Main application window
+    │   ├── proxy_dialog.py            # Proxy settings dialog
+    │   ├── splash.py                  # Splash screen
+    │   ├── table_model.py             # Download table model
+    │   ├── update_dialog.py           # Update dialog
+    │   └── youtube_progress.py        # YouTube progress dialog
+    ├── utils/                         # Utilities
     │   ├── __init__.py
-    │   ├── helpers.py           # Helper functions
-    │   └── style.py             # Theme styles
-    ├── FelfelDM-extension/      # Browser extension
+    │   ├── helpers.py                 # Helper functions
+    │   └── style.py                   # Theme styles
+    ├── FelfelDM-extension/            # Browser extension
     │   ├── background.js
     │   ├── content.js
     │   ├── icons/
@@ -392,19 +442,19 @@ FelfelDM/
     │   ├── install.sh
     │   ├── manifest-chrome.json
     │   └── manifest-firefox.json
-    ├── FelfelDM.git/            # Arch Linux package files
+    ├── FelfelDM.git/                  # Arch Linux package files
     │   ├── felfeldm.install
     │   └── PKGBUILD
-    ├── logo/                    # Application icons
+    ├── logo/                          # Application icons
     │   ├── icon512.png
     │   └── tray-active.png
-    ├── screenshots/             # Application screenshots
+    ├── screenshots/                   # Application screenshots
     │   └── main-window.png
-    ├── main.py                  # Entry point
-    ├── install.sh               # Installation script
-    ├── uninstall.sh             # Uninstallation script
-    ├── requirements.txt         # Python dependencies
-    └── README.md                # This file
+    ├── main.py                        # Entry point
+    ├── install.sh                     # Installation script
+    ├── uninstall.sh                   # Uninstallation script
+    ├── requirements.txt               # Python dependencies
+    └── README.md                      # This file
 ```
 
 ---
@@ -505,6 +555,22 @@ chmod +x uninstall.sh
 4. Manual pause/resume overrides automatic scheduling
 5. Check console output for schedule debug messages
 
+### File size shows as unknown
+
+1. Some servers don't return size via HEAD or RANGE requests
+2. The file will still download, but size won't be shown before downloading
+3. Try a different server or download the file and check the size afterward
+
+### UI freezes when removing files
+
+This has been fixed in the latest version. Update FelfelDM to get the fix.
+
+### Wrong file size (e.g., 3.00 GB for all files)
+
+1. This may happen if an incorrect size was cached earlier
+2. Update FelfelDM to the latest version — new sizes are fetched from the server
+3. If the issue persists, delete the cache files in `~/.config/felfelDM/` and restart
+
 ---
 
 ## 🔧 Development
@@ -549,3 +615,5 @@ python3 main.py
 <div align="center">
   <sub>Built with ❤️ and 🌶️</sub>
 </div>
+```
+
