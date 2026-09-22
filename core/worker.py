@@ -1,7 +1,8 @@
 # core/worker.py
 
 from PyQt6.QtCore import QThread, pyqtSignal, pyqtSlot, Qt
-from typing import Dict, Optional, List, Set, Any
+from typing import Dict, Optional, List, Set
+from concurrent.futures import ThreadPoolExecutor
 import threading
 import uuid
 from datetime import datetime
@@ -18,6 +19,7 @@ class BackendWorker(QThread):
     stats_updated = pyqtSignal(dict)
     aria2_error = pyqtSignal(str)
     size_fetched = pyqtSignal(str, object, str)
+    remove_multi_requested = pyqtSignal(list)
 
     resume_requested = pyqtSignal(str)
     pause_requested = pyqtSignal(str)
@@ -48,6 +50,13 @@ class BackendWorker(QThread):
         self._fetching_sizes: Set[str] = set()
         self._fetched_sizes: Set[str] = set()
 
+        self._size_executor = ThreadPoolExecutor(
+            max_workers=5, thread_name_prefix="SizeFetch"
+        )
+
+        self.remove_multi_requested.connect(
+            self._on_remove_multi_requested, Qt.ConnectionType.QueuedConnection
+        )
         self.youtube_workers: Dict[str, YouTubeWorker] = {}
         self.youtube_downloads: Dict[str, dict] = {}
         self.youtube_lock = threading.Lock()
@@ -163,6 +172,14 @@ class BackendWorker(QThread):
         self.running = False
         self._stop_all_youtube_downloads()
         self._stop_all_size_workers()
+
+        try:
+            self._size_executor.shutdown(wait=True, cancel_futures=True)
+        except TypeError:
+            self._size_executor.shutdown(wait=True)
+        except Exception as e:
+            print(f"⚠️ Error shutting down size executor: {e}")
+
         if not self.wait(2000):
             self.terminate()
 
@@ -312,7 +329,10 @@ class BackendWorker(QThread):
         return status_list
 
     def _fetch_size_for_gid(self, gid: str, url: str):
-
+        """
+        Queue a size-fetch task to the parallel executor.
+        The actual work is done in _fetch_size_worker (runs in a thread pool).
+        """
         if gid in self._fetched_sizes:
             print(f"⏭️ [Worker] Size already fetched for {gid}, skipping")
             return
@@ -323,21 +343,16 @@ class BackendWorker(QThread):
                 if existing_size > 0:
                     self._fetched_sizes.add(gid)
                     print(
-                        f"⏭️ [Worker] Size exists in storage for {gid}: {existing_size}, skipping fetch"
+                        f"⏭️ [Worker] Size exists in storage for {gid}: "
+                        f"{existing_size}, skipping fetch"
                     )
-
                     from utils.helpers import get_category_from_filename
 
-                    filename = None
-                    for q2 in self.store.queues:
-                        if gid in q2.downloads_info:
-                            filename = q2.downloads_info[gid].get("name", "")
-                            break
+                    filename = q.downloads_info[gid].get("name", "")
                     if not filename:
                         filename = url.split("/")[-1].split("?")[0]
                     category = get_category_from_filename(filename)
                     self.size_fetched.emit(gid, existing_size, category)
-
                     self._fetching_sizes.discard(gid)
                     return
 
@@ -345,18 +360,34 @@ class BackendWorker(QThread):
             return
 
         try:
-            from core.file_size_fetcher import get_file_size
+            self._size_executor.submit(self._fetch_size_worker, gid, url)
+        except RuntimeError as e:
+            print(f"⚠️ [Worker] Size executor is shut down: {e}")
+
+    def _fetch_size_worker(self, gid: str, url: str):
+        """
+        Runs in a thread pool. Fetches the size for one URL using
+        FileSizeFetcher (HEAD -> RANGE -> STREAM -> yt-dlp).
+        """
+        try:
+            from core.file_size_fetcher import FileSizeFetcher
             from utils.helpers import get_category_from_filename
 
             print(f"📏 [Worker] Fetching size for {gid}: {url}")
 
-            size = get_file_size(url, timeout=10)
+            fetcher = FileSizeFetcher(timeout=30)
+            try:
+                size = fetcher.get_size(url)
+            finally:
+                fetcher.close()
+
             if size is not None and size < 0:
                 size = size & 0xFFFFFFFF
                 print(f"🔄 [Size] Converted negative to unsigned: {size}")
 
             if size and size > 0:
                 self._fetched_sizes.add(gid)
+
                 filename = None
                 for q in self.store.queues:
                     if gid in q.downloads_info:
@@ -365,12 +396,15 @@ class BackendWorker(QThread):
                 if not filename:
                     filename = url.split("/")[-1].split("?")[0]
                 category = get_category_from_filename(filename)
+
                 self.size_fetched.emit(gid, size, category)
                 print(
-                    f"✅ [BackendWorker] Size fetched for {gid}: {size} bytes ({size/1024/1024/1024:.2f} GB)"
+                    f"✅ [BackendWorker] Size fetched for {gid}: "
+                    f"{size} bytes ({size/1024/1024/1024:.2f} GB)"
                 )
             else:
-                print(f"⚠️⚠️⚠️ [BackendWorker] Could not fetch size for {gid}")
+                print(f"⚠️ [BackendWorker] Could not fetch size for {gid}")
+
         except Exception as e:
             import traceback
 
@@ -393,6 +427,36 @@ class BackendWorker(QThread):
             print(f"⏸️ [Worker] Paused {gid}")
         except Exception as e:
             print(f"⚠️ [Worker] Pause failed for {gid}: {e}")
+
+    @pyqtSlot(list)
+    def _on_remove_multi_requested(self, gids: list):
+        """Remove multiple downloads in one batch (best-effort)."""
+        try:
+            if hasattr(self.aria2, "remove_multi"):
+                self.aria2.remove_multi(gids)
+                print(f"🗑️ [Worker] Removed {len(gids)} download(s) in one round trip")
+            else:
+                for gid in gids:
+                    try:
+                        self.aria2.remove(gid)
+                    except Exception:
+                        pass
+                print(f"🗑️ [Worker] Removed {len(gids)} download(s) individually")
+
+            try:
+                if hasattr(self.aria2, "purge_download_result"):
+                    self.aria2.purge_download_result()
+                else:
+                    for gid in gids:
+                        try:
+                            self.aria2._call("aria2.removeDownloadResult", [gid])
+                        except Exception:
+                            pass
+            except Exception:
+                pass
+
+        except Exception as e:
+            print(f"⚠️ [Worker] Bulk remove failed: {e}")
 
     @pyqtSlot(list)
     def _on_pause_multi_requested(self, gids: list):

@@ -1,18 +1,43 @@
 # utils/helpers.py
 
 from PyQt6.QtGui import QIcon
-from PyQt6.QtCore import Qt
 import sys
 import os
 
 
 def format_size(b):
-    b = int(b)
-    for u in ["B", "KB", "MB", "GB"]:
-        if b < 1024:
-            return f"{b:.1f} {u}"
-        b /= 1024
-    return f"{b:.1f} TB"
+    """
+    Format a byte count into a human-readable string.
+
+    Handles:
+      - None / invalid input
+      - Negative values (treats as unsigned 64-bit)
+      - Very large values (>2 GiB) without 32-bit overflow
+    """
+    if b is None:
+        return "0 B"
+
+    try:
+        b = int(b)
+    except (ValueError, TypeError):
+        return "0 B"
+
+    # Convert negative to unsigned 64-bit (handles any accidental overflow)
+    if b < 0:
+        b = b & 0xFFFFFFFFFFFFFFFF
+
+    units = ["B", "KB", "MB", "GB", "TB", "PB"]
+    idx = 0
+    value = float(b)
+
+    while value >= 1024 and idx < len(units) - 1:
+        value /= 1024.0
+        idx += 1
+
+    # Bytes: no decimal. Larger units: 2 decimal places.
+    if idx == 0:
+        return f"{int(value)} {units[idx]}"
+    return f"{value:.2f} {units[idx]}"
 
 
 def format_speed(b):

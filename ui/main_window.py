@@ -1875,49 +1875,29 @@ class MainWindow(QMainWindow):
         dlg.raise_()
         dlg.activateWindow()
 
-    def _add_download(self) -> None:
-        visible_queues = [q for q in self.store.queues if q.name != "__direct__"]
-
-        current_idx = 0
-        current_q = self._current_queue()
-        if current_q and current_q.name != "__direct__":
-            for i, q in enumerate(visible_queues):
-                if q.name == current_q.name:
-                    current_idx = i
-                    break
-
-        dlg = AddDownloadDialog(visible_queues, current_idx, self)
-
-        clip = QApplication.clipboard().text().strip()
-        if clip:
-            valid_lines = [
-                line.strip()
-                for line in clip.split("\n")
-                if line.strip().startswith(("http", "magnet:", "ftp"))
-            ]
-            if valid_lines:
-                dlg.url_edit.setPlainText("\n".join(valid_lines))
-
-        self._show_singleton_dialog(
-            "add_download", dlg, on_accepted=self._process_add_download
-        )
-
-    def _process_add_download(self, dlg: "AddDownloadDialog") -> None:
-        visible_queues = [q for q in self.store.queues if q.name != "__direct__"]
+    def _process_add_download_common(self, dlg: "AddDownloadDialog") -> None:
+        """Unified handler for both Quick Download and Add to Queue."""
         d = dlg.get_data()
         if not d["urls"]:
             return
 
-        queue_index = d["queue"]
-        if queue_index < 0 or queue_index >= len(visible_queues):
-            QMessageBox.warning(self, "Error", "Selected queue does not exist.")
-            return
+        is_quick = dlg._is_quick
 
-        q = visible_queues[queue_index]
+        if is_quick:
+
+            queue_name = d.get("queue_name", "__direct__")
+            target_queue = self._get_or_create_queue(queue_name)
+        else:
+            visible_queues = [q for q in self.store.queues if q.name != "__direct__"]
+            queue_index = d.get("queue", -1)
+            if queue_index < 0 or queue_index >= len(visible_queues):
+                QMessageBox.warning(self, "Error", "Selected queue does not exist.")
+                return
+            target_queue = visible_queues[queue_index]
+            queue_name = target_queue.name
 
         self._apply_settings_to_aria2()
 
-        proxy_mode = d.get("proxy_mode", 0)
         options = {
             "dir": d["path"],
             "split": str(d["connections"]),
@@ -1931,8 +1911,9 @@ class MainWindow(QMainWindow):
             ],
         }
 
+        proxy_mode = d.get("proxy_mode", 0)
         if proxy_mode == 0:
-            proxy = self.proxy_manager.get_proxy_for_queue(q.name)
+            proxy = self.proxy_manager.get_proxy_for_queue(queue_name)
             if proxy and proxy.is_valid():
                 options["all-proxy"] = proxy._build_proxy_url()
         elif proxy_mode == 1:
@@ -1942,66 +1923,71 @@ class MainWindow(QMainWindow):
         elif proxy_mode == 2:
             options["all-proxy"] = ""
 
+        is_direct = queue_name == "__direct__"
         added = 0
         new_gids = []
 
-        is_direct = q.name == "__direct__"
-        print(f"📂 [Add] Using save path: {d['path']!r}")
-        print(f"📂 [Add] URLs count: {len(d['urls'])}")
+        print(f"📂 [Add] Mode: {'quick' if is_quick else 'queue'}")
+        print(f"📂 [Add] Save path: {d['path']!r}")
+        print(f"📂 [Add] URLs: {len(d['urls'])}")
+
         for url in d["urls"]:
             url_options = options.copy()
-            if not is_direct and q.paused:
+            if not is_direct and target_queue.paused:
                 url_options["pause"] = "true"
 
             gid = self.aria2.add_url(url, url_options)
+            if not gid:
+                continue
 
-            if gid:
-                if gid in self._cleared_gids:
-                    self._cleared_gids.remove(gid)
+            if gid in self._cleared_gids:
+                self._cleared_gids.remove(gid)
 
-                q.downloads.append(gid)
+            target_queue.downloads.append(gid)
 
-                clean_name = self._extract_filename(url)
-                full_path = os.path.join(d["path"], clean_name)
+            clean_name = self._extract_filename(url)
+            full_path = os.path.join(d["path"], clean_name)
 
-                if is_direct or not q.paused:
-                    initial_status = "active"
-                else:
-                    initial_status = "paused"
+            if is_direct or not target_queue.paused:
+                initial_status = "active"
+            else:
+                initial_status = "paused"
 
-                q.downloads_info[gid] = {
-                    "url": url,
-                    "name": clean_name,
-                    "totalLength": 0,
-                    "completedLength": 0,
-                    "status": initial_status,
-                    "files": [{"path": full_path}],
-                    "category": "📁 Other",
-                    "download_type": "normal",
-                    "save_path": d["path"],
-                }
+            target_queue.downloads_info[gid] = {
+                "url": url,
+                "name": clean_name,
+                "totalLength": 0,
+                "completedLength": 0,
+                "status": initial_status,
+                "files": [{"path": full_path}],
+                "category": "📁 Other",
+                "download_type": "normal",
+                "save_path": d["path"],
+            }
 
-                new_gids.append(gid)
-                added += 1
+            self._all_downloads[gid] = {
+                "gid": gid,
+                "name": clean_name,
+                "status": initial_status,
+                "totalLength": 0,
+                "completedLength": 0,
+                "downloadSpeed": 0,
+                "connections": 0,
+                "files": [{"path": full_path}],
+                "errorMessage": "",
+                "category": "📁 Other",
+                "size_fetch_attempts": 0,
+                "download_type": "normal",
+                "save_path": d["path"],
+            }
 
-                self._all_downloads[gid] = {
-                    "gid": gid,
-                    "name": clean_name,
-                    "status": initial_status,
-                    "totalLength": 0,
-                    "completedLength": 0,
-                    "downloadSpeed": 0,
-                    "connections": 0,
-                    "files": [{"path": full_path}],
-                    "errorMessage": "",
-                    "category": "📁 Other",
-                    "size_fetch_attempts": 0,
-                    "download_type": "normal",
-                    "save_path": d["path"],
-                }
+            if getattr(target_queue, "speed_limit", 0) > 0:
+                self.worker.set_speed_limit_requested.emit(
+                    gid, target_queue.speed_limit
+                )
 
-                if q and getattr(q, "speed_limit", 0) > 0:
-                    self.worker.set_speed_limit_requested.emit(gid, q.speed_limit)
+            new_gids.append(gid)
+            added += 1
 
         self.store.save()
         self._queue_list_dirty = True
@@ -2014,35 +2000,25 @@ class MainWindow(QMainWindow):
             for gid in new_gids:
                 try:
                     status = self.aria2.get_status(gid)
-                    if status and status.get("status") in ["waiting", "paused"]:
+                    if status and status.get("status") in ("waiting", "paused"):
                         self.worker.resume_requested.emit(gid)
                         self._all_downloads[gid]["status"] = "active"
-                        if gid in q.downloads_info:
-                            q.downloads_info[gid]["status"] = "active"
+                        if gid in target_queue.downloads_info:
+                            target_queue.downloads_info[gid]["status"] = "active"
                 except Exception as e:
                     print(f"⚠️ Could not resume {gid}: {e}")
-
             self.store.save()
-            self.tray.showMessage(
-                "FelfelDM",
-                f"✅ Added {added} download(s) to 'Direct Downloads' (started)",
-                QSystemTrayIcon.MessageIcon.Information,
-                2000,
-            )
-        elif q.paused:
-            self.tray.showMessage(
-                "FelfelDM",
-                f"✅ Added {added} download(s) to '{q.name}' (paused)",
-                QSystemTrayIcon.MessageIcon.Information,
-                2000,
-            )
+
+        if is_direct:
+            msg = f"✅ Added {added} download(s) to Direct Downloads (started)"
+        elif target_queue.paused:
+            msg = f"✅ Added {added} download(s) to '{target_queue.name}' (paused)"
         else:
-            self.tray.showMessage(
-                "FelfelDM",
-                f"✅ Added {added} download(s) to '{q.name}' (downloading)",
-                QSystemTrayIcon.MessageIcon.Information,
-                2000,
-            )
+            msg = f"✅ Added {added} download(s) to '{target_queue.name}' (downloading)"
+
+        self.tray.showMessage(
+            "FelfelDM", msg, QSystemTrayIcon.MessageIcon.Information, 2000
+        )
 
         self._refresh_table()
 
@@ -2400,131 +2376,66 @@ class MainWindow(QMainWindow):
             self._queue_list_dirty = True
             self._refresh_queue_list()
             self._update_queue_buttons()
-            self._update_status_stats()
 
     def _quick_download(self) -> None:
+        """Open the Quick Download dialog (Direct Downloads mode)."""
         all_queues = self.store.queues
-        dlg = QuickDownloadDialog(all_queues, self)
+        dlg = AddDownloadDialog(all_queues, 0, self, mode="quick")
 
         clip = QApplication.clipboard().text().strip()
-        if clip and clip.startswith(("http", "magnet:", "ftp")):
-            dlg.url_edit.setText(clip)
+        if clip:
+            valid_lines = [
+                line.strip()
+                for line in clip.split("\n")
+                if line.strip().startswith(("http", "magnet:", "ftp"))
+            ]
+            if valid_lines:
+                dlg.url_edit.setPlainText("\n".join(valid_lines))
 
         self._show_singleton_dialog(
-            "quick_download", dlg, on_accepted=self._process_quick_download
+            "quick_download", dlg, on_accepted=self._process_add_download_common
         )
 
-    def _process_quick_download(self, dlg: "QuickDownloadDialog") -> None:
-        d = dlg.get_data()
-        if not d["urls"]:
-            return
+    def _add_download(self) -> None:
+        """Open the Add to Queue dialog."""
+        visible_queues = [q for q in self.store.queues if q.name != "__direct__"]
 
-        queue_name = d.get("queue_name", "__direct__")
-        target_queue = self._get_or_create_queue(queue_name)
+        current_idx = 0
+        current_q = self._current_queue()
+        if current_q and current_q.name != "__direct__":
+            for i, q in enumerate(visible_queues):
+                if q.name == current_q.name:
+                    current_idx = i
+                    break
 
-        options = {
-            "dir": d["path"],
-            "split": str(d["connections"]),
-            "max-connection-per-server": str(d["connections"]),
-            "min-split-size": "1M",
-            "continue": "true",
-            "always-resume": "true",
-            "header": [
-                "User-Agent: Mozilla/5.0 (X11; Linux x86_64; rv:125.0) Gecko/20100101 Firefox/125.0"
-            ],
-        }
+        dlg = AddDownloadDialog(visible_queues, current_idx, self, mode="queue")
 
-        proxy_mode = d.get("proxy_mode", 0)
-        if proxy_mode == 0:
-            proxy = self.proxy_manager.get_proxy_for_queue(target_queue.name)
-            if proxy and proxy.is_valid():
-                options["all-proxy"] = proxy._build_proxy_url()
-        elif proxy_mode == 1:
-            custom_proxy = d.get("custom_proxy")
-            if custom_proxy and custom_proxy.is_valid():
-                options["all-proxy"] = custom_proxy._build_proxy_url()
-        elif proxy_mode == 2:
-            options["all-proxy"] = ""
+        clip = QApplication.clipboard().text().strip()
+        if clip:
+            valid_lines = [
+                line.strip()
+                for line in clip.split("\n")
+                if line.strip().startswith(("http", "magnet:", "ftp"))
+            ]
+            if valid_lines:
+                dlg.url_edit.setPlainText("\n".join(valid_lines))
 
-        is_direct = queue_name == "__direct__"
-        added_gids = []
-        print(f"📂 [Add] Using save path: {d['path']!r}")
-        print(f"📂 [Add] URLs count: {len(d['urls'])}")
-        for url in d["urls"]:
-            url_options = options.copy()
-
-            if not is_direct and target_queue.paused:
-                url_options["pause"] = "true"
-
-            gid = self.aria2.add_url(url, url_options)
-
-            if gid:
-                target_queue.downloads.append(gid)
-                clean_name = self._extract_filename(url)
-                full_path = os.path.join(d["path"], clean_name)
-
-                if is_direct or not target_queue.paused:
-                    initial_status = "active"
-                else:
-                    initial_status = "paused"
-
-                target_queue.downloads_info[gid] = {
-                    "url": url,
-                    "name": clean_name,
-                    "totalLength": 0,
-                    "completedLength": 0,
-                    "status": initial_status,
-                    "files": [{"path": full_path}],
-                    "category": "📁 Other",
-                    "download_type": "normal",
-                    "save_path": d["path"],
-                }
-
-                self._all_downloads[gid] = {
-                    "gid": gid,
-                    "name": clean_name,
-                    "status": initial_status,
-                    "totalLength": 0,
-                    "completedLength": 0,
-                    "downloadSpeed": 0,
-                    "connections": 0,
-                    "files": [{"path": full_path}],
-                    "errorMessage": "",
-                    "category": "📁 Other",
-                    "size_fetch_attempts": 0,
-                    "download_type": "normal",
-                    "save_path": d["path"],
-                }
-
-                added_gids.append(gid)
-
-        self.store.save()
-        self._queue_list_dirty = True
-        self._refresh_queue_list()
-        self._refresh_table()
-        self._update_shutdown_button_state()
-
-        if is_direct:
-            target_queue.paused = False
-            for gid in added_gids:
-                try:
-                    status = self.aria2.get_status(gid)
-                    if status and status.get("status") in ["waiting", "paused"]:
-                        self.worker.resume_requested.emit(gid)
-                        self._all_downloads[gid]["status"] = "active"
-                        if gid in target_queue.downloads_info:
-                            target_queue.downloads_info[gid]["status"] = "active"
-                except Exception as e:
-                    print(f"⚠️ Could not resume {gid}: {e}")
-
-            self.store.save()
-            for gid in added_gids:
-                QTimer.singleShot(500, lambda gid=gid: self._open_progress_dialog(gid))
+        self._show_singleton_dialog(
+            "add_download", dlg, on_accepted=self._process_add_download_common
+        )
 
     def _remove_selected(self) -> None:
         selected = self.table.selectionModel().selectedRows()
         if not selected:
             QMessageBox.information(self, "Info", "No downloads selected.")
+            return
+
+        gids_to_remove = [
+            self.model.get_gid(idx.row())
+            for idx in selected
+            if self.model.get_gid(idx.row())
+        ]
+        if not gids_to_remove:
             return
 
         dlg = QDialog(self)
@@ -2535,8 +2446,7 @@ class MainWindow(QMainWindow):
         layout = QVBoxLayout(dlg)
         layout.setSpacing(12)
         layout.setContentsMargins(20, 20, 20, 20)
-
-        layout.addWidget(QLabel(f"Remove {len(selected)} download(s)?"))
+        layout.addWidget(QLabel(f"Remove {len(gids_to_remove)} download(s)?"))
         layout.addWidget(QLabel("Choose what to do with the downloaded files:"))
         layout.addSpacing(10)
 
@@ -2552,21 +2462,18 @@ class MainWindow(QMainWindow):
         btn_layout.addWidget(btn_cancel)
         layout.addLayout(btn_layout)
 
-        result = None
+        result = {"value": None}
 
         def on_remove_only():
-            nonlocal result
-            result = "remove_only"
+            result["value"] = "remove_only"
             dlg.accept()
 
         def on_remove_files():
-            nonlocal result
-            result = "remove_files"
+            result["value"] = "remove_files"
             dlg.accept()
 
         def on_cancel():
-            nonlocal result
-            result = "cancel"
+            result["value"] = "cancel"
             dlg.reject()
 
         btn_remove_only.clicked.connect(on_remove_only)
@@ -2576,46 +2483,97 @@ class MainWindow(QMainWindow):
 
         dlg.exec()
 
-        if result == "cancel" or result is None:
+        if result["value"] in (None, "cancel"):
             return
 
-        delete_files = result == "remove_files"
-        gids_to_remove = [
-            self.model.get_gid(idx.row())
-            for idx in selected
-            if self.model.get_gid(idx.row())
-        ]
+        delete_files = result["value"] == "remove_files"
+
+        gids_for_disk_cleanup = []
 
         for gid in gids_to_remove:
-
-            try:
-                self.worker.remove_requested.emit(gid)
-            except Exception as e:
-                print(f"⚠ Could not remove GID {gid}: {e}")
-
-            try:
-                self.aria2._call("aria2.removeDownloadResult", [gid])
-            except Exception:
-                pass
 
             for q in self.store.queues:
                 if gid in q.downloads:
                     q.downloads.remove(gid)
                 if gid in q.downloads_info:
+
                     if delete_files:
-                        self._delete_download_files(gid)
+                        gids_for_disk_cleanup.append(gid)
                     del q.downloads_info[gid]
 
             if gid in self._all_downloads:
                 del self._all_downloads[gid]
 
-        self._reset_speed_if_idle()
+            if gid in self._retrying_gids:
+                self._retrying_gids.discard(gid)
+            if gid in self._retry_done:
+                self._retry_done.discard(gid)
 
+        try:
+            self.worker.remove_multi_requested.emit(gids_to_remove)
+        except Exception as e:
+            print(f"⚠️ Batch remove failed: {e}")
+
+            for gid in gids_to_remove:
+                try:
+                    self.worker.remove_requested.emit(gid)
+                except Exception:
+                    pass
+
+        self._reset_speed_if_idle()
         self.store.save()
         self._refresh_table()
         self._queue_list_dirty = True
         self._refresh_queue_list()
         self._update_queue_buttons()
+
+        if delete_files and gids_for_disk_cleanup:
+            from PyQt6.QtCore import QTimer
+
+            QTimer.singleShot(
+                100, lambda: self._delete_files_in_background(gids_for_disk_cleanup)
+            )
+
+    def _delete_files_in_background(self, gids: list) -> None:
+        """
+        Delete files for multiple GIDs in a background thread.
+        Uses QThreadPool to avoid blocking the UI.
+        """
+        from PyQt6.QtCore import QRunnable, QThreadPool, QObject, pyqtSignal
+
+        class DeleteSignals(QObject):
+            finished = pyqtSignal()
+            progress = pyqtSignal(int, int)
+
+        class DeleteTask(QRunnable):
+            def __init__(self, main_window, gids):
+                super().__init__()
+                self.main_window = main_window
+                self.gids = gids
+                self.signals = DeleteSignals()
+
+            def run(self):
+                total = len(self.gids)
+                for i, gid in enumerate(self.gids):
+                    try:
+                        self.main_window._delete_download_files(gid)
+                    except Exception as e:
+                        print(f"⚠️ Error deleting files for {gid}: {e}")
+                    self.signals.progress.emit(i + 1, total)
+                self.signals.finished.emit()
+
+        task = DeleteTask(self, gids)
+        task.signals.finished.connect(
+            lambda: self.status_label.setText(
+                f"✅ Deleted files for {len(gids)} download(s)"
+            )
+        )
+        task.signals.progress.connect(
+            lambda done, total: self.status_label.setText(
+                f"🗑️ Deleting files... ({done}/{total})"
+            )
+        )
+        QThreadPool.globalInstance().start(task)
 
     def _reset_speed_if_idle(self) -> None:
         has_active = any(
@@ -2630,6 +2588,13 @@ class MainWindow(QMainWindow):
                 self.speed_status_label.setText("0 B/s")
 
     def _delete_download_files(self, gid: str) -> None:
+        """
+        Delete downloaded files for a given GID.
+
+        Optimization: if the download never started (status=paused AND
+        completedLength == 0), there is nothing on disk to delete,
+        so we skip the expensive os.listdir()/glob.glob() scan entirely.
+        """
         import glob
 
         file_paths = []
@@ -2638,6 +2603,8 @@ class MainWindow(QMainWindow):
         name = None
         url = None
         download_type = None
+        status = None
+        completed_length = 0
 
         print(f"🗑️ [_delete_download_files] START for gid: {gid}")
 
@@ -2648,20 +2615,25 @@ class MainWindow(QMainWindow):
                 name = info.get("name", "").strip()
                 url = info.get("url", "")
                 download_type = info.get("download_type", "normal")
+                status = info.get("status", "")
+                completed_length = int(info.get("completedLength", 0) or 0)
                 files = info.get("files", [])
                 for f in files:
                     if f.get("path"):
                         file_paths.append(f["path"])
                 break
 
-        if not file_paths and gid in self._all_downloads:
+        if gid in self._all_downloads:
             dl = self._all_downloads[gid]
-            name = dl.get("name", name)
-            url = dl.get("url", url)
-            download_type = dl.get("download_type", "normal")
+            name = name or dl.get("name", "")
+            url = url or dl.get("url", "")
+            status = status or dl.get("status", "")
+            completed_length = completed_length or int(
+                dl.get("completedLength", 0) or 0
+            )
             files = dl.get("files", [])
             for f in files:
-                if f.get("path"):
+                if f.get("path") and f["path"] not in file_paths:
                     file_paths.append(f["path"])
 
         if not save_path:
@@ -2669,13 +2641,18 @@ class MainWindow(QMainWindow):
                 if gid in q.downloads:
                     save_path = q.save_path
                     break
-
         if not save_path:
             save_path = os.path.expanduser("~/Downloads")
 
-        print(f"📁 save_path: {save_path}")
-        print(f"📁 name: {name}")
-        print(f"📁 file_paths: {file_paths}")
+        file_never_started = status == "paused" and completed_length == 0
+
+        if file_never_started and not file_paths:
+            print(
+                f"⏭️ [_delete_download_files] Download never started "
+                f"(status={status}, completed={completed_length}). "
+                f"Skipping filesystem scan for {gid}."
+            )
+            return
 
         if not name and url:
             name = url.split("/")[-1].split("?")[0]
@@ -2683,47 +2660,54 @@ class MainWindow(QMainWindow):
             name = f"download_{gid[:8]}"
 
         if save_path and os.path.exists(save_path):
-            print(f"🔍 Searching in: {save_path}")
-            try:
-                for file in os.listdir(save_path):
-                    full_path = os.path.join(save_path, file)
-                    lower = file.lower()
 
-                    if name and name.lower() in lower:
-                        if not any(
-                            x in lower
-                            for x in [".aria2", ".part", ".f", ".temp", ".ytdl"]
-                        ):
-                            if full_path not in file_paths:
-                                file_paths.append(full_path)
-                                print(f"✅ Found main file by name: {file}")
+            if name:
+                direct_path = os.path.join(save_path, name)
+                if os.path.exists(direct_path) and direct_path not in file_paths:
+                    file_paths.append(direct_path)
+                    print(f"✅ Found main file directly: {name}")
 
-                    if gid in file:
-                        if not any(
-                            x in lower
-                            for x in [".aria2", ".part", ".f", ".temp", ".ytdl"]
-                        ):
-                            if full_path not in file_paths:
-                                file_paths.append(full_path)
-                                print(f"✅ Found main file by GID: {file}")
+            if not file_paths:
+                print(f"🔍 Scanning directory for leftovers: {save_path}")
+                try:
+                    entries = os.listdir(save_path)
+                    for file in entries:
+                        full_path = os.path.join(save_path, file)
+                        lower = file.lower()
 
-                    if ".aria2" in lower:
-                        aria2_files.append(full_path)
-                        print(f"✅ Found .aria2 file: {file}")
+                        if name and name.lower() in lower:
+                            if not any(
+                                x in lower
+                                for x in [".aria2", ".part", ".f", ".temp", ".ytdl"]
+                            ):
+                                if full_path not in file_paths:
+                                    file_paths.append(full_path)
+                                    print(f"✅ Found main file by name: {file}")
 
-                    if any(x in lower for x in [".part", ".f", ".temp", ".ytdl"]):
-                        aria2_files.append(full_path)
-                        print(f"✅ Found temp file: {file}")
+                        if gid in file:
+                            if not any(
+                                x in lower
+                                for x in [".aria2", ".part", ".f", ".temp", ".ytdl"]
+                            ):
+                                if full_path not in file_paths:
+                                    file_paths.append(full_path)
+                                    print(f"✅ Found main file by GID: {file}")
 
-            except Exception as e:
-                print(f"⚠️ Dir list error: {e}")
+                        if ".aria2" in lower:
+                            aria2_files.append(full_path)
+                            print(f"✅ Found .aria2 file: {file}")
 
-        if save_path and os.path.exists(save_path):
+                        if any(x in lower for x in [".part", ".f", ".temp", ".ytdl"]):
+                            aria2_files.append(full_path)
+                            print(f"✅ Found temp file: {file}")
 
+                except Exception as e:
+                    print(f"⚠️ Dir list error: {e}")
+
+        if save_path and os.path.exists(save_path) and (file_paths or aria2_files):
             patterns = [
                 f"{name}.aria2",
                 f"{name}.*.aria2",
-                f"*.aria2",
             ]
             for pattern in patterns:
                 full_pattern = os.path.join(save_path, pattern)
@@ -2731,45 +2715,6 @@ class MainWindow(QMainWindow):
                     if f not in aria2_files:
                         aria2_files.append(f)
                         print(f"✅ Found .aria2 with pattern: {os.path.basename(f)}")
-
-        if not file_paths and aria2_files:
-            for aria2_path in aria2_files:
-                base_name = aria2_path.replace(".aria2", "")
-
-                for ext in [".aria2", ".part", ".f", ".temp", ".ytdl"]:
-                    if base_name.endswith(ext):
-                        base_name = base_name[: -len(ext)]
-
-                if os.path.exists(base_name):
-                    file_paths.append(base_name)
-                    print(f"✅ Found main file from .aria2: {base_name}")
-                else:
-
-                    extensions = [
-                        "",
-                        ".mp4",
-                        ".mkv",
-                        ".webm",
-                        ".mp3",
-                        ".m4a",
-                        ".zip",
-                        ".rar",
-                        ".7z",
-                        ".tar.gz",
-                        ".tgz",
-                        ".txt",
-                        ".pdf",
-                        ".jpg",
-                        ".png",
-                        ".exe",
-                        ".msi",
-                    ]
-                    for ext in extensions:
-                        test_path = base_name + ext
-                        if os.path.exists(test_path):
-                            file_paths.append(test_path)
-                            print(f"✅ Found main file with extension: {test_path}")
-                            break
 
         print(f"📊 Files to delete: {file_paths}")
         deleted_count = 0
@@ -2785,7 +2730,6 @@ class MainWindow(QMainWindow):
                         deleted_count += 1
                         print(f"🗑️ DELETED FOLDER: {path}")
             except PermissionError:
-                print(f"⚠️ Permission denied on {path}, trying force...")
                 try:
                     subprocess.run(["rm", "-f", path], capture_output=True)
                     print(f"🗑️ DELETED (force): {os.path.basename(path)}")
@@ -2802,7 +2746,6 @@ class MainWindow(QMainWindow):
                     os.remove(path)
                     print(f"🗑️ DELETED TEMP: {os.path.basename(path)}")
             except PermissionError:
-                print(f"⚠️ Permission denied on {path}, trying force...")
                 try:
                     subprocess.run(["rm", "-f", path], capture_output=True)
                     print(f"🗑️ DELETED TEMP (force): {os.path.basename(path)}")
@@ -3618,7 +3561,6 @@ class MainWindow(QMainWindow):
                 pass
 
         QApplication.processEvents()
-        time.sleep(0.5)
 
         self._delete_download_files(gid)
 
@@ -4830,11 +4772,11 @@ class MainWindow(QMainWindow):
 
     def _add_single_url_from_extension(self, url: str) -> None:
         all_queues = self.store.queues
-        dlg = QuickDownloadDialog(all_queues, self)
+        dlg = AddDownloadDialog(all_queues, 0, self, mode="quick")
         dlg.url_edit.setPlainText(url)
 
         self._show_singleton_dialog(
-            "quick_download", dlg, on_accepted=self._process_quick_download
+            "quick_download", dlg, on_accepted=self._process_add_download_common
         )
 
     def _add_multiple_urls_from_extension(self, urls: List[str]) -> None:
@@ -4843,11 +4785,11 @@ class MainWindow(QMainWindow):
             (i for i, q in enumerate(visible_queues) if q.name == "Default"), 0
         )
 
-        dlg = AddDownloadDialog(visible_queues, default_idx, self)
+        dlg = AddDownloadDialog(visible_queues, default_idx, self, mode="queue")
         dlg.url_edit.setPlainText("\n".join(urls))
 
         self._show_singleton_dialog(
-            "add_download", dlg, on_accepted=self._process_add_download
+            "add_download", dlg, on_accepted=self._process_add_download_common
         )
 
     def _process_retries(self) -> None:

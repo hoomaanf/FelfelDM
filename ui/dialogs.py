@@ -4,12 +4,14 @@ import time
 import socket
 
 from PyQt6.QtWidgets import *
-from PyQt6.QtGui import QDesktopServices
+from PyQt6.QtGui import QDesktopServices, QColor
 from PyQt6.QtCore import *
 from utils.helpers import get_icon
 from core.queue_model import Queue
 from datetime import datetime, time as dtime
 from core.proxy_manager import ProxyType, ProxyConfig
+from core.size_fetcher_worker import SizeFetcherWorker
+from utils.helpers import format_size
 
 
 class AccordionGroup(QWidget):
@@ -99,40 +101,232 @@ class AccordionGroup(QWidget):
         return self.content_layout
 
 
-class AddDownloadDialog(QDialog):
-    def __init__(self, queues, default_queue=0, parent=None):
+class _ClickableCheckboxWidget(QWidget):
+    """
+    Wrapper around a QCheckBox that makes the WHOLE cell clickable.
+    Clicking anywhere in the widget toggles the checkbox.
+    """
 
+    def __init__(self, checkbox: QCheckBox, parent=None):
+        super().__init__(parent)
+        self._cb = checkbox
+
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        layout.addWidget(self._cb)
+
+        self.mousePressEvent = self._on_mouse_press
+
+    def _on_mouse_press(self, event):
+        if event.button() == Qt.MouseButton.LeftButton:
+            self._cb.toggle()
+            event.accept()
+        else:
+            super().mousePressEvent(event)
+
+    def is_checked(self) -> bool:
+        return self._cb.isChecked()
+
+    def set_checked(self, checked: bool):
+        self._cb.setChecked(checked)
+
+
+class AddDownloadDialog(QDialog):
+    """
+    Unified dialog for adding downloads.
+
+    Modes:
+        "queue": choose a queue, downloads are added in the queue's paused state
+        "quick": Direct Downloads (or chosen queue), downloads start immediately
+    """
+
+    FETCH_DEBOUNCE_MS = 800
+
+    def __init__(self, queues, default_queue=0, parent=None, mode="queue"):
         super().__init__(None)
         self._main_window = parent
-        self.setWindowTitle("Add Downloads")
-        self.setMinimumWidth(620)
-        self.setMinimumHeight(200)
+        self._mode = mode
+        self._is_quick = mode == "quick"
+
+        self.setWindowTitle("Quick Download" if self._is_quick else "Add Downloads")
+        self.setMinimumWidth(820)
+        self.setMinimumHeight(600)
         self.setSizeGripEnabled(True)
 
         self.queues = queues
         self.default_queue = default_queue
-        self._custom_proxy = None
         self._visible_queues = [q for q in self.queues if q.name != "__direct__"]
+        self._custom_proxy = None
         self._path_user_edited = False
 
+        # Mapping url -> row index
+        self._url_to_row: dict = {}
+        # Mapping url -> size (bytes) or None
+        self._url_to_size: dict = {}
+        # Mapping url -> status
+        self._url_to_status: dict = {}
+
+        # Debounce timer for fetching sizes
+        self._fetch_timer = QTimer(self)
+        self._fetch_timer.setSingleShot(True)
+        self._fetch_timer.timeout.connect(self._start_fetching_sizes)
+
+        # Current size fetcher worker
+        self._fetcher: "SizeFetcherWorker" = None
+
+        self._build_ui()
+        self._setup_tab_order()
+
+    # ─────────────────────────────────────────────────────────────
+    # UI construction
+    # ─────────────────────────────────────────────────────────────
+
+    def _build_ui(self):
         main_layout = QVBoxLayout(self)
         main_layout.setSpacing(8)
         main_layout.setContentsMargins(16, 12, 16, 16)
 
-        url_acc = AccordionGroup("URLs")
-        url_acc.set_expanded(True)
+        # ===== Horizontal splitter: URLs (left) | Table (right) =====
+        splitter = QSplitter(Qt.Orientation.Horizontal)
+        splitter.setChildrenCollapsible(False)
+        splitter.setHandleWidth(4)
+
+        # ─────────────────────────────────────────────────────
+        # LEFT: URLs editor
+        # ─────────────────────────────────────────────────────
+        url_widget = QWidget()
+        url_widget.setMinimumWidth(240)
+        url_layout = QVBoxLayout(url_widget)
+        url_layout.setContentsMargins(0, 0, 12, 0)
+        url_layout.setSpacing(4)
+
+        url_label = QLabel("URLs")
+        url_label.setStyleSheet("font-weight: 600; font-size: 12px;")
+        url_layout.addWidget(url_label)
 
         self.url_edit = QTextEdit()
-        self.url_edit.setPlaceholderText("Enter URLs (one per line)...")
-        self.url_edit.setMinimumHeight(100)
-        url_acc.addWidget(self.url_edit)
+        self.url_edit.setPlaceholderText(
+            "Enter URLs (one per line)...\n\n" "Tip: Paste multiple URLs at once."
+        )
+        self.url_edit.textChanged.connect(self._on_urls_changed)
+        url_layout.addWidget(self.url_edit, 1) 
 
-        self.import_btn = QPushButton(get_icon("document-open"), " Import from File")
+        url_btn_row = QHBoxLayout()
+        url_btn_row.setSpacing(8)  
+        url_btn_row.setContentsMargins(0, 0, 0, 0)
+
+        self.import_btn = QPushButton(get_icon("document-open"), "")
+        self.import_btn.setToolTip("Import from file")
+        self.import_btn.setFixedHeight(30)
+        self.import_btn.setMinimumWidth(36)
         self.import_btn.clicked.connect(self._import_from_txt)
-        url_acc.addWidget(self.import_btn)
+        url_btn_row.addWidget(self.import_btn)
 
-        main_layout.addWidget(url_acc)
+        self.fetch_btn = QPushButton(get_icon("view-refresh"), " Fetch")
+        self.fetch_btn.setToolTip("Fetch file sizes for all URLs")
+        self.fetch_btn.setFixedHeight(30)
+        self.fetch_btn.setMinimumWidth(100)
+        self.fetch_btn.clicked.connect(self._start_fetching_sizes)
+        url_btn_row.addWidget(self.fetch_btn)
 
+        url_btn_row.addStretch()
+        url_layout.addLayout(url_btn_row)
+        url_layout.addSpacing(4)
+
+        # ─────────────────────────────────────────────────────
+        # RIGHT: Progress + Table
+        # ─────────────────────────────────────────────────────
+        table_widget = QWidget()
+        table_widget.setMinimumWidth(340)
+        table_layout = QVBoxLayout(table_widget)
+        table_layout.setContentsMargins(12, 0, 0, 0)
+        table_layout.setSpacing(4)
+
+        # ── Progress bar (ALWAYS visible, 26px) ──
+        self.fetch_progress = QProgressBar()
+        self.fetch_progress.setRange(0, 100)
+        self.fetch_progress.setValue(0)
+        self.fetch_progress.setTextVisible(True)
+        self.fetch_progress.setFormat("Ready")
+        self.fetch_progress.setFixedHeight(26)
+        self.fetch_progress.setStyleSheet("""
+            QProgressBar {
+                border: 1px solid #45475a;
+                border-radius: 4px;
+                text-align: center;
+                font-size: 11px;
+                color: #1e1e2e;
+                background-color: #e0e0e0;
+            }
+            QProgressBar::chunk {
+                background-color: #89b4fa;
+                border-radius: 3px;
+            }
+        """)
+        table_layout.addWidget(self.fetch_progress)
+        table_layout.addSpacing(6)  
+
+        # ── Table ──
+        self.table = QTableWidget(0, 4, self)
+        self.table.setHorizontalHeaderLabels(["", "Filename", "Size", "Status"])
+        self.table.verticalHeader().setVisible(False)
+        self.table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        self.table.setSelectionMode(QAbstractItemView.SelectionMode.NoSelection)
+        self.table.setAlternatingRowColors(True)
+        self.table.verticalHeader().setDefaultSectionSize(32)
+
+        header = self.table.horizontalHeader()
+        header.setSectionResizeMode(0, QHeaderView.ResizeMode.Fixed)
+        self.table.setColumnWidth(0, 44)
+        header.setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
+        header.setSectionResizeMode(2, QHeaderView.ResizeMode.ResizeToContents)
+        header.setSectionResizeMode(3, QHeaderView.ResizeMode.ResizeToContents)
+
+        table_layout.addWidget(self.table, 1)  # ← stretch
+
+        table_layout.addSpacing(6) 
+
+        # ── Select All / Deselect All ──
+        select_row = QHBoxLayout()
+        select_row.setSpacing(8)  
+        select_row.setContentsMargins(0, 0, 0, 0)
+
+        self.select_all_btn = QPushButton("Select All")
+        self.select_all_btn.setFixedHeight(28)
+        self.select_all_btn.setMinimumWidth(90)
+        self.select_all_btn.clicked.connect(lambda: self._set_all_checked(True))
+        select_row.addWidget(self.select_all_btn)
+
+        self.deselect_all_btn = QPushButton("Deselect All")
+        self.deselect_all_btn.setFixedHeight(28)
+        self.deselect_all_btn.setMinimumWidth(100)
+        self.deselect_all_btn.clicked.connect(lambda: self._set_all_checked(False))
+        select_row.addWidget(self.deselect_all_btn)
+
+        select_row.addStretch()
+        table_layout.addLayout(select_row)
+
+        # ── Add to splitter ──
+        splitter.addWidget(url_widget)
+        splitter.addWidget(table_widget)
+        splitter.setSizes([280, 500])  # 35% - 65%
+
+        # ── Prevent one side from collapsing ──
+        splitter.setStretchFactor(0, 0)
+        splitter.setStretchFactor(1, 1)
+
+        main_layout.addWidget(splitter, 1)  # ← stretch
+
+        # ===== Total label (outside splitter, at bottom) =====
+        self.total_label = QLabel("")
+        self.total_label.setStyleSheet(
+            "color: #95a5a6; font-size: 11px; padding: 4px 8px;"
+        )
+        self.total_label.setAlignment(Qt.AlignmentFlag.AlignLeft)
+        main_layout.addWidget(self.total_label)
+
+        # ===== Settings accordion =====
         settings_acc = AccordionGroup("Settings")
         settings_acc.set_expanded(True)
 
@@ -146,10 +340,19 @@ class AddDownloadDialog(QDialog):
         queue_layout.setSpacing(2)
         queue_layout.addWidget(QLabel("Queue:"))
         self.queue_cb = QComboBox()
-        for q in self._visible_queues:
-            self.queue_cb.addItem(q.name)
-        if self.default_queue < self.queue_cb.count():
-            self.queue_cb.setCurrentIndex(self.default_queue)
+
+        if self._is_quick:
+            self.queue_cb.addItem("Direct Downloads", "__direct__")
+            for q in self._visible_queues:
+                self.queue_cb.addItem(q.name, q.name)
+            if self.default_queue < self.queue_cb.count():
+                self.queue_cb.setCurrentIndex(self.default_queue)
+        else:
+            for q in self._visible_queues:
+                self.queue_cb.addItem(q.name)
+            if self.default_queue < self.queue_cb.count():
+                self.queue_cb.setCurrentIndex(self.default_queue)
+
         self.queue_cb.currentIndexChanged.connect(self._on_queue_selection_changed)
         queue_layout.addWidget(self.queue_cb)
         row1.addWidget(queue_widget)
@@ -172,7 +375,12 @@ class AddDownloadDialog(QDialog):
         row2 = QHBoxLayout()
         row2.setSpacing(6)
         row2.addWidget(QLabel("Save to:"))
-        self.path_edit = QLineEdit(self._default_path_for_index(self.default_queue))
+        default_path = (
+            os.path.expanduser("~/Downloads")
+            if self._is_quick
+            else self._default_path_for_index(self.default_queue)
+        )
+        self.path_edit = QLineEdit(default_path)
         self.path_edit.textEdited.connect(self._on_path_manually_edited)
         row2.addWidget(self.path_edit)
         self.browse_btn = QPushButton()
@@ -184,6 +392,7 @@ class AddDownloadDialog(QDialog):
 
         main_layout.addWidget(settings_acc)
 
+        # ===== Proxy accordion =====
         proxy_acc = AccordionGroup("Proxy Settings")
         proxy_acc.set_expanded(False)
 
@@ -217,29 +426,341 @@ class AddDownloadDialog(QDialog):
 
         main_layout.addWidget(proxy_acc)
 
-        self.info_label = QLabel("Downloads will be added in Paused state")
+        # ===== Info label =====
+        self.info_label = QLabel(
+            "Downloads will start immediately"
+            if self._is_quick
+            else "Downloads will be added in Paused state"
+        )
         self.info_label.setStyleSheet("color: #95a5a6; font-size: 11px; padding: 4px;")
         main_layout.addWidget(self.info_label)
 
+        main_layout.addSpacing(8)  
+
+        # ===== Button box =====
         self.btn_box = QDialogButtonBox(
             QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
         )
+
+        ok_btn = self.btn_box.button(QDialogButtonBox.StandardButton.Ok)
+        cancel_btn = self.btn_box.button(QDialogButtonBox.StandardButton.Cancel)
+
+        ok_btn.setText("Download" if self._is_quick else "Add to Queue")
+        ok_btn.setIcon(get_icon("download"))
+        ok_btn.setMinimumWidth(140)
+        ok_btn.setFixedHeight(34)
+
+        cancel_btn.setMinimumWidth(100)
+        cancel_btn.setFixedHeight(34)
+
         self.btn_box.accepted.connect(self.accept)
         self.btn_box.rejected.connect(self.reject)
-        main_layout.addWidget(self.btn_box)
+        ok_btn.setEnabled(False)
 
-        self._setup_tab_order()
+        main_layout.addWidget(self.btn_box)
 
     def _setup_tab_order(self):
         self.setTabOrder(self.url_edit, self.import_btn)
-        self.setTabOrder(self.import_btn, self.queue_cb)
-        self.setTabOrder(self.queue_cb, self.conn_spin)
+        self.setTabOrder(self.import_btn, self.fetch_btn)
+        self.setTabOrder(self.fetch_btn, self.table)
+        if self.queue_cb is not None:
+            self.setTabOrder(self.table, self.queue_cb)
+            self.setTabOrder(self.queue_cb, self.conn_spin)
+        else:
+            self.setTabOrder(self.table, self.conn_spin)
         self.setTabOrder(self.conn_spin, self.path_edit)
         self.setTabOrder(self.path_edit, self.browse_btn)
-        self.setTabOrder(self.browse_btn, self.proxy_combo)
-        self.setTabOrder(self.proxy_combo, self.proxy_config_btn)
-        self.setTabOrder(self.proxy_config_btn, self.proxy_clear_btn)
-        self.setTabOrder(self.proxy_clear_btn, self.btn_box)
+
+    # ─────────────────────────────────────────────────────────────
+    # URL handling
+    # ─────────────────────────────────────────────────────────────
+
+    def _on_urls_changed(self):
+        self._fetch_timer.start(self.FETCH_DEBOUNCE_MS)
+
+    def _get_urls(self):
+        raw = self.url_edit.toPlainText()
+        urls = []
+        for line in raw.split("\n"):
+            line = line.strip()
+            if line and line not in urls:
+                urls.append(line)
+        return urls
+
+    def _extract_filename(self, url: str) -> str:
+        raw = url.split("/")[-1]
+        clean = raw.split("?")[0] if "?" in raw else raw
+        return clean if clean else "Unknown"
+
+    # ─────────────────────────────────────────────────────────────
+    # Fetch sizes
+    # ─────────────────────────────────────────────────────────────
+
+    def _start_fetching_sizes(self):
+        urls = self._get_urls()
+        if not urls:
+            self._clear_table()
+            self._set_progress_state("Ready", 0, 0)
+            return
+
+        self._cancel_fetcher()
+
+        self._url_to_row = {}
+        self._url_to_size = {}
+        self._url_to_status = {}
+
+        self._populate_table(urls)
+
+        self._set_progress_state(
+            f"Fetching sizes... (0/{len(urls)})",
+            0,
+            len(urls),
+        )
+
+        proxy = self._get_proxy_dict_for_fetch()
+
+        self._fetcher = SizeFetcherWorker(urls, proxy=proxy)
+        self._fetcher.size_fetched.connect(self._on_size_fetched)
+        self._fetcher.fetch_failed.connect(self._on_fetch_failed)
+        self._fetcher.progress.connect(self._on_fetch_progress)
+        self._fetcher.all_done.connect(self._on_fetch_done)
+        self._fetcher.start()
+
+    def _set_progress_state(self, message: str, value: int, maximum: int):
+        """Update progress bar text and value."""
+        if maximum > 0:
+            self.fetch_progress.setRange(0, maximum)
+            self.fetch_progress.setValue(value)
+        else:
+            self.fetch_progress.setRange(0, 100)
+            self.fetch_progress.setValue(0)
+        self.fetch_progress.setFormat(message)
+
+    def _cancel_fetcher(self):
+        if self._fetcher is None:
+            return
+
+        fetcher = self._fetcher
+        self._fetcher = None
+
+        try:
+            fetcher.cancel()
+            try:
+                fetcher.size_fetched.disconnect()
+                fetcher.fetch_failed.disconnect()
+                fetcher.progress.disconnect()
+                fetcher.all_done.disconnect()
+            except (TypeError, RuntimeError):
+                pass
+
+            if not fetcher.wait(2000):
+                fetcher.terminate()
+                fetcher.wait(500)
+
+            fetcher.deleteLater()
+        except RuntimeError:
+            pass
+
+    def _get_proxy_dict_for_fetch(self):
+        proxy_mode = (
+            self.proxy_combo.currentIndex() if hasattr(self, "proxy_combo") else 0
+        )
+        try:
+            if proxy_mode == 0 and self._main_window is not None:
+                if hasattr(self._main_window, "proxy_manager"):
+                    p = self._main_window.proxy_manager.get_proxy_for_queue(None)
+                    if p and p.is_valid() and p.enabled:
+                        url = p._build_proxy_url()
+                        return {"http": url, "https": url}
+            elif proxy_mode == 1 and self._custom_proxy is not None:
+                if self._custom_proxy.is_valid():
+                    url = self._custom_proxy._build_proxy_url()
+                    return {"http": url, "https": url}
+        except Exception as e:
+            print(f"⚠️ [AddDownloadDialog] Could not build proxy dict: {e}")
+        return None
+
+    # ─────────────────────────────────────────────────────────────
+    # Table population & updates
+    # ─────────────────────────────────────────────────────────────
+
+    def _clear_table(self):
+        self.table.setRowCount(0)
+        self._url_to_row = {}
+        self._url_to_size = {}
+        self._url_to_status = {}
+        self.btn_box.button(QDialogButtonBox.StandardButton.Ok).setEnabled(False)
+        self._update_total()
+
+    def _populate_table(self, urls):
+        self.table.setRowCount(0)
+        self.btn_box.button(QDialogButtonBox.StandardButton.Ok).setEnabled(False)
+
+        for url in urls:
+            row = self.table.rowCount()
+            self.table.insertRow(row)
+            self._url_to_row[url] = row
+            self._url_to_size[url] = None
+            self._url_to_status[url] = "fetching"
+
+            # Checkbox (with clickable wrapper)
+            cb = QCheckBox()
+            cb.setChecked(True)
+            cb.stateChanged.connect(self._update_total)
+            cb.setStyleSheet("""
+                QCheckBox::indicator {
+                    width: 20px;
+                    height: 20px;
+                }
+            """)
+            cb_widget = _ClickableCheckboxWidget(cb)
+            self.table.setCellWidget(row, 0, cb_widget)
+
+            # Filename
+            name = self._extract_filename(url)
+            name_item = QTableWidgetItem(name)
+            name_item.setToolTip(url)
+            self.table.setItem(row, 1, name_item)
+
+            # Size
+            size_item = QTableWidgetItem("⏳ Fetching...")
+            self.table.setItem(row, 2, size_item)
+
+            # Status
+            status_item = QTableWidgetItem("")
+            self.table.setItem(row, 3, status_item)
+
+        self._update_total()
+
+    def _on_size_fetched(self, url, size):
+        row = self._url_to_row.get(url)
+        if row is None:
+            return
+
+        if self._url_to_status.get(url) == "done":
+            return
+
+        try:
+            size = int(size)
+        except (ValueError, TypeError):
+            return
+
+        if size <= 0:
+            return
+
+        self._url_to_size[url] = size
+        self._url_to_status[url] = "done"
+        self.table.item(row, 2).setText(format_size(size))
+
+        status_item = self.table.item(row, 3)
+        status_item.setText("Success")
+        status_item.setForeground(QColor("#27ae60"))
+
+        self._update_total()
+
+    def _on_fetch_failed(self, url, error):
+        row = self._url_to_row.get(url)
+        if row is None:
+            return
+
+        if self._url_to_status.get(url) == "failed":
+            return
+
+        self._url_to_size[url] = None
+        self._url_to_status[url] = "failed"
+        self.table.item(row, 2).setText("Unknown")
+
+        status_item = self.table.item(row, 3)
+        status_item.setText("Failed")
+        status_item.setForeground(QColor("#e74c3c"))
+
+        self._update_total()
+
+    def _on_fetch_progress(self, done, total):
+        self.fetch_progress.setRange(0, total)
+        self.fetch_progress.setValue(done)
+        self.fetch_progress.setFormat(f"Fetching sizes... ({done}/{total})")
+
+    def _on_fetch_done(self):
+        fetcher = self._fetcher
+        self._fetcher = None
+        if fetcher is not None:
+            try:
+                fetcher.deleteLater()
+            except RuntimeError:
+                pass
+
+        total = self.table.rowCount()
+        if total > 0:
+            self.fetch_progress.setRange(0, total)
+            self.fetch_progress.setValue(total)
+            self.fetch_progress.setFormat(f"✅ All sizes fetched ({total}/{total})")
+            self.fetch_progress.setStyleSheet("""
+                QProgressBar {
+                    border: 1px solid #45475a;
+                    border-radius: 4px;
+                    text-align: center;
+                    font-size: 11px;
+                    color: #1e1e2e;
+                    background-color: #e0e0e0;
+                }
+                QProgressBar::chunk {
+                    background-color: #a6e3a1;
+                    border-radius: 3px;
+                }
+            """)
+        else:
+            self.fetch_progress.setRange(0, 100)
+            self.fetch_progress.setValue(0)
+            self.fetch_progress.setFormat("Ready")
+
+        self._update_total()
+
+    def _set_all_checked(self, checked: bool):
+        for row in range(self.table.rowCount()):
+            w = self.table.cellWidget(row, 0)
+            if isinstance(w, _ClickableCheckboxWidget):
+                w.set_checked(checked)
+        self._update_total()
+
+    def _get_selected_urls(self):
+        selected = []
+        for url, row in self._url_to_row.items():
+            w = self.table.cellWidget(row, 0)
+            if isinstance(w, _ClickableCheckboxWidget) and w.is_checked():
+                selected.append(url)
+        return selected
+
+    def _update_total(self):
+        selected_urls = self._get_selected_urls()
+        ok_btn = self.btn_box.button(QDialogButtonBox.StandardButton.Ok)
+
+        if ok_btn is not None:
+            ok_btn.setEnabled(bool(selected_urls))
+
+        if not selected_urls:
+            self.total_label.setText("No files selected")
+            return
+
+        total_bytes = 0
+        unknown = 0
+        for url in selected_urls:
+            size = self._url_to_size.get(url)
+            if size and size > 0:
+                total_bytes += size
+            else:
+                unknown += 1
+
+        parts = [f"{len(selected_urls)} file(s) selected"]
+        if total_bytes > 0:
+            parts.append(f"Total: {format_size(total_bytes)}")
+        if unknown > 0:
+            parts.append(f"({unknown} unknown)")
+        self.total_label.setText("  •  ".join(parts))
+
+    # ─────────────────────────────────────────────────────────────
+    # Browse / import
+    # ─────────────────────────────────────────────────────────────
 
     def _browse(self):
         d = QFileDialog.getExistingDirectory(
@@ -260,9 +781,20 @@ class AddDownloadDialog(QDialog):
         self._path_user_edited = True
 
     def _on_queue_selection_changed(self, index):
-
         if not self._path_user_edited:
-            self.path_edit.setText(self._default_path_for_index(index))
+            if self._is_quick:
+                queue_name = self.queue_cb.currentData()
+                if queue_name == "__direct__":
+                    self.path_edit.setText(os.path.expanduser("~/Downloads"))
+                else:
+                    for q in self._visible_queues:
+                        if q.name == queue_name:
+                            self.path_edit.setText(
+                                q.save_path or os.path.expanduser("~/Downloads")
+                            )
+                            break
+            else:
+                self.path_edit.setText(self._default_path_for_index(index))
 
     def _import_from_txt(self):
         file_path, _ = QFileDialog.getOpenFileName(
@@ -283,6 +815,10 @@ class AddDownloadDialog(QDialog):
             except Exception as e:
                 QMessageBox.warning(self, "Error", f"Failed to parse file:\n{str(e)}")
 
+    # ─────────────────────────────────────────────────────────────
+    # Proxy helpers
+    # ─────────────────────────────────────────────────────────────
+
     def _on_proxy_mode_changed(self, index):
         is_custom = index == 1
         self.proxy_config_btn.setEnabled(is_custom)
@@ -295,18 +831,15 @@ class AddDownloadDialog(QDialog):
     def _configure_custom_proxy(self):
         from ui.download_proxy_dialog import SimpleProxyDialog
 
-        url = (
-            self.url_edit.toPlainText().strip().split("\n")[0]
-            if self.url_edit.toPlainText()
-            else "Download"
-        )
-        display_name = os.path.basename(url) if url else "Download"
+        urls = self._get_urls()
+        display_name = self._extract_filename(urls[0]) if urls else "Download"
         dlg = SimpleProxyDialog(display_name, self._custom_proxy, self)
         if dlg.exec():
             new_config = dlg.get_proxy_config()
             self._custom_proxy = new_config
             self.proxy_clear_btn.setEnabled(True)
             self._update_proxy_status()
+            self._start_fetching_sizes()
 
     def _clear_custom_proxy(self):
         self._custom_proxy = None
@@ -323,21 +856,34 @@ class AddDownloadDialog(QDialog):
             self.proxy_status_label.setText("Invalid proxy configuration")
             self.proxy_status_label.setStyleSheet("color: #e74c3c; font-size: 11px;")
 
-    def _get_urls(self):
-        raw = self.url_edit.toPlainText()
-        return [line.strip() for line in raw.split("\n") if line.strip()]
+    # ─────────────────────────────────────────────────────────────
+    # Data extraction & cleanup
+    # ─────────────────────────────────────────────────────────────
 
     def get_data(self):
-        urls = self._get_urls()
+        urls = self._get_selected_urls()
         proxy_mode = self.proxy_combo.currentIndex()
-        return {
+
+        data = {
             "urls": urls,
             "path": self.path_edit.text().strip(),
-            "queue": self.queue_cb.currentIndex(),
             "connections": self.conn_spin.value(),
             "proxy_mode": proxy_mode,
             "custom_proxy": self._custom_proxy if proxy_mode == 1 else None,
         }
+
+        if self._is_quick:
+            data["queue_name"] = self.queue_cb.currentData()
+            data["queue"] = -1
+        else:
+            data["queue"] = self.queue_cb.currentIndex()
+            data["queue_name"] = None
+
+        return data
+
+    def closeEvent(self, event):
+        self._cancel_fetcher()
+        event.accept()
 
 
 class QuickDownloadDialog(QDialog):
