@@ -1636,9 +1636,7 @@ class MainWindow(QMainWindow):
         for download_id, data in self._all_downloads.items():
             try:
                 total = (
-                    int(data.get("totalLength", 0))
-                    if data.get("totalLength", 0)
-                    else 0
+                    int(data.get("totalLength", 0)) if data.get("totalLength", 0) else 0
                 )
                 completed = (
                     int(data.get("completedLength", 0))
@@ -1680,9 +1678,7 @@ class MainWindow(QMainWindow):
                 new_total = 0
                 try:
                     new_total = (
-                        int(dl.get("totalLength", 0))
-                        if dl.get("totalLength", 0)
-                        else 0
+                        int(dl.get("totalLength", 0)) if dl.get("totalLength", 0) else 0
                     )
                 except (ValueError, TypeError):
                     new_total = 0
@@ -1770,6 +1766,7 @@ class MainWindow(QMainWindow):
                     )
 
         self.store.mark_dirty()
+
     def _on_aria2_error(self, message: str) -> None:
         if any(
             x in message
@@ -4423,101 +4420,65 @@ class MainWindow(QMainWindow):
         if operation == "re_add" and result is not None:
             print(f"✅ Re-add result: {result}")
 
-            if isinstance(result, str):
-                new_gid = result
+            if not isinstance(result, str):
+                return
 
-                old_gid = None
-                for gid, mapped_gid in list(self._retry_mapping.items()):
-                    if not mapped_gid:
-                        old_gid = gid
-                        break
+            new_gid = result
 
-                if not old_gid:
-                    for gid in list(self._retrying_gids):
-                        if gid in self._all_downloads:
-                            old_gid = gid
-                            break
+            download_id = None
+            for did in list(self._retrying_gids):
+                if did in self._all_downloads:
+                    download_id = did
+                    break
 
-                if old_gid and new_gid and old_gid != new_gid:
-                    print(f"✅ Re-add successful: {old_gid} -> {new_gid}")
+            if not download_id:
+                print(f"⚠️ [Retry] No retrying download found for new_gid={new_gid}")
+                # cleanup orphan
+                try:
+                    self.aria2.remove(new_gid)
+                except Exception:
+                    pass
+                return
 
-                    self._retry_mapping[old_gid] = new_gid
+            # ⭐ فقط aria2_gid رو آپدیت کن — هیچ migration دیگه‌ای لازم نیست
+            old_gid = self._all_downloads[download_id].get("aria2_gid")
 
-                    if old_gid in self._all_downloads:
-                        self._all_downloads[new_gid] = self._all_downloads.pop(old_gid)
-                        self._all_downloads[new_gid]["gid"] = new_gid
-                        self._all_downloads[new_gid]["status"] = "active"
+            self._all_downloads[download_id]["aria2_gid"] = new_gid
+            self._all_downloads[download_id]["status"] = "active"
 
-                    for q in self.store.queues:
-                        if old_gid in q.downloads:
-                            idx = q.downloads.index(old_gid)
-                            q.downloads[idx] = new_gid
-                        if old_gid in q.downloads_info:
-                            q.downloads_info[new_gid] = q.downloads_info.pop(old_gid)
-                            q.downloads_info[new_gid]["status"] = "active"
-                            q.downloads_info[new_gid]["error_count"] = 0
-                            q.downloads_info[new_gid]["errorMessage"] = ""
+            # آپدیت q.downloads_info
+            for q in self.store.queues:
+                if download_id in q.downloads_info:
+                    q.downloads_info[download_id]["aria2_gid"] = new_gid
+                    q.downloads_info[download_id]["status"] = "active"
+                    break
 
-                    self.store.save()
+            self.store.save()
 
-                    if old_gid in self._retrying_gids:
-                        self._retrying_gids.remove(old_gid)
-                    if old_gid in self._retry_mapping:
-                        del self._retry_mapping[old_gid]
+            # پاک‌سازی state
+            self._retrying_gids.discard(download_id)
 
-                    if old_gid in self._retry_done:
-                        self._retry_done.remove(old_gid)
+            print(
+                f"✅ [Retry] Complete: id={download_id[:12]} "
+                f"aria2_gid: {old_gid} -> {new_gid}"
+            )
 
-                    if old_gid in self._progress_dialogs:
-                        dialog = self._progress_dialogs.pop(old_gid)
-                        try:
-                            dialog.set_gid(new_gid)
-                            self._progress_dialogs[new_gid] = dialog
+            # resume جدید
+            QTimer.singleShot(
+                100, lambda g=new_gid: self.worker.resume_requested.emit(g)
+            )
 
-                            data = self._all_downloads.get(new_gid, {})
-                            if data:
-                                dialog.update_data(data)
+            self._refresh_table()
+            self._queue_list_dirty = True
+            self._refresh_queue_list()
+            self._update_queue_buttons()
 
-                            try:
-                                dialog.finished.disconnect()
-                            except Exception:
-                                pass
-                            dialog.finished.connect(
-                                lambda result, g=new_gid: self._on_progress_dialog_closed(
-                                    g, result
-                                )
-                            )
-                        except RuntimeError:
-
-                            QTimer.singleShot(
-                                100, lambda: self._open_progress_dialog(new_gid)
-                            )
-
-                    QTimer.singleShot(
-                        100, lambda: self.worker.resume_requested.emit(new_gid)
-                    )
-
-                    self._refresh_table()
-                    self._queue_list_dirty = True
-                    self._refresh_queue_list()
-                    self._update_queue_buttons()
-
-                    self.tray.showMessage(
-                        "FelfelDM",
-                        f"✅ Download retried successfully",
-                        QSystemTrayIcon.MessageIcon.Information,
-                        2000,
-                    )
-
-                    print(f"✅ [Retry] Complete: {old_gid} -> {new_gid}")
-                else:
-                    print(
-                        f"⚠️ [Retry] Could not find old GID for retry, new_gid={new_gid}"
-                    )
-                    try:
-                        self.aria2.remove(new_gid)
-                    except Exception as e:
-                        print(f"⚠️ [Retry] Could not remove orphan {new_gid}: {e}")
+            self.tray.showMessage(
+                "FelfelDM",
+                "✅ Download retried successfully",
+                QSystemTrayIcon.MessageIcon.Information,
+                2000,
+            )
 
         elif operation == "add_url" and result is not None:
             print(f"✅ Add URL result: {result}")
