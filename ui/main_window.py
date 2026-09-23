@@ -1585,14 +1585,13 @@ class MainWindow(QMainWindow):
         youtube_downloads = result.get("youtube_downloads", [])
         self._update_youtube_dialogs(youtube_downloads)
 
-        if self._retry_enabled:
-            has_error = any(
-                data.get("status") in ["error", "stopped"]
-                for gid, data in self._all_downloads.items()
-                if data.get("download_type") != "youtube"
-            )
-            if has_error:
-                self._process_retries()
+        has_error = any(
+            data.get("status") in ["error", "stopped"]
+            for gid, data in self._all_downloads.items()
+            if data.get("download_type") != "youtube"
+        )
+        if has_error:
+            self._process_retries()
 
         self._refresh_table()
         self._update_queue_status()
@@ -1936,8 +1935,14 @@ class MainWindow(QMainWindow):
             if not is_direct and target_queue.paused:
                 url_options["pause"] = "true"
 
+            print(f"🔍 [Add] About to add URL: {url!r}")
+            print(f"🔍 [Add] URL bytes: {url.encode('utf-8')!r}")
+
             gid = self.aria2.add_url(url, url_options)
+
+            print(f"🔍 [Add] Result gid: {gid!r}")
             if not gid:
+                print(f"❌ [Add] add_url returned falsy: {gid!r}")
                 continue
 
             if gid in self._cleared_gids:
@@ -4403,8 +4408,6 @@ class MainWindow(QMainWindow):
                         self._all_downloads[new_gid] = self._all_downloads.pop(old_gid)
                         self._all_downloads[new_gid]["gid"] = new_gid
                         self._all_downloads[new_gid]["status"] = "active"
-                        self._all_downloads[new_gid]["error_count"] = 0
-                        self._all_downloads[new_gid]["errorMessage"] = ""
 
                     for q in self.store.queues:
                         if old_gid in q.downloads:

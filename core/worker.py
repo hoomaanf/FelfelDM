@@ -229,6 +229,10 @@ class BackendWorker(QThread):
                 print(f"🚫 [Worker] Ignoring orphan GID: {gid}")
                 try:
                     self.aria2.remove(gid)
+                    try:
+                        self.aria2._call("aria2.removeDownloadResult", [gid])
+                    except Exception:
+                        pass
                     print(f"🗑️ [Worker] Removed orphan GID from aria2: {gid}")
                 except Exception as e:
                     print(f"⚠️ [Worker] Could not remove orphan {gid}: {e}")
