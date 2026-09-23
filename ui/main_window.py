@@ -1624,11 +1624,21 @@ class MainWindow(QMainWindow):
             self._check_already_complete()
 
     def _update_downloads_from_stats(self, downloads_list: List[Dict]) -> None:
+        # ⭐ ساخت نگاشت GID → download_id (از state ذخیره‌شده)
+        gid_to_download_id: Dict[str, str] = {}
+        for download_id, data in self._all_downloads.items():
+            aria2_gid = data.get("aria2_gid")
+            if aria2_gid:
+                gid_to_download_id[aria2_gid] = download_id
+
+        # ⭐ saved_data با کلید download_id (نه gid)
         saved_data = {}
-        for gid, data in self._all_downloads.items():
+        for download_id, data in self._all_downloads.items():
             try:
                 total = (
-                    int(data.get("totalLength", 0)) if data.get("totalLength", 0) else 0
+                    int(data.get("totalLength", 0))
+                    if data.get("totalLength", 0)
+                    else 0
                 )
                 completed = (
                     int(data.get("completedLength", 0))
@@ -1639,7 +1649,10 @@ class MainWindow(QMainWindow):
                 total = 0
                 completed = 0
             if total > 0 or completed > 0:
-                saved_data[gid] = {"totalLength": total, "completedLength": completed}
+                saved_data[download_id] = {
+                    "totalLength": total,
+                    "completedLength": completed,
+                }
 
         newly_completed = []
 
@@ -1650,42 +1663,56 @@ class MainWindow(QMainWindow):
             if not gid:
                 continue
 
-            if gid in self._all_downloads:
+            # ⭐ نگاشت GID → download_id
+            download_id = gid_to_download_id.get(gid)
+
+            if download_id and download_id in self._all_downloads:
+                pass
+            elif gid in self._all_downloads:
+                # transitional: هنوز بعضی دانلودها با GID keyed هستن
+                download_id = gid
+            else:
+                # دانلود ناشناخته (worker خودش پاکش می‌کنه)
+                continue
+
+            # ⭐ از این به بعد فقط download_id استفاده می‌کنیم
+            if download_id in self._all_downloads:
                 new_total = 0
                 try:
                     new_total = (
-                        int(dl.get("totalLength", 0)) if dl.get("totalLength", 0) else 0
+                        int(dl.get("totalLength", 0))
+                        if dl.get("totalLength", 0)
+                        else 0
                     )
                 except (ValueError, TypeError):
                     new_total = 0
 
                 if (
                     new_total == 0
-                    and gid in saved_data
-                    and saved_data[gid]["totalLength"] > 0
+                    and download_id in saved_data
+                    and saved_data[download_id]["totalLength"] > 0
                 ):
                     for key in ["status", "downloadSpeed", "files"]:
                         if key in dl:
-                            self._all_downloads[gid][key] = dl[key]
+                            self._all_downloads[download_id][key] = dl[key]
 
-                    self._all_downloads[gid]["totalLength"] = saved_data[gid][
-                        "totalLength"
-                    ]
-                    self._all_downloads[gid]["completedLength"] = saved_data[gid][
-                        "completedLength"
-                    ]
+                    self._all_downloads[download_id]["totalLength"] = saved_data[
+                        download_id
+                    ]["totalLength"]
+                    self._all_downloads[download_id]["completedLength"] = saved_data[
+                        download_id
+                    ]["completedLength"]
                     continue
 
-                old_status = self._all_downloads[gid].get("status", "")
+                old_status = self._all_downloads[download_id].get("status", "")
                 new_status = dl.get("status", "")
 
-                pending = self._pending_status.get(gid)
+                pending = self._pending_status.get(download_id)
                 if pending:
                     expected_status, expires_at = pending
                     if new_status == expected_status or time.time() > expires_at:
-                        del self._pending_status[gid]
+                        del self._pending_status[download_id]
                     else:
-
                         dl = dict(dl)
                         dl.pop("status", None)
                         dl.pop("downloadSpeed", None)
@@ -1695,34 +1722,40 @@ class MainWindow(QMainWindow):
                     "complete",
                     "completed",
                 ]:
-                    if gid not in self._completed_gids:
-                        self._completed_gids.add(gid)
-                        newly_completed.append(gid)
+                    if download_id not in self._completed_gids:
+                        self._completed_gids.add(download_id)
+                        newly_completed.append(download_id)
 
-                self._all_downloads[gid].update(dl)
+                self._all_downloads[download_id].update(dl)
             else:
-                self._all_downloads[gid] = dl
+                # دانلود جدید که هنوز توی _all_downloads نیست — با download_id اضافه کن
+                self._all_downloads[download_id] = dl
 
-        for gid in newly_completed:
+        for download_id in newly_completed:
             self._play_completion_sound()
 
+        # ⭐ cleanup: دانلودهایی که توی هیچ queue نیستن
         current_gids = {dl.get("gid") for dl in downloads_list if dl.get("gid")}
-        for gid in list(self._all_downloads.keys()):
-            if self._all_downloads[gid].get("download_type") == "youtube":
+        for download_id in list(self._all_downloads.keys()):
+            if self._all_downloads[download_id].get("download_type") == "youtube":
                 continue
-            in_queue = any(gid in q.downloads for q in self.store.queues)
-            if not in_queue and gid not in current_gids:
-                del self._all_downloads[gid]
+            in_queue = any(download_id in q.downloads for q in self.store.queues)
+            aria2_gid = self._all_downloads[download_id].get("aria2_gid")
+            if not in_queue and aria2_gid not in current_gids:
+                del self._all_downloads[download_id]
 
+        # ⭐ sync queue info
         for q in self.store.queues:
-            for gid in q.downloads:
-                if gid in self._all_downloads:
-                    dl = self._all_downloads[gid]
-                    if gid not in q.downloads_info:
-                        q.downloads_info[gid] = {}
+            for download_id in q.downloads:
+                if download_id in self._all_downloads:
+                    dl = self._all_downloads[download_id]
+                    if download_id not in q.downloads_info:
+                        q.downloads_info[download_id] = {}
 
-                    q.downloads_info[gid].update(
+                    q.downloads_info[download_id].update(
                         {
+                            "id": download_id,
+                            "aria2_gid": dl.get("aria2_gid"),
                             "totalLength": self._to_int(dl.get("totalLength", 0)),
                             "completedLength": self._to_int(
                                 dl.get("completedLength", 0)
@@ -1737,7 +1770,6 @@ class MainWindow(QMainWindow):
                     )
 
         self.store.mark_dirty()
-
     def _on_aria2_error(self, message: str) -> None:
         if any(
             x in message
@@ -1935,20 +1967,17 @@ class MainWindow(QMainWindow):
             if not is_direct and target_queue.paused:
                 url_options["pause"] = "true"
 
-            print(f"🔍 [Add] About to add URL: {url!r}")
-            print(f"🔍 [Add] URL bytes: {url.encode('utf-8')!r}")
-
             gid = self.aria2.add_url(url, url_options)
-
-            print(f"🔍 [Add] Result gid: {gid!r}")
             if not gid:
-                print(f"❌ [Add] add_url returned falsy: {gid!r}")
+                print(f"❌ [Add] aria2.add_url returned None for URL: {url!r}")
                 continue
+
+            download_id = uuid.uuid4().hex[:16]
 
             if gid in self._cleared_gids:
                 self._cleared_gids.remove(gid)
 
-            target_queue.downloads.append(gid)
+            target_queue.downloads.append(download_id)
 
             clean_name = self._extract_filename(url)
             full_path = os.path.join(d["path"], clean_name)
@@ -1958,7 +1987,9 @@ class MainWindow(QMainWindow):
             else:
                 initial_status = "paused"
 
-            target_queue.downloads_info[gid] = {
+            target_queue.downloads_info[download_id] = {
+                "id": download_id,
+                "aria2_gid": gid,
                 "url": url,
                 "name": clean_name,
                 "totalLength": 0,
@@ -1970,8 +2001,9 @@ class MainWindow(QMainWindow):
                 "save_path": d["path"],
             }
 
-            self._all_downloads[gid] = {
-                "gid": gid,
+            self._all_downloads[download_id] = {
+                "id": download_id,
+                "aria2_gid": gid,
                 "name": clean_name,
                 "status": initial_status,
                 "totalLength": 0,
@@ -1991,7 +2023,7 @@ class MainWindow(QMainWindow):
                     gid, target_queue.speed_limit
                 )
 
-            new_gids.append(gid)
+            new_gids.append(download_id)
             added += 1
 
         self.store.save()
@@ -2002,16 +2034,23 @@ class MainWindow(QMainWindow):
         self._update_shutdown_button_state()
 
         if is_direct:
-            for gid in new_gids:
+            for download_id in new_gids:
                 try:
-                    status = self.aria2.get_status(gid)
+                    dl = self._all_downloads.get(download_id, {})
+                    aria2_gid = dl.get("aria2_gid")
+                    if not aria2_gid:
+                        continue
+
+                    status = self.aria2.get_status(aria2_gid)
                     if status and status.get("status") in ("waiting", "paused"):
-                        self.worker.resume_requested.emit(gid)
-                        self._all_downloads[gid]["status"] = "active"
-                        if gid in target_queue.downloads_info:
-                            target_queue.downloads_info[gid]["status"] = "active"
+                        self.worker.resume_requested.emit(aria2_gid)
+                        self._all_downloads[download_id]["status"] = "active"
+                        if download_id in target_queue.downloads_info:
+                            target_queue.downloads_info[download_id][
+                                "status"
+                            ] = "active"
                 except Exception as e:
-                    print(f"⚠️ Could not resume {gid}: {e}")
+                    print(f"⚠️ Could not resume {download_id}: {e}")
             self.store.save()
 
         if is_direct:
