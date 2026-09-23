@@ -183,6 +183,16 @@ class BackendWorker(QThread):
         if not self.wait(2000):
             self.terminate()
 
+    def _build_gid_to_download_id_map(self) -> Dict[str, str]:
+
+        mapping: Dict[str, str] = {}
+        for q in self.store.queues:
+            for download_id, info in q.downloads_info.items():
+                aria2_gid = info.get("aria2_gid")
+                if aria2_gid:
+                    mapping[aria2_gid] = download_id
+        return mapping
+
     def _build_runtime_snapshot(self) -> dict:
         active = self.aria2.tell_active() or []
         waiting = self.aria2.tell_waiting() or []
@@ -192,9 +202,22 @@ class BackendWorker(QThread):
         downloads_snapshot = []
         seen_gids = set()
 
-        valid_gids = set()
+        # ⭐ v2: نگاشت GID → download_id
+        gid_to_download_id = self._build_gid_to_download_id_map()
+        valid_gids = set(gid_to_download_id.keys())
+
+        # ⭐ Transitional: q.downloads ممکنه هنوز GID قدیمی داشته باشه
+        # (فاز B.3 این رو کامل می‌کنه)
         for q in self.store.queues:
-            valid_gids.update(q.downloads)
+            for item in q.downloads:
+                # خود item رو هم valid در نظر بگیر (ممکنه GID قدیمی باشه)
+                valid_gids.add(item)
+                # اگه توی downloads_info هست و aria2_gid داره، اونم اضافه کن
+                if item in q.downloads_info:
+                    info = q.downloads_info[item]
+                    aria2_gid = info.get("aria2_gid")
+                    if aria2_gid:
+                        valid_gids.add(aria2_gid)
 
         for download in all_downloads:
             gid = download.get("gid")
@@ -213,6 +236,8 @@ class BackendWorker(QThread):
 
             complete_info = self._get_complete_download_info(gid, download)
             if complete_info:
+
+                complete_info["download_id"] = gid_to_download_id.get(gid)
                 downloads_snapshot.append(complete_info)
 
         try:
@@ -237,11 +262,7 @@ class BackendWorker(QThread):
     def _get_complete_download_info(
         self, gid: str, partial_info: dict
     ) -> Optional[dict]:
-        # partial_info comes from tell_active()/tell_waiting()/tell_stopped(),
-        # which aria2 returns with the exact same field set as tell_status()
-        # for that gid (no `keys` filter is applied in aria2_rpc.py). Calling
-        # tell_status(gid) here again was a fully redundant extra RPC
-        # round-trip per download on every single poll tick.
+
         try:
             full_info = partial_info
             complete_info = {
@@ -493,21 +514,52 @@ class BackendWorker(QThread):
             self.operation_result.emit("add_url", None)
 
     @pyqtSlot(str)
-    def _on_re_add_requested(self, old_gid: str):
+    def _on_re_add_requested(self, download_id_or_gid: str):
+
         try:
             url = None
             save_path = None
             speed_limit = 0
+            matched_id = None
+
+            # ⭐ مرحله ۱: به عنوان download_id (UUID) امتحان کن
             for q in self.store.queues:
-                if old_gid in q.downloads_info:
-                    info = q.downloads_info[old_gid]
+                if download_id_or_gid in q.downloads_info:
+                    info = q.downloads_info[download_id_or_gid]
                     url = info.get("url")
                     save_path = info.get("save_path") or q.save_path
                     speed_limit = getattr(q, "speed_limit", 0)
+                    matched_id = download_id_or_gid
                     break
 
+            # ⭐ مرحله ۲ (fallback): به عنوان aria2_gid امتحان کن
+            if not url:
+                for q in self.store.queues:
+                    for dl_id, info in q.downloads_info.items():
+                        if info.get("aria2_gid") == download_id_or_gid:
+                            url = info.get("url")
+                            save_path = info.get("save_path") or q.save_path
+                            speed_limit = getattr(q, "speed_limit", 0)
+                            matched_id = dl_id
+                            break
+                    if url:
+                        break
+
+            # ⭐ مرحله ۳ (transitional): خود کلید یه GID قدیمیه
+            if not url:
+                for q in self.store.queues:
+                    if download_id_or_gid in q.downloads_info:
+                        info = q.downloads_info[download_id_or_gid]
+                        url = info.get("url")
+                        save_path = info.get("save_path") or q.save_path
+                        speed_limit = getattr(q, "speed_limit", 0)
+                        matched_id = download_id_or_gid
+                        break
+
             if not url or not save_path:
-                print(f"❌ [Worker] Cannot re-add: missing info for {old_gid}")
+                print(
+                    f"❌ [Worker] Cannot re-add: missing info for {download_id_or_gid}"
+                )
                 self.operation_result.emit("re_add", None)
                 return
 
@@ -524,7 +576,9 @@ class BackendWorker(QThread):
 
             new_gid = self.aria2.add_url(url, options)
             if new_gid:
-                print(f"🔄 [Worker] Re-added {old_gid} -> {new_gid}")
+                id_short = matched_id[:12] if matched_id else download_id_or_gid[:12]
+                print(f"🔄 [Worker] Re-added id={id_short} -> gid={new_gid}")
+                # main_window (فاز B.3) خودش aria2_gid رو آپدیت می‌کنه
                 self.operation_result.emit("re_add", new_gid)
             else:
                 self.operation_result.emit("re_add", None)

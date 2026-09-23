@@ -5,7 +5,6 @@ import json
 import shutil
 import threading
 import uuid
-import sys
 from copy import deepcopy
 from datetime import datetime, time as dtime, timedelta
 from pathlib import Path
@@ -47,7 +46,11 @@ KEYRING_KEY = "aria2_secret"
 YT_FLUSH_INTERVAL = 1.5
 MAX_CORRUPTED_BACKUPS = 5
 
+DATA_VERSION = 2
+
 _PERSISTED_DOWNLOAD_FIELDS = (
+    "id",
+    "aria2_gid",
     "url",
     "name",
     "status",
@@ -134,16 +137,19 @@ class Queue:
                 proxy_dict = self.proxy_config
 
         downloads_info = {}
-        for gid in self.downloads:
-            info = self.downloads_info.get(gid)
+        for download_id in self.downloads:
+            info = self.downloads_info.get(download_id)
             if info is None:
                 continue
-            downloads_info[gid] = {
+            downloads_info[download_id] = {
                 field: info[field]
                 for field in _PERSISTED_DOWNLOAD_FIELDS
                 if field in info
             }
-            downloads_info[gid].setdefault("status", info.get("status", "waiting"))
+            downloads_info[download_id].setdefault(
+                "status", info.get("status", "waiting")
+            )
+            downloads_info[download_id].setdefault("id", download_id)
 
         return {
             "name": self.name,
@@ -310,6 +316,57 @@ class DataStore:
             "disable_ssl_verify": False,
         }
 
+    @staticmethod
+    def _migrate_gid_to_download_id(data: dict) -> dict:
+        """
+        v1 → v2 migration.
+
+        v1: downloads = [gid1, gid2]
+            downloads_info = {gid1: {...}, gid2: {...}}
+
+        v2: downloads = [download_id1, download_id2]
+            downloads_info = {download_id1: {id: ..., aria2_gid: gid1, ...}}
+        """
+        migrated_count = 0
+
+        for q_data in data.get("queues", []):
+            if not isinstance(q_data, dict):
+                continue
+
+            old_downloads = q_data.get("downloads", [])
+            old_info = q_data.get("downloads_info", {})
+
+            new_downloads = []
+            new_info = {}
+
+            for old_gid in old_downloads:
+                info = old_info.get(old_gid, {})
+
+                download_id = info.get("id")
+                if not download_id:
+                    download_id = uuid.uuid4().hex[:16]
+                    migrated_count += 1
+
+                info["id"] = download_id
+                info["aria2_gid"] = old_gid
+
+                info.setdefault("status", "paused")
+                info.setdefault("error_count", 0)
+                info.setdefault("errorMessage", "")
+
+                new_downloads.append(download_id)
+                new_info[download_id] = info
+
+            q_data["downloads"] = new_downloads
+            q_data["downloads_info"] = new_info
+
+        print(f"✅ [Migration] v1 → v2: {migrated_count} downloads migrated")
+        return data
+
+    def _mark_main_dirty(self) -> None:
+        with self._lock:
+            self._main_dirty = True
+
     def _mark_main_dirty(self) -> None:
         with self._lock:
             self._main_dirty = True
@@ -343,6 +400,18 @@ class DataStore:
                 with open(self.data_file, "r", encoding="utf-8") as f:
                     data = json.load(f)
 
+                current_version = data.get("version", 1)
+                needs_save_after_migration = False
+
+                if current_version < DATA_VERSION:
+                    print(
+                        f"🔄 [Migration] Upgrading data.json "
+                        f"from v{current_version} to v{DATA_VERSION}"
+                    )
+                    data = self._migrate_gid_to_download_id(data)
+                    data["version"] = DATA_VERSION
+                    needs_save_after_migration = True
+
                 queues = []
                 for q_data in data.get("queues", []):
                     if not isinstance(q_data, dict):
@@ -359,7 +428,11 @@ class DataStore:
                     self.queues = queues
                     self.settings = settings
                     self.download_proxies = data.get("download_proxies", {})
-                    self._main_dirty = False
+                    self._main_dirty = needs_save_after_migration
+
+                if needs_save_after_migration:
+                    print("💾 [Migration] Saving migrated data.json...")
+                    self.save()
 
             except json.JSONDecodeError as e:
                 print(f"⚠️ Config file corrupted: {e}")
@@ -459,6 +532,7 @@ class DataStore:
 
             secret = self.settings.pop("aria2_secret", "")
             payload = {
+                "version": DATA_VERSION, 
                 "queues": [q.to_dict() for q in self.queues],
                 "settings": deepcopy(self.settings),
                 "download_proxies": deepcopy(self.download_proxies),
