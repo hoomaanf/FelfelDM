@@ -43,6 +43,26 @@ from core.proxy_manager import ProxyManager
 class MainWindow(QMainWindow):
     _aria2_error_signal = pyqtSignal(str)
 
+    _PERMANENT_ERROR_PATTERNS = (
+        "403",
+        "401",
+        "404",
+        "410",
+        "451",
+        "unauthorized",
+        "forbidden",
+        "not found",
+        "gone",
+        "certificate",
+        "tls",
+        "ssl",
+        "cert verify",
+        "unsupported",
+        "invalid url",
+        "malformed",
+        "bad request",
+    )
+
     def __init__(self) -> None:
         super().__init__()
         self._init_variables()
@@ -60,12 +80,14 @@ class MainWindow(QMainWindow):
         self._all_downloads: Dict[str, Dict[str, Any]] = {}
         self._current_queue_idx: int = 0
         self._pending_size_fetch: Dict[str, float] = {}
-        self._retry_done: Set[str] = set()
         self._retrying_gids: Set[str] = set()
+        self._retrying_gids: Set[str] = set()
+        self._retry_timers: Dict[str, QTimer] = {}
+        self._retry_state: Dict[str, dict] = {}
+        self._countdown_timer: Optional[QTimer] = None
         self._cleared_gids: Set[str] = set()
         self._pending_pause: Set[str] = set()
         self._shutdown_dialog_shown: bool = False
-        self._retry_mapping: Dict[str, str] = {}
         self._progress_dialogs: Dict[str, DownloadProgressDialog] = {}
         self._youtube_dialogs: Dict[str, "YouTubeProgressDialog"] = {}
         self._shutdown_dialog: Optional[QDialog] = None
@@ -77,7 +99,6 @@ class MainWindow(QMainWindow):
         self._shutdown_countdown: int = 20
         self.worker: Optional[BackendWorker] = None
         self._first_stats_received = False
-        self._retry_enabled = False
         self._queue_worker: Optional[QueueOperationWorker] = None
         self.local_server: Optional[LocalServer] = None
         self.speed_update_timer: Optional[QTimer] = None
@@ -118,6 +139,10 @@ class MainWindow(QMainWindow):
         self.splash.update_status("Building tray...", 80)
         QApplication.processEvents()
         self._build_tray()
+
+        self._countdown_timer = QTimer(self)
+        self._countdown_timer.setInterval(1000)
+        self._countdown_timer.timeout.connect(self._tick_retry_countdown)
 
     def _init_backend(self) -> None:
         if self.splash is None:
@@ -702,8 +727,6 @@ class MainWindow(QMainWindow):
     def _start_current_queue(self) -> None:
         """Start the entire queue"""
         print("▶️ Starting queue...")
-
-        self._retry_enabled = True
 
         q = self._current_queue()
         if not q or q.name == "__direct__":
@@ -1582,18 +1605,33 @@ class MainWindow(QMainWindow):
         self.status_lbl.setStyleSheet("color: #27ae60; font-weight: bold;")
 
         downloads_list = result.get("downloads", [])
+
+        new_errors = []
+        for dl in downloads_list:
+            if not isinstance(dl, dict):
+                continue
+            gid = dl.get("gid")
+            if not gid:
+                continue
+            new_status = dl.get("status", "")
+            if new_status in ("error", "stopped"):
+                download_id = None
+                for did, ddata in self._all_downloads.items():
+                    if ddata.get("aria2_gid") == gid:
+                        download_id = did
+                        break
+                if download_id:
+                    old_status = self._all_downloads[download_id].get("status", "")
+                    if old_status not in ("error", "stopped"):
+                        new_errors.append((download_id, dl.get("errorMessage", "")))
+
         self._update_downloads_from_stats(downloads_list)
+
+        for download_id, error_msg in new_errors:
+            self._on_download_error(download_id, error_msg)
 
         youtube_downloads = result.get("youtube_downloads", [])
         self._update_youtube_dialogs(youtube_downloads)
-
-        has_error = any(
-            data.get("status") in ["error", "stopped"]
-            for gid, data in self._all_downloads.items()
-            if data.get("download_type") != "youtube"
-        )
-        if has_error:
-            self._process_retries()
 
         self._refresh_table()
         self._update_queue_status()
@@ -1802,37 +1840,50 @@ class MainWindow(QMainWindow):
             print(f"⚠️ [Size] Invalid size for {gid}: {size}")
             return
 
+        # ⭐ نگاشت GID → download_id
+        download_id = None
         if gid in self._all_downloads:
-
-            try:
-                current_size = int(self._all_downloads[gid].get("totalLength", 0))
-            except (ValueError, TypeError):
-                current_size = 0
-
-            if current_size > 0 and current_size == size:
-                print(
-                    f"⏭️ [MainWindow] Size already exists for {gid}: {size}, skipping"
-                )
-                return
-
-            self._all_downloads[gid]["totalLength"] = size
-            self._all_downloads[gid]["category"] = category
-
-            for q in self.store.queues:
-                if gid in q.downloads_info:
-                    q.downloads_info[gid]["totalLength"] = size
-                    q.downloads_info[gid]["category"] = category
+            download_id = gid
+        else:
+            for did, ddata in self._all_downloads.items():
+                if ddata.get("aria2_gid") == gid:
+                    download_id = did
                     break
 
-            self.store.save()
-            self._refresh_table()
-            self._update_progress_bar()
+        if not download_id:
+            # ممکنه دانلود از بین رفته باشه (حذف شده یا هنوز add نشده)
+            print(f"⚠️ [MainWindow] GID {gid[:12]} not found in _all_downloads")
+            return
 
+        try:
+            current_size = int(self._all_downloads[download_id].get("totalLength", 0))
+        except (ValueError, TypeError):
+            current_size = 0
+
+        if current_size > 0 and current_size == size:
             print(
-                f"✅ [MainWindow] Size updated for {gid}: {size} bytes ({size/1024/1024/1024:.2f} GB)"
+                f"⏭️ [MainWindow] Size already exists for "
+                f"{download_id[:12]}: {size}, skipping"
             )
-        else:
-            print(f"⚠️ [MainWindow] GID {gid} not found in _all_downloads")
+            return
+
+        self._all_downloads[download_id]["totalLength"] = size
+        self._all_downloads[download_id]["category"] = category
+
+        for q in self.store.queues:
+            if download_id in q.downloads_info:
+                q.downloads_info[download_id]["totalLength"] = size
+                q.downloads_info[download_id]["category"] = category
+                break
+
+        self.store.save()
+        self._refresh_table()
+        self._update_progress_bar()
+
+        print(
+            f"✅ [MainWindow] Size updated for {download_id[:12]}: "
+            f"{size} bytes ({size/1024/1024/1024:.2f} GB)"
+        )
 
     def _on_table_double_click(self, index: QModelIndex) -> None:
         gid = self.model.get_gid(index.row())
@@ -2549,8 +2600,6 @@ class MainWindow(QMainWindow):
 
             if gid in self._retrying_gids:
                 self._retrying_gids.discard(gid)
-            if gid in self._retry_done:
-                self._retry_done.discard(gid)
 
         try:
             self.worker.remove_multi_requested.emit(gids_to_remove)
@@ -3697,7 +3746,6 @@ class MainWindow(QMainWindow):
         self._all_downloads[gid]["error_count"] = error_count + 1
 
         self._retrying_gids.add(gid)
-        self._retry_mapping[gid] = ""
 
         self.worker.re_add_requested.emit(gid)
 
@@ -4571,6 +4619,13 @@ class MainWindow(QMainWindow):
         dlg.activateWindow()
 
     def closeEvent(self, event: QCloseEvent) -> None:
+        if self._countdown_timer:
+            self._countdown_timer.stop()
+        for t in self._retry_timers.values():
+            t.stop()
+        self._retry_timers.clear()
+        self._retry_state.clear()
+
         has_active = False
         for q in self.store.queues:
             for gid in q.downloads:
@@ -4612,6 +4667,13 @@ class MainWindow(QMainWindow):
 
     def quit_app(self) -> None:
         print("🛑 Shutting down...")
+
+        if self._countdown_timer:
+            self._countdown_timer.stop()
+        for t in self._retry_timers.values():
+            t.stop()
+        self._retry_timers.clear()
+        self._retry_state.clear()
 
         theme_setting: str = self.store.settings.get("theme", "auto")
         is_dark: bool = self._detect_theme(theme_setting)
@@ -4797,23 +4859,154 @@ class MainWindow(QMainWindow):
             "add_download", dlg, on_accepted=self._process_add_download_common
         )
 
-    def _process_retries(self) -> None:
-        max_retries = self.store.settings.get("max_tries", 5)
-        for gid, data in list(self._all_downloads.items()):
-            if data.get("download_type") == "youtube":
+    def _is_retriable_error(self, error_msg: str) -> bool:
+        """تشخیص موقتی vs دائمی. Default = موقتی (retriable)."""
+        if not error_msg:
+            return True
+        msg = error_msg.lower()
+        return not any(p in msg for p in self._PERMANENT_ERROR_PATTERNS)
+
+    def _on_download_error(self, download_id: str, error_msg: str) -> None:
+        """وقتی یه دانلود تازه error می‌خوره، این صدا زده می‌شه."""
+        data = self._all_downloads.get(download_id)
+        if not data:
+            return
+
+        if data.get("download_type") == "youtube":
+            return
+
+        if download_id in self._retrying_gids:
+            return
+
+        if download_id in self._retry_state:
+            return
+
+        self._retrying_gids.add(download_id)
+
+        if error_msg:
+            data["errorMessage"] = error_msg
+
+        error_count = self._to_int(data.get("error_count", 0))
+        self._schedule_retry(download_id, error_count)
+
+    def _schedule_retry(self, download_id: str, attempt: int) -> None:
+        """ثبت retry با تأخیر. attempt = تعداد تلاش‌های انجام‌شده."""
+        data = self._all_downloads.get(download_id)
+        if not data:
+            return
+
+        error_msg = data.get("errorMessage", "")
+
+        if not self._is_retriable_error(error_msg):
+            print(
+                f"⛔ [Retry] Permanent error for {download_id[:12]}: {error_msg[:60]}"
+            )
+            data["status"] = "error"
+            self._retrying_gids.discard(download_id)
+            return
+
+        max_tries = self.store.settings.get("max_tries", 5)
+        next_attempt = attempt + 1
+
+        if next_attempt > max_tries:
+            print(f"⛔ [Retry] Max tries reached for {download_id[:12]}")
+            data["status"] = "error"
+            self._retrying_gids.discard(download_id)
+            return
+
+        retry_delay = max(1, int(self.store.settings.get("retry_delay", 5)))
+
+        old_timer = self._retry_timers.pop(download_id, None)
+        if old_timer:
+            old_timer.stop()
+
+        # ثبت state
+        self._retry_state[download_id] = {
+            "deadline": time.time() + retry_delay,
+            "attempt": next_attempt,
+            "max_tries": max_tries,
+        }
+
+        # آپدیت وضعیت
+        data["status"] = "retrying"
+        data["downloadSpeed"] = 0
+        data["status_detail"] = (
+            f"🔄 Retrying in {retry_delay}s... ({next_attempt}/{max_tries})"
+        )
+
+        # جلوگیری از overwrite شدن status توسط aria2 stats
+        self._pending_status[download_id] = (
+            "retrying",
+            time.time() + retry_delay + 2.0,
+        )
+
+        # تایمر
+        timer = QTimer(self)
+        timer.setSingleShot(True)
+        timer.timeout.connect(lambda d=download_id: self._do_delayed_retry(d))
+        timer.start(retry_delay * 1000)
+        self._retry_timers[download_id] = timer
+
+        if self._countdown_timer and not self._countdown_timer.isActive():
+            self._countdown_timer.start()
+
+        self._refresh_table()
+        print(
+            f"⏱️ [Retry] Scheduled {download_id[:12]} in {retry_delay}s "
+            f"(attempt {next_attempt}/{max_tries})"
+        )
+
+    def _do_delayed_retry(self, download_id: str) -> None:
+        """بعد از پایان تأخیر — اجرای واقعی retry."""
+        timer = self._retry_timers.pop(download_id, None)
+        if timer:
+            timer.stop()
+
+        self._retry_state.pop(download_id, None)
+        # ⭐ قفل رو باز کن تا _retry_single_download بتونه اجرا بشه
+        self._retrying_gids.discard(download_id)
+
+        if download_id not in self._all_downloads:
+            return
+
+        self._all_downloads[download_id].pop("status_detail", None)
+
+        print(f"🔄 [Retry] Executing delayed retry for {download_id[:12]}")
+        self._retry_single_download(download_id)
+
+    def _tick_retry_countdown(self) -> None:
+        """هر ۱ ثانیه — شمارش معکوس رو آپدیت کن."""
+        if not self._retry_state:
+            if self._countdown_timer:
+                self._countdown_timer.stop()
+            return
+
+        now = time.time()
+        finished = []
+        any_change = False
+
+        for download_id, info in list(self._retry_state.items()):
+            remaining = int(info["deadline"] - now)
+            if remaining <= 0:
+                finished.append(download_id)
                 continue
-            if gid in self._retrying_gids:
-                continue
-            status = data.get("status", "")
-            error_msg = data.get("errorMessage", "")
-            if status in ["error", "stopped"] and error_msg:
-                error_count = self._to_int(data.get("error_count", 0))
-                if error_count < max_retries:
-                    self._retry_single_download(gid)
-                else:
-                    data["status"] = "error"
-                    if gid not in self._retry_done:
-                        self._retry_done.add(gid)
+
+            data = self._all_downloads.get(download_id)
+            if data:
+                new_detail = (
+                    f"🔄 Retrying in {remaining}s... "
+                    f"({info['attempt']}/{info['max_tries']})"
+                )
+                if data.get("status_detail") != new_detail:
+                    data["status_detail"] = new_detail
+                    data["status"] = "retrying"
+                    any_change = True
+
+        for download_id in finished:
+            self._retry_state.pop(download_id, None)
+
+        if any_change:
+            self._refresh_table()
 
     def _get_aria2_status(self, gid: str) -> Optional[Dict]:
         try:

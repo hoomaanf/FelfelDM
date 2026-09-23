@@ -210,10 +210,10 @@ class AddDownloadDialog(QDialog):
             "Enter URLs (one per line)...\n\n" "Tip: Paste multiple URLs at once."
         )
         self.url_edit.textChanged.connect(self._on_urls_changed)
-        url_layout.addWidget(self.url_edit, 1) 
+        url_layout.addWidget(self.url_edit, 1)
 
         url_btn_row = QHBoxLayout()
-        url_btn_row.setSpacing(8)  
+        url_btn_row.setSpacing(8)
         url_btn_row.setContentsMargins(0, 0, 0, 0)
 
         self.import_btn = QPushButton(get_icon("document-open"), "")
@@ -265,7 +265,7 @@ class AddDownloadDialog(QDialog):
             }
         """)
         table_layout.addWidget(self.fetch_progress)
-        table_layout.addSpacing(6)  
+        table_layout.addSpacing(6)
 
         # ── Table ──
         self.table = QTableWidget(0, 4, self)
@@ -285,11 +285,11 @@ class AddDownloadDialog(QDialog):
 
         table_layout.addWidget(self.table, 1)  # ← stretch
 
-        table_layout.addSpacing(6) 
+        table_layout.addSpacing(6)
 
         # ── Select All / Deselect All ──
         select_row = QHBoxLayout()
-        select_row.setSpacing(8)  
+        select_row.setSpacing(8)
         select_row.setContentsMargins(0, 0, 0, 0)
 
         self.select_all_btn = QPushButton("Select All")
@@ -435,7 +435,7 @@ class AddDownloadDialog(QDialog):
         self.info_label.setStyleSheet("color: #95a5a6; font-size: 11px; padding: 4px;")
         main_layout.addWidget(self.info_label)
 
-        main_layout.addSpacing(8)  
+        main_layout.addSpacing(8)
 
         # ===== Button box =====
         self.btn_box = QDialogButtonBox(
@@ -2006,10 +2006,13 @@ class SettingsDialog(QDialog):
         self.conns.setValue(settings.get("connections", 8))
 
         self.retry_delay = QDoubleSpinBox()
-        self.retry_delay.setRange(0.5, 10.0)
-        self.retry_delay.setSingleStep(0.5)
-        self.retry_delay.setValue(settings.get("retry_delay", 1.0))
+        self.retry_delay.setRange(1.0, 60.0)
+        self.retry_delay.setSingleStep(1.0)
+        self.retry_delay.setValue(settings.get("retry_delay", 5.0))
         self.retry_delay.setSuffix(" seconds")
+        self.retry_delay.setToolTip(
+            "Delay between retry attempts (for transient errors only)"
+        )
 
         dl_layout.addRow("Max Concurrent:", self.max_concurrent)
         dl_layout.addRow("Max Retry Attempts:", self.max_retries)

@@ -309,7 +309,7 @@ class DataStore:
             "run_as_service": False,
             "start_minimized": False,
             "run_on_startup": False,
-            "retry_delay": 1.0,
+            "retry_delay": 5.0,
             "proxy_settings": {"global": None, "queues": {}},
             "sound_enabled": True,
             "sound_path": "",

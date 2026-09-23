@@ -183,6 +183,10 @@ class DownloadTableModel(QAbstractTableModel):
                     "stopped": "⏸ Stopped",
                     "retrying": "🔄 Retrying...",
                 }
+                if status == "retrying":
+                    detail = row.get("status_detail")
+                    if detail:
+                        return detail
 
                 if download_type == "youtube":
                     if status == "downloading":
