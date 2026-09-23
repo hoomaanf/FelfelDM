@@ -1023,13 +1023,15 @@ class MainWindow(QMainWindow):
         rows = []
         search_text = self.search_box.text().strip().lower()
 
-        for gid in q.downloads:
-            if gid in self._all_downloads:
-                row = self._all_downloads[gid].copy()
+        for download_id in q.downloads:
+            if download_id in self._all_downloads:
+                row = self._all_downloads[download_id].copy()
             else:
-                info = q.downloads_info.get(gid, {})
+                info = q.downloads_info.get(download_id, {})
                 row = {
-                    "gid": gid,
+                    "id": download_id,
+                    "aria2_gid": info.get("aria2_gid"),
+                    "gid": download_id,
                     "name": info.get("name", "Unknown"),
                     "status": info.get("status", "unknown"),
                     "progress": 0,
@@ -1043,7 +1045,7 @@ class MainWindow(QMainWindow):
                     "error_count": info.get("error_count", 0),
                     "errorMessage": info.get("errorMessage", ""),
                 }
-                self._all_downloads[gid] = row.copy()
+                self._all_downloads[download_id] = row.copy()
 
             if search_text and search_text not in row.get("name", "").lower():
                 continue

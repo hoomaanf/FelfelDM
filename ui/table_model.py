@@ -45,7 +45,7 @@ class DownloadTableModel(QAbstractTableModel):
         # Safely get values from the runtime download dictionary
         download_type = row.get("download_type", "normal")
         status = row.get("status", "—")
-        
+
         # Ensure status is a string
         if isinstance(status, dict):
             status = str(status)
@@ -116,7 +116,7 @@ class DownloadTableModel(QAbstractTableModel):
             if col == 3:  # Speed
                 if status == "paused":
                     return "—"
-                 
+
                 speed = row.get("downloadSpeed", 0)
                 if isinstance(speed, dict):
                     speed = 0
@@ -137,7 +137,7 @@ class DownloadTableModel(QAbstractTableModel):
             if col == 4:  # ETA
                 if status == "paused":
                     return "—"
-                
+
                 if download_type == "youtube":
                     eta = row.get("eta", "")
                     if eta and isinstance(eta, str):
@@ -340,9 +340,10 @@ class DownloadTableModel(QAbstractTableModel):
             self.sort(sort_col, sort_order)
 
     def get_gid(self, row_idx):
-        """Get GID from a specific row"""
+        """Get download_id (UUID) from a specific row."""
         if 0 <= row_idx < len(self.rows):
-            return self.rows[row_idx].get("gid")
+            row = self.rows[row_idx]
+            return row.get("id") or row.get("gid")
         return None
 
     def get_download_type(self, row_idx):
