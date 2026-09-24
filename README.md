@@ -57,7 +57,9 @@ bash <(curl -s https://raw.githubusercontent.com/hoomaanf/FelfelDM/main/install.
 - 🚀 **Multiple Queues** — Create and manage multiple download queues
 - ⏰ **Scheduled Downloads** — Set time windows for automatic downloads
 - 📊 **Real-time Progress** — Live download speed and progress tracking
-- 🎯 **Smart Management** — Auto-retry, pause/resume, and error handling
+- 🎯 **Smart Management** — Intelligent auto-retry with configurable delay, pause/resume, and error handling
+- 🔄 **Smart Retry** — Automatically retry transient errors (timeout, 5xx, 429) with a configurable delay; fail fast on permanent errors (404, 403, 401, TLS/certificate issues)
+- ⏱️ **Countdown Retry** — Live countdown in the Status column while waiting between retry attempts (e.g. `🔄 Retrying in 5s... (2/5)`)
 - 🗑️ **Safe Removal** — Remove from list or delete files permanently
 - 🎵 **YouTube Download** — Download videos and audio from YouTube with dynamic quality selection
 - 📋 **Details Panel** — View download details (name, size, downloaded, status, path) with quick actions
@@ -95,6 +97,9 @@ The "Remove & Delete Files" operation no longer freezes the UI:
 - 📋 **Queue Status** — Real-time status display for each queue (Running, Paused, Idle, Empty)
 - 🔄 **Auto-Pause on Empty** — Queues automatically pause when empty
 - ⏱️ **Smart Scheduling** — Automatic start/stop based on time windows
+  - Queues start automatically at the scheduled time and pause when the window ends
+  - Manual pause overrides the schedule until the next window
+  - All downloads pause cleanly when the window ends (no flicker or partial states)
 - 🔒 **Manual Override** — User pause/resume overrides automatic scheduling
 - 📊 **Queue Progress** — Overall progress bar for each queue
 
@@ -104,6 +109,9 @@ The "Remove & Delete Files" operation no longer freezes the UI:
 - 🔌 **aria2 Integration** — High-performance multi-connection downloads
 - 🎨 **Modern UI** — Dark/Light theme with Papirus icons
 - ⚡ **Speed Limit** — Global and per-queue download speed limiting
+  - **Global Speed Limit** — Limits the total speed of all downloads
+  - **Queue Speed Limit** — Limits the total speed of a queue; the limit is split evenly across the active downloads in that queue (e.g. 100 KB/s across 3 active downloads → ~33 KB/s each)
+  - **Queue overrides Global** — When a queue has its own speed limit, it takes priority over the global one
 - 🖥️ **System Tray** — Minimize to tray with status indicator
 - 🔄 **Download Interception** — Catch browser downloads automatically
 - 🎬 **Splash Screen** — Beautiful loading animation with circular logo
@@ -119,6 +127,7 @@ The "Remove & Delete Files" operation no longer freezes the UI:
 - ⚡ **Optimized Performance** — Reduced RPC calls for better responsiveness
 - 🚀 **Parallel Size Fetching** — Fetch sizes for multiple URLs in parallel
 - 🎯 **Preview Before Download** — See file sizes and select files before adding them
+- 🏗️ **Robust Download Tracking** — UUID-based internal identifiers keep downloads stable across retries and restarts
 
 ### YouTube Download Features
 
@@ -172,11 +181,13 @@ cd FelfelDM
 ### Uninstall
 
 #### From AUR:
+
 ```bash
 sudo pacman -Rsn felfeldm-git
 ```
 
 #### From other installations:
+
 ```bash
 bash <(curl -s https://raw.githubusercontent.com/hoomaanf/FelfelDM/main/uninstall.sh)
 ```
@@ -228,6 +239,7 @@ FelfelDM --update
 ### Adding Downloads
 
 #### Regular Downloads:
+
 1. Click **Download** button or press `Ctrl+N`
 2. Enter URLs (one per line)
 3. Wait for file sizes to be fetched (a few seconds)
@@ -236,6 +248,7 @@ FelfelDM --update
 6. Click **Download** or **Add to Queue**
 
 #### YouTube Downloads:
+
 1. Click **YouTube** button in the toolbar
 2. Paste the YouTube URL
 3. Select quality and format
@@ -266,12 +279,14 @@ The details panel provides quick access to download information and actions:
 - **Path**: Download folder location
 
 **Quick Actions:**
+
 - **Pause/Resume** — Control the selected download
 - **Cancel** — Remove the download (with option to delete files)
 - **Open Folder** — Open the download folder
 - **Copy URL** — Copy the download URL to clipboard
 
 **Toggle Details Panel:**
+
 - Press `Ctrl+D` or click the details button in the toolbar
 
 ### YouTube Download
@@ -279,12 +294,14 @@ The details panel provides quick access to download information and actions:
 FelfelDM supports downloading videos and audio from YouTube with advanced features:
 
 **Quality Selection:**
+
 - **Dynamic Quality List** — Automatically fetches available qualities for each video
 - **Video Formats** — MP4, WebM with various resolutions (1080p, 720p, 480p, etc.)
 - **Audio Formats** — MP3, M4A with bitrate options
 - **Best Quality** — Automatically selects the best available format
 
 **Requirements:**
+
 - yt-dlp must be installed
 - For age-restricted or private videos, export cookies from your browser
 
@@ -292,33 +309,71 @@ FelfelDM supports downloading videos and audio from YouTube with advanced featur
 
 FelfelDM shows the current status of each queue in the sidebar:
 
-| Status | Description |
-|--------|-------------|
-| **▶ Running** | Queue is active and at least one download is in progress |
-| **⏸ Paused** | Queue is manually paused by the user |
-| **⏳ Idle** | Queue has downloads but none are active (all complete/error) |
-| **📭 Empty** | Queue has no downloads |
-| **✅ Complete** | All downloads in the queue are complete |
-| **▶ Running (🕐 Scheduled)** | Queue is running within its scheduled time window |
-| **⏸ Paused (🕐 Scheduled)** | Queue is paused but within its scheduled time window |
-| **⏰ Waiting for Schedule** | Queue is waiting for its scheduled time to start |
+| Status                       | Description                                                  |
+| ---------------------------- | ------------------------------------------------------------ |
+| **▶ Running**                | Queue is active and at least one download is in progress     |
+| **⏸ Paused**                 | Queue is manually paused by the user                         |
+| **⏳ Idle**                  | Queue has downloads but none are active (all complete/error) |
+| **📭 Empty**                 | Queue has no downloads                                       |
+| **✅ Complete**              | All downloads in the queue are complete                      |
+| **▶ Running (🕐 Scheduled)** | Queue is running within its scheduled time window            |
+| **⏸ Paused (🕐 Scheduled)**  | Queue is paused but within its scheduled time window         |
+| **⏰ Waiting for Schedule**  | Queue is waiting for its scheduled time to start             |
+
+### Retry Settings
+
+FelfelDM supports smart retry with configurable behavior:
+
+| Setting                | Default   | Description                                                                |
+| ---------------------- | --------- | -------------------------------------------------------------------------- |
+| **Max Retry Attempts** | 5         | Maximum number of automatic retry attempts for failed downloads            |
+| **Retry Delay**        | 5 seconds | Delay between retry attempts (only for transient errors)                   |
+| **Max Tries (aria2)**  | 5         | aria2's internal retry count per download (separate from FelfelDM's retry) |
+
+**How it works:**
+
+- **Transient errors** (timeout, connection reset, 5xx, 429) → automatically retried with the configured delay
+- **Permanent errors** (404, 403, 401, TLS/certificate issues) → fail immediately, no retry
+- **Countdown display** — While waiting, the Status column shows `🔄 Retrying in 5s... (2/5)`
+
+**Configure these in:** Settings → General → Download
+
+### Speed Limit Settings
+
+FelfelDM supports speed limiting at two levels:
+
+| Level                  | Description                                | Where to Configure                   |
+| ---------------------- | ------------------------------------------ | ------------------------------------ |
+| **Global Speed Limit** | Limits the total speed of all downloads    | Settings → Speed                     |
+| **Queue Speed Limit**  | Limits the total speed of a specific queue | Right-click queue → Settings → Speed |
+
+**How Queue Speed Limit works:**
+
+When a queue has a speed limit (e.g. 100 KB/s) and multiple downloads are active:
+
+- The limit is **split evenly** across all active downloads in that queue
+- Example: 100 KB/s with 3 active downloads → ~33 KB/s per download
+- When a download completes, the remaining downloads automatically get a larger share
+- Queue Speed Limit **overrides** Global Speed Limit when set
 
 ### Proxy Configuration
 
 FelfelDM supports proxy configuration at three levels:
 
-| Level | Description | Where to Configure |
-|-------|-------------|-------------------|
-| **Global Proxy** | Applies to all downloads by default | Settings → Proxy Settings |
-| **Queue Proxy** | Overrides global proxy for a specific queue | Right-click queue → Settings → Proxy Settings |
+| Level              | Description                                              | Where to Configure                                                   |
+| ------------------ | -------------------------------------------------------- | -------------------------------------------------------------------- |
+| **Global Proxy**   | Applies to all downloads by default                      | Settings → Proxy Settings                                            |
+| **Queue Proxy**    | Overrides global proxy for a specific queue              | Right-click queue → Settings → Proxy Settings                        |
 | **Download Proxy** | Overrides all other proxy settings for a single download | Add Download dialog → Proxy Settings or right-click → Proxy Settings |
 
 **Supported Proxy Types:**
+
 - HTTP/HTTPS Proxy (`http://proxy:port`)
 - SOCKS5 Proxy (`socks5://proxy:port`)
 - Authentication supported via `user:pass@host:port`
 
 **YouTube Proxy Support:**
+
 - YouTube downloads also support proxy configuration
 - Proxy settings from the main dialog are automatically applied to the download progress window
 - No need to re-enter proxy details in the progress dialog
@@ -327,23 +382,23 @@ FelfelDM supports proxy configuration at three levels:
 
 FelfelDM supports comprehensive keyboard shortcuts for efficient usage:
 
-| Shortcut | Action |
-|----------|--------|
-| `Ctrl+N` | Add Downloads |
-| `Ctrl+U` | Add URL |
-| `Space` | Pause/Resume selected |
-| `Ctrl+P` | Pause selected |
-| `Ctrl+R` | Resume selected |
-| `Delete` | Remove selected |
-| `Shift+Delete` | Remove and delete files |
-| `Ctrl+D` | Toggle details panel |
-| `Ctrl+F` | Focus search |
-| `Escape` | Clear search |
-| `Ctrl+Tab` | Next queue |
-| `Ctrl+Shift+Tab` | Previous queue |
-| `Ctrl+,` | Settings |
-| `F5` | Refresh |
-| `F1` | Show shortcuts |
+| Shortcut         | Action                  |
+| ---------------- | ----------------------- |
+| `Ctrl+N`         | Add Downloads           |
+| `Ctrl+U`         | Add URL                 |
+| `Space`          | Pause/Resume selected   |
+| `Ctrl+P`         | Pause selected          |
+| `Ctrl+R`         | Resume selected         |
+| `Delete`         | Remove selected         |
+| `Shift+Delete`   | Remove and delete files |
+| `Ctrl+D`         | Toggle details panel    |
+| `Ctrl+F`         | Focus search            |
+| `Escape`         | Clear search            |
+| `Ctrl+Tab`       | Next queue              |
+| `Ctrl+Shift+Tab` | Previous queue          |
+| `Ctrl+,`         | Settings                |
+| `F5`             | Refresh                 |
+| `F1`             | Show shortcuts          |
 
 Press `F1` at any time to view all keyboard shortcuts.
 
@@ -384,16 +439,70 @@ cd FelfelDM-extension
 
 The FelfelDM browser extension shows its status through visual badges on its icon:
 
-| Badge | Color | Meaning |
-|-------|-------|---------|
-| **⬇️** | 🟢 Green | Connected to FelfelDM, ready to intercept downloads |
-| **⛔** | 🟡 Yellow | Connected but download catching is disabled |
-| **✕** | 🔴 Red | FelfelDM is not running |
+| Badge  | Color     | Meaning                                             |
+| ------ | --------- | --------------------------------------------------- |
+| **⬇️** | 🟢 Green  | Connected to FelfelDM, ready to intercept downloads |
+| **⛔** | 🟡 Yellow | Connected but download catching is disabled         |
+| **✕**  | 🔴 Red    | FelfelDM is not running                             |
 
 **What happens when FelfelDM is not running:**
+
 - Downloads will proceed normally (not intercepted)
 - You'll receive a notification explaining why
 - No downloads are lost or canceled
+
+---
+
+## 🏗️ Architecture
+
+FelfelDM uses a **UUID-based download identity** for stability across retries, restarts, and GID changes:
+
+- Each download gets a permanent `download_id` (UUID) when added
+- aria2's GID is stored as a separate field (`aria2_gid`) and can change freely during retries
+- When a retry replaces the aria2 GID, all references (queue, progress dialogs, storage) stay intact
+- This makes retry, pause/resume, restart, and scheduled start/stop robust and race-free
+
+### Data Flow
+
+```
+Add Download
+    ↓
+download_id = uuid4().hex[:16]  (permanent)
+aria2_gid = "<gid from aria2>"
+    ↓
+q.downloads.append(download_id)
+_all_downloads[download_id] = {aria2_gid, status, ...}
+    ↓
+[Retry / GID change]
+    ↓
+_all_downloads[download_id]["aria2_gid"] = new_gid
+# Only one field changes — everything else stays intact
+```
+
+### Retry State Machine
+
+```
+         error detected
+              ↓
+        ┌─────────────┐
+        │  retrying   │  ← countdown: "🔄 Retrying in 5s... (2/5)"
+        └──────┬──────┘
+               │ delay expires
+               ↓
+        ┌─────────────┐
+        │  re-add URL │
+        └──────┬──────┘
+               │
+               ↓
+        ┌─────────────┐
+        │   active    │  ← downloading
+        └──────┬──────┘
+               │ error again
+               ↓
+             (loop)
+
+Permanent errors (404, 403, ...) skip the loop and fail immediately.
+```
 
 ---
 
@@ -405,7 +514,7 @@ FelfelDM/
     │   ├── __init__.py
     │   ├── aria2_handler.py           # aria2 handler
     │   ├── aria2_rpc.py               # aria2 JSON-RPC client
-    │   ├── data_store.py              # Data persistence
+    │   ├── data_store.py              # Data persistence (UUID-based)
     │   ├── file_size_fetcher.py       # File size fetcher (HEAD → RANGE → STREAM → yt-dlp)
     │   ├── local_server.py            # Local HTTP server for extension
     │   ├── proxy_manager.py           # Proxy configuration
@@ -555,6 +664,26 @@ chmod +x uninstall.sh
 4. Manual pause/resume overrides automatic scheduling
 5. Check console output for schedule debug messages
 
+### Downloads stuck in "Waiting" after restart
+
+1. This is expected behavior — after a restart, all downloads are set to **Paused** so you can review them before starting
+2. Press **Start** on the queue to resume
+3. Downloads that were active before the restart will continue from where they stopped
+
+### Retry not working as expected
+
+1. Check **Settings → General → Download → Max Retry Attempts** and **Retry Delay**
+2. Permanent errors (404, 403, 401, TLS) are **not** retried by design
+3. Transient errors (timeout, 5xx) are retried with the configured delay
+4. The Status column shows the countdown: `🔄 Retrying in 5s... (2/5)`
+
+### Speed limit not being applied
+
+1. **Queue Speed Limit overrides Global Speed Limit** — if a queue has its own limit, the global one is ignored
+2. The Queue Speed Limit is **split across active downloads** (e.g. 100 KB/s ÷ 3 active downloads = ~33 KB/s each)
+3. Restart the download after changing speed limits to ensure the new limit is applied
+4. Check the console for `⚡ [SpeedLimit]` messages
+
 ### File size shows as unknown
 
 1. Some servers don't return size via HEAD or RANGE requests
@@ -616,4 +745,3 @@ python3 main.py
   <sub>Built with ❤️ and 🌶️</sub>
 </div>
 ```
-
