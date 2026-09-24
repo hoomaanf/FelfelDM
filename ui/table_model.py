@@ -183,6 +183,7 @@ class DownloadTableModel(QAbstractTableModel):
                     "stopped": "⏸ Stopped",
                     "retrying": "🔄 Retrying...",
                 }
+
                 if status == "retrying":
                     detail = row.get("status_detail")
                     if detail:
@@ -328,7 +329,6 @@ class DownloadTableModel(QAbstractTableModel):
         sort_col = self.sort_column
         sort_order = self.sort_order
 
-        # Update rows with the new runtime data
         if len(self.rows) != len(new_rows):
             self.beginResetModel()
             self.rows = new_rows
@@ -338,7 +338,17 @@ class DownloadTableModel(QAbstractTableModel):
             if len(self.rows) > 0:
                 top_left = self.index(0, 0)
                 bottom_right = self.index(len(self.rows) - 1, len(self.COLS) - 1)
-                self.dataChanged.emit(top_left, bottom_right)
+                # ⭐ roles اضافه شدن — Qt مجبور به repaint می‌شه
+                self.dataChanged.emit(
+                    top_left,
+                    bottom_right,
+                    [
+                        Qt.ItemDataRole.DisplayRole,
+                        Qt.ItemDataRole.ForegroundRole,
+                        Qt.ItemDataRole.ToolTipRole,
+                        Qt.ItemDataRole.TextAlignmentRole,
+                    ],
+                )
 
         if sort_col >= 0:
             self.sort(sort_col, sort_order)

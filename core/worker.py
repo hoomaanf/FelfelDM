@@ -199,20 +199,19 @@ class BackendWorker(QThread):
         stopped = self.aria2.tell_stopped(0, 300) or []
 
         all_downloads = active + waiting + stopped
+
+        # ⭐ ساخت set از GIDهای waiting
+        waiting_gids = {dl.get("gid") for dl in waiting if dl.get("gid")}
+
         downloads_snapshot = []
         seen_gids = set()
 
-        # ⭐ v2: نگاشت GID → download_id
         gid_to_download_id = self._build_gid_to_download_id_map()
         valid_gids = set(gid_to_download_id.keys())
 
-        # ⭐ Transitional: q.downloads ممکنه هنوز GID قدیمی داشته باشه
-        # (فاز B.3 این رو کامل می‌کنه)
         for q in self.store.queues:
             for item in q.downloads:
-                # خود item رو هم valid در نظر بگیر (ممکنه GID قدیمی باشه)
                 valid_gids.add(item)
-                # اگه توی downloads_info هست و aria2_gid داره، اونم اضافه کن
                 if item in q.downloads_info:
                     info = q.downloads_info[item]
                     aria2_gid = info.get("aria2_gid")
@@ -226,20 +225,24 @@ class BackendWorker(QThread):
             seen_gids.add(gid)
 
             if gid not in valid_gids:
-                print(f"🚫 [Worker] Ignoring orphan GID: {gid}")
+                if gid in self._fetching_sizes or gid in self._fetched_sizes:
+                    continue
+
                 try:
                     self.aria2.remove(gid)
                     try:
                         self.aria2._call("aria2.removeDownloadResult", [gid])
                     except Exception:
                         pass
-                    print(f"🗑️ [Worker] Removed orphan GID from aria2: {gid}")
-                except Exception as e:
-                    print(f"⚠️ [Worker] Could not remove orphan {gid}: {e}")
+                except Exception:
+                    pass
                 continue
 
             complete_info = self._get_complete_download_info(gid, download)
             if complete_info:
+                if gid in waiting_gids:
+                    complete_info["status"] = "waiting"
+                    complete_info["downloadSpeed"] = "0"
 
                 complete_info["download_id"] = gid_to_download_id.get(gid)
                 downloads_snapshot.append(complete_info)

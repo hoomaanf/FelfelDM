@@ -301,6 +301,7 @@ class DataStore:
             "aria2_secret": "",
             "connections": 8,
             "max_tries": 5,
+                        "max_retry_attempts": 5,
             "max_concurrent": 5,
             "shutdown_after_finish": False,
             "speed_limit": 0,

@@ -1991,10 +1991,12 @@ class SettingsDialog(QDialog):
         self.max_concurrent.setRange(1, 50)
         self.max_concurrent.setValue(settings.get("max_concurrent", 5))
 
-        self.max_retries = QSpinBox()
-        self.max_retries.setRange(0, 20)
-        self.max_retries.setSpecialValueText("Disabled")
-        self.max_retries.setValue(settings.get("max_retries", 3))
+        self.max_retry_attempts = QSpinBox()
+        self.max_retry_attempts.setRange(1, 20)
+        self.max_retry_attempts.setValue(settings.get("max_retry_attempts", 5))
+        self.max_retry_attempts.setToolTip(
+            "Maximum number of automatic retry attempts for failed downloads"
+        )
 
         self.max_tries = QSpinBox()
         self.max_tries.setRange(0, 100)
@@ -2015,7 +2017,7 @@ class SettingsDialog(QDialog):
         )
 
         dl_layout.addRow("Max Concurrent:", self.max_concurrent)
-        dl_layout.addRow("Max Retry Attempts:", self.max_retries)
+        dl_layout.addRow("Max Retry Attempts:", self.max_retry_attempts)
         dl_layout.addRow("Max Tries (aria2):", self.max_tries)
         dl_layout.addRow("Default Connections:", self.conns)
         dl_layout.addRow("Retry Delay:", self.retry_delay)
@@ -2556,7 +2558,7 @@ WantedBy=default.target
             "aria2_port": self.port.value(),
             "aria2_secret": self.secret.text(),
             "connections": self.conns.value(),
-            "max_retries": self.max_retries.value(),
+            "max_retry_attempts": self.max_retry_attempts.value(),
             "max_tries": self.max_tries.value(),
             "max_concurrent": self.max_concurrent.value(),
             "auto_clear_completed": self.auto_clear_completed.isChecked(),

@@ -85,6 +85,7 @@ class MainWindow(QMainWindow):
         self._retry_timers: Dict[str, QTimer] = {}
         self._retry_state: Dict[str, dict] = {}
         self._countdown_timer: Optional[QTimer] = None
+        self._schedule_timer: Optional[QTimer] = None
         self._cleared_gids: Set[str] = set()
         self._pending_pause: Set[str] = set()
         self._shutdown_dialog_shown: bool = False
@@ -111,6 +112,7 @@ class MainWindow(QMainWindow):
         self._queue_list_dirty = True
         self._open_dialogs: Dict[str, QDialog] = {}
         self._pending_status: Dict[str, tuple] = {}
+        self._last_speed_limit_active_count: Optional[int] = None
         self.tray_icon_normal = None
         self.tray_icon_active = None
         self._last_tray_state = False
@@ -143,6 +145,11 @@ class MainWindow(QMainWindow):
         self._countdown_timer = QTimer(self)
         self._countdown_timer.setInterval(1000)
         self._countdown_timer.timeout.connect(self._tick_retry_countdown)
+
+        self._schedule_timer = QTimer(self)
+        self._schedule_timer.setInterval(1000)
+        self._schedule_timer.timeout.connect(self._manage_schedules)
+        self._schedule_timer.start()
 
     def _init_backend(self) -> None:
         if self.splash is None:
@@ -768,6 +775,8 @@ class MainWindow(QMainWindow):
                 self._all_downloads[gid]["status"] = "waiting"
                 if gid in q.downloads_info:
                     q.downloads_info[gid]["status"] = "waiting"
+                # ⭐ پاک کردن _pending_status تا worker بتونه status رو آپدیت کنه
+                self._pending_status.pop(gid, None)
 
         q.manually_paused = False
         self._apply_settings_to_aria2()
@@ -795,6 +804,8 @@ class MainWindow(QMainWindow):
 
         self.start_queue_btn.setEnabled(False)
         self.pause_queue_btn.setEnabled(False)
+        self._last_speed_limit_active_count = None
+        self._apply_queue_speed_limit(q)
 
     def _pause_current_queue(self) -> None:
         """Pause the current queue and all its active/waiting downloads"""
@@ -846,7 +857,7 @@ class MainWindow(QMainWindow):
                         q.downloads_info[gid]["status"] = "paused"
 
         if gids_to_pause:
-            self.worker.pause_multi_requested.emit(gids_to_pause)
+            self._worker_pause_multi(gids_to_pause)
 
         self.store.save()
         self._refresh_table()
@@ -923,7 +934,6 @@ class MainWindow(QMainWindow):
             self._all_downloads[gid]["status"] = status
             if status == "paused":
                 self._all_downloads[gid]["downloadSpeed"] = 0
-        self._mark_pending_status(gid, status)
 
         for q in self.store.queues:
             if gid in q.downloads_info:
@@ -989,6 +999,62 @@ class MainWindow(QMainWindow):
         except (ValueError, TypeError):
             return 0
 
+    def _get_aria2_gid(self, download_id: str) -> Optional[str]:
+        """
+        دریافت aria2_gid از download_id.
+        worker فقط aria2_gid رو می‌فهمه.
+        """
+        if not download_id:
+            return None
+        data = self._all_downloads.get(download_id)
+        if not data:
+            return None
+        return data.get("aria2_gid")
+
+    def _worker_pause(self, download_id: str) -> None:
+        aria2_gid = self._get_aria2_gid(download_id)
+        if aria2_gid:
+            self.worker.pause_requested.emit(aria2_gid)
+
+    def _worker_resume(self, download_id: str) -> None:
+        aria2_gid = self._get_aria2_gid(download_id)
+        if aria2_gid:
+            self.worker.resume_requested.emit(aria2_gid)
+
+    def _worker_remove(self, download_id: str) -> None:
+        aria2_gid = self._get_aria2_gid(download_id)
+        if aria2_gid:
+            self.worker.remove_requested.emit(aria2_gid)
+
+    def _worker_pause_multi(self, download_ids: list) -> None:
+        aria2_gids = [self._get_aria2_gid(d) for d in download_ids]
+        aria2_gids = [g for g in aria2_gids if g]
+        if aria2_gids:
+            self.worker.pause_multi_requested.emit(aria2_gids)
+
+    def _worker_resume_multi(self, download_ids: list) -> None:
+        aria2_gids = [self._get_aria2_gid(d) for d in download_ids]
+        aria2_gids = [g for g in aria2_gids if g]
+        if aria2_gids:
+            self.worker.resume_multi_requested.emit(aria2_gids)
+
+    def _worker_remove_multi(self, download_ids: list) -> None:
+        aria2_gids = [self._get_aria2_gid(d) for d in download_ids]
+        aria2_gids = [g for g in aria2_gids if g]
+        if aria2_gids:
+            self.worker.remove_multi_requested.emit(aria2_gids)
+
+    def _worker_set_speed_limit(self, download_id: str, speed_kb: int) -> None:
+        aria2_gid = self._get_aria2_gid(download_id)
+        if aria2_gid:
+            self.worker.set_speed_limit_requested.emit(aria2_gid, speed_kb)
+
+    def _worker_set_speed_limit_multi(self, download_ids: list, speed_kb: int) -> None:
+        aria2_gids = [self._get_aria2_gid(d) for d in download_ids]
+        aria2_gids = [g for g in aria2_gids if g]
+        if aria2_gids:
+            self.worker.set_speed_limit_multi_requested.emit(aria2_gids, speed_kb)
+
     def _extract_filename(self, url: str) -> str:
         raw_name = url.split("/")[-1]
         clean_name = raw_name.split("?")[0] if "?" in raw_name else raw_name
@@ -1049,6 +1115,7 @@ class MainWindow(QMainWindow):
         for download_id in q.downloads:
             if download_id in self._all_downloads:
                 row = self._all_downloads[download_id].copy()
+
             else:
                 info = q.downloads_info.get(download_id, {})
                 row = {
@@ -1643,6 +1710,18 @@ class MainWindow(QMainWindow):
         self._update_shutdown_button_state()
         self._update_toggle_button()
         self._update_progress_bar()
+        q = self._current_queue()
+        if q and q.speed_limit > 0 and not q.paused:
+            active_count = sum(
+                1
+                for did in q.downloads
+                if self._all_downloads.get(did, {}).get("status", "")
+                in ("active", "downloading")
+            )
+            last = getattr(self, "_last_speed_limit_active_count", None)
+            if active_count != last:
+                self._last_speed_limit_active_count = active_count
+                self._apply_queue_speed_limit(q)
 
         if (
             self._details_visible
@@ -1650,8 +1729,6 @@ class MainWindow(QMainWindow):
             and self.details_panel is not None
         ):
             self._update_details_panel()
-
-        self._manage_schedules()
 
         for gid, dialog in list(self._progress_dialogs.items()):
             try:
@@ -1728,9 +1805,18 @@ class MainWindow(QMainWindow):
                     and download_id in saved_data
                     and saved_data[download_id]["totalLength"] > 0
                 ):
-                    for key in ["status", "downloadSpeed", "files"]:
-                        if key in dl:
-                            self._all_downloads[download_id][key] = dl[key]
+                    # ⭐ status رو فقط اگه توی retry نیستیم overwrite کن
+                    if (
+                        download_id not in self._retry_state
+                        and download_id not in self._retrying_gids
+                        and download_id not in self._pending_status
+                    ):
+                        for key in ["status", "downloadSpeed"]:
+                            if key in dl:
+                                self._all_downloads[download_id][key] = dl[key]
+                    # files رو همیشه آپدیت کن
+                    if "files" in dl:
+                        self._all_downloads[download_id]["files"] = dl["files"]
 
                     self._all_downloads[download_id]["totalLength"] = saved_data[
                         download_id
@@ -1743,16 +1829,22 @@ class MainWindow(QMainWindow):
                 old_status = self._all_downloads[download_id].get("status", "")
                 new_status = dl.get("status", "")
 
-                pending = self._pending_status.get(download_id)
-                if pending:
-                    expected_status, expires_at = pending
-                    if new_status == expected_status or time.time() > expires_at:
-                        del self._pending_status[download_id]
-                    else:
-                        dl = dict(dl)
-                        dl.pop("status", None)
-                        dl.pop("downloadSpeed", None)
-                        new_status = old_status
+                if download_id in self._retry_state:
+                    dl = dict(dl)
+                    dl.pop("status", None)
+                    dl.pop("downloadSpeed", None)
+                    new_status = old_status
+                else:
+                    pending = self._pending_status.get(download_id)
+                    if pending:
+                        expected_status, expires_at = pending
+                        if new_status == expected_status or time.time() > expires_at:
+                            del self._pending_status[download_id]
+                        else:
+                            dl = dict(dl)
+                            dl.pop("status", None)
+                            dl.pop("downloadSpeed", None)
+                            new_status = old_status
 
                 if new_status in ["complete", "completed"] and old_status not in [
                     "complete",
@@ -2069,9 +2161,7 @@ class MainWindow(QMainWindow):
             }
 
             if getattr(target_queue, "speed_limit", 0) > 0:
-                self.worker.set_speed_limit_requested.emit(
-                    gid, target_queue.speed_limit
-                )
+                self._worker_set_speed_limit(download_id, target_queue.speed_limit)
 
             new_gids.append(download_id)
             added += 1
@@ -2446,7 +2536,7 @@ class MainWindow(QMainWindow):
 
             for gid in gids_to_remove:
                 try:
-                    self.worker.remove_requested.emit(gid)
+                    self._worker_remove(gid)
                 except Exception:
                     pass
 
@@ -2582,6 +2672,22 @@ class MainWindow(QMainWindow):
 
         delete_files = result["value"] == "remove_files"
 
+        deleted_files_info = {}  # {gid: {"name": ..., "save_path": ..., "url": ...}}
+        if delete_files:
+            for gid in gids_to_remove:
+                dl_info = self._all_downloads.get(gid, {})
+                info = {}
+                for q in self.store.queues:
+                    if gid in q.downloads_info:
+                        info = q.downloads_info[gid]
+                        break
+
+                deleted_files_info[gid] = {
+                    "name": dl_info.get("name") or info.get("name", ""),
+                    "save_path": dl_info.get("save_path") or info.get("save_path"),
+                    "url": info.get("url", ""),
+                }
+
         gids_for_disk_cleanup = []
 
         for gid in gids_to_remove:
@@ -2602,13 +2708,13 @@ class MainWindow(QMainWindow):
                 self._retrying_gids.discard(gid)
 
         try:
-            self.worker.remove_multi_requested.emit(gids_to_remove)
+            self._worker_remove_multi(gids_to_remove)
         except Exception as e:
             print(f"⚠️ Batch remove failed: {e}")
 
             for gid in gids_to_remove:
                 try:
-                    self.worker.remove_requested.emit(gid)
+                    self._worker_remove(gid)
                 except Exception:
                     pass
 
@@ -2623,38 +2729,50 @@ class MainWindow(QMainWindow):
             from PyQt6.QtCore import QTimer
 
             QTimer.singleShot(
-                100, lambda: self._delete_files_in_background(gids_for_disk_cleanup)
+                100,
+                lambda: self._delete_files_in_background(
+                    gids_for_disk_cleanup, deleted_files_info
+                ),
             )
 
-    def _delete_files_in_background(self, gids: list) -> None:
+    def _delete_files_in_background(self, gids: list, files_info: dict = None) -> None:
         """
         Delete files for multiple GIDs in a background thread.
         Uses QThreadPool to avoid blocking the UI.
         """
         from PyQt6.QtCore import QRunnable, QThreadPool, QObject, pyqtSignal
 
+        files_info = files_info or {}
+
         class DeleteSignals(QObject):
             finished = pyqtSignal()
             progress = pyqtSignal(int, int)
 
         class DeleteTask(QRunnable):
-            def __init__(self, main_window, gids):
+            def __init__(self, main_window, gids, files_info):
                 super().__init__()
                 self.main_window = main_window
                 self.gids = gids
+                self.files_info = files_info
                 self.signals = DeleteSignals()
 
             def run(self):
                 total = len(self.gids)
                 for i, gid in enumerate(self.gids):
                     try:
-                        self.main_window._delete_download_files(gid)
+                        info = self.files_info.get(gid, {})
+                        self.main_window._delete_download_files(
+                            gid,
+                            name_hint=info.get("name"),
+                            save_path_hint=info.get("save_path"),
+                            url_hint=info.get("url"),
+                        )
                     except Exception as e:
                         print(f"⚠️ Error deleting files for {gid}: {e}")
                     self.signals.progress.emit(i + 1, total)
                 self.signals.finished.emit()
 
-        task = DeleteTask(self, gids)
+        task = DeleteTask(self, gids, files_info)
         task.signals.finished.connect(
             lambda: self.status_label.setText(
                 f"✅ Deleted files for {len(gids)} download(s)"
@@ -2679,33 +2797,36 @@ class MainWindow(QMainWindow):
             if hasattr(self, "speed_status_label"):
                 self.speed_status_label.setText("0 B/s")
 
-    def _delete_download_files(self, gid: str) -> None:
+    def _delete_download_files(
+        self,
+        gid: str,
+        name_hint: Optional[str] = None,
+        save_path_hint: Optional[str] = None,
+        url_hint: Optional[str] = None,
+    ) -> None:
         """
         Delete downloaded files for a given GID.
-
-        Optimization: if the download never started (status=paused AND
-        completedLength == 0), there is nothing on disk to delete,
-        so we skip the expensive os.listdir()/glob.glob() scan entirely.
         """
         import glob
 
         file_paths = []
         aria2_files = []
-        save_path = None
-        name = None
-        url = None
+        save_path = save_path_hint
+        name = name_hint
+        url = url_hint
         download_type = None
         status = None
         completed_length = 0
 
         print(f"🗑️ [_delete_download_files] START for gid: {gid}")
 
+        # تلاش برای گرفتن اطلاعات از downloads_info
         for q in self.store.queues:
             if gid in q.downloads_info:
                 info = q.downloads_info[gid]
-                save_path = info.get("save_path") or q.save_path
-                name = info.get("name", "").strip()
-                url = info.get("url", "")
+                save_path = save_path or info.get("save_path") or q.save_path
+                name = name or info.get("name", "").strip()
+                url = url or info.get("url", "")
                 download_type = info.get("download_type", "normal")
                 status = info.get("status", "")
                 completed_length = int(info.get("completedLength", 0) or 0)
@@ -2715,6 +2836,7 @@ class MainWindow(QMainWindow):
                         file_paths.append(f["path"])
                 break
 
+        # تلاش از _all_downloads
         if gid in self._all_downloads:
             dl = self._all_downloads[gid]
             name = name or dl.get("name", "")
@@ -3338,6 +3460,15 @@ class MainWindow(QMainWindow):
                 )
 
         else:
+            q = self._current_queue()
+            has_queue_limit = q and q.speed_limit > 0
+
+            if has_queue_limit:
+                self.aria2.change_global_option({"max-overall-download-limit": "0"})
+                print(f"⚡ [SpeedLimit] Queue limit wins over global")
+                self._apply_queue_speed_limit(q)
+            else:
+                self._apply_global_speed_limit()
 
             if not self._apply_settings_to_aria2():
                 self._restart_aria2()
@@ -3384,18 +3515,56 @@ class MainWindow(QMainWindow):
     def _apply_global_speed_limit(self) -> None:
         limit = self.store.settings.get("speed_limit", 0)
         aria_limit = f"{limit}K" if limit > 0 else "0"
-        self.aria2.change_global_option({"max-overall-download-limit": aria_limit})
+        try:
+            self.aria2.change_global_option({"max-overall-download-limit": aria_limit})
+            print(f"✅ [SpeedLimit] Global limit set to {aria_limit}")
+        except Exception as e:
+            print(f"⚠️ [SpeedLimit] Failed to set global limit: {e}")
 
     def _apply_queue_speed_limit(self, q: Optional[Queue]) -> None:
+        """
+        اعمال محدودیت سرعت صف.
+
+        منطق: q.speed_limit = سرعت کل صف (KB/s)
+        بین دانلودهای active/Downloading تقسیم می‌شه.
+        """
         if not q or not self.aria2:
             return
 
-        for gid in q.downloads:
-            if gid in self._all_downloads:
-                status = self._all_downloads[gid].get("status", "")
-                if status in ["active", "waiting"]:
-                    if q.speed_limit > 0:
-                        self.worker.set_speed_limit_requested.emit(gid, q.speed_limit)
+        if q.speed_limit <= 0:
+            # صف بدون محدودیت — محدودیت همه دانلودها رو پاک کن
+            for download_id in q.downloads:
+                data = self._all_downloads.get(download_id, {})
+                aria2_gid = data.get("aria2_gid")
+                if aria2_gid:
+                    try:
+                        self.aria2.change_option(aria2_gid, {"max-download-limit": "0"})
+                    except Exception:
+                        pass
+            return
+
+        # شمارش دانلودهای فعال/در انتظار
+        active_downloads = []
+        for download_id in q.downloads:
+            data = self._all_downloads.get(download_id, {})
+            status = data.get("status", "")
+            if status in ["active", "downloading"]:
+                active_downloads.append(download_id)
+
+        if not active_downloads:
+            return
+
+        # تقسیم سرعت بین دانلودها
+        n = len(active_downloads)
+        per_download = max(1, q.speed_limit // n)
+
+        print(
+            f"⚡ [SpeedLimit] Queue '{q.name}': {q.speed_limit}K total "
+            f"split over {n} → {per_download}K each"
+        )
+
+        for download_id in active_downloads:
+            self._worker_set_speed_limit(download_id, per_download)
 
     def _apply_proxy_to_aria2(self) -> None:
         proxy = self.proxy_manager.get_proxy_for_queue(None)
@@ -3581,7 +3750,7 @@ class MainWindow(QMainWindow):
 
         real_status = self._all_downloads[gid].get("status", "")
         if real_status in ["active", "waiting"]:
-            self.worker.pause_requested.emit(gid)
+            self._worker_pause(gid)
             self._all_downloads[gid]["status"] = "paused"
             self._all_downloads[gid]["downloadSpeed"] = 0
             self.store.save()
@@ -3605,7 +3774,7 @@ class MainWindow(QMainWindow):
             return
 
         if real_status == "paused":
-            self.worker.resume_requested.emit(gid)
+            self._worker_resume(gid)
             self._all_downloads[gid]["status"] = "active"
             self.store.mark_dirty()
             self._refresh_table()
@@ -3613,7 +3782,7 @@ class MainWindow(QMainWindow):
             return
 
         if real_status in ["waiting", "stopped"]:
-            self.worker.resume_requested.emit(gid)
+            self._worker_resume(gid)
             self._all_downloads[gid]["status"] = "active"
             self.store.mark_dirty()
             self._refresh_table()
@@ -3621,7 +3790,7 @@ class MainWindow(QMainWindow):
 
     def _cancel_from_dialog(self, gid: str) -> None:
         try:
-            self.worker.remove_requested.emit(gid)
+            self._worker_remove(gid)
         except Exception:
             pass
 
@@ -3648,7 +3817,7 @@ class MainWindow(QMainWindow):
         except Exception as e:
             print(f"❌ force_remove failed: {e}")
             try:
-                self.worker.remove_requested.emit(gid)
+                self._worker_remove(gid)
             except:
                 pass
 
@@ -3684,7 +3853,7 @@ class MainWindow(QMainWindow):
                 self._pause_youtube_download(gid)
                 return
 
-        self.worker.pause_requested.emit(gid)
+        self._worker_pause(gid)
 
     def _resume_selected(self) -> None:
         """Resume selected download only, don't touch queue state"""
@@ -3706,7 +3875,7 @@ class MainWindow(QMainWindow):
                 return
 
             if real_status == "paused":
-                self.worker.resume_requested.emit(gid)
+                self._worker_resume(gid)
                 self._all_downloads[gid]["status"] = "active"
                 self.store.mark_dirty()
                 self._refresh_table()
@@ -3714,7 +3883,7 @@ class MainWindow(QMainWindow):
                 return
 
             if real_status == "waiting":
-                self.worker.resume_requested.emit(gid)
+                self._worker_resume(gid)
                 self._all_downloads[gid]["status"] = "active"
                 self.store.mark_dirty()
                 self._refresh_table()
@@ -3728,7 +3897,7 @@ class MainWindow(QMainWindow):
             print(f"⏳ Already retrying {gid}")
             return
 
-        max_retries = self.store.settings.get("max_tries", 5)
+        max_retries = self.store.settings.get("max_retry_attempts", 5)
         error_count = self._to_int(self._all_downloads[gid].get("error_count", 0))
 
         if error_count >= max_retries:
@@ -3946,6 +4115,12 @@ class MainWindow(QMainWindow):
         self._refresh_queue_list()
         self._update_queue_buttons()
         self._apply_settings_to_aria2()
+
+        # ⭐ اگه این queue سرعت داره، global رو صفر کن
+        if q.speed_limit > 0:
+            self.aria2.change_global_option({"max-overall-download-limit": "0"})
+            print(f"⚡ [SpeedLimit] Global disabled (queue '{q.name}' has limit)")
+
         self._apply_queue_speed_limit(q)
 
     def _delete_queue(self) -> None:
@@ -4076,7 +4251,7 @@ class MainWindow(QMainWindow):
 
             if target_queue.paused:
                 if not was_paused:
-                    self.worker.pause_requested.emit(gid)
+                    self._worker_pause(gid)
                 if gid in self._all_downloads:
                     self._all_downloads[gid]["status"] = "paused"
                     self._all_downloads[gid]["downloadSpeed"] = 0
@@ -4084,7 +4259,7 @@ class MainWindow(QMainWindow):
                     target_queue.downloads_info[gid]["status"] = "paused"
             else:
                 if was_paused:
-                    self.worker.resume_requested.emit(gid)
+                    self._worker_resume(gid)
                 if gid in self._all_downloads:
                     self._all_downloads[gid]["status"] = "active"
                 if gid in target_queue.downloads_info:
@@ -4113,6 +4288,28 @@ class MainWindow(QMainWindow):
                         print(f"✅ aria2 connected after {attempt+1} attempts")
                         break
 
+            # ⭐ گرفتن وضعیت GIDهای aria2
+            active_gids = set()
+            waiting_gids = set()
+            stopped_gids = set()
+            live_gids = set()
+            try:
+                for dl in self.aria2.tell_active() or []:
+                    if dl.get("gid"):
+                        active_gids.add(dl["gid"])
+                        live_gids.add(dl["gid"])
+                for dl in self.aria2.tell_waiting() or []:
+                    if dl.get("gid"):
+                        waiting_gids.add(dl["gid"])
+                        live_gids.add(dl["gid"])
+                for dl in self.aria2.tell_stopped(0, 300) or []:
+                    if dl.get("gid"):
+                        stopped_gids.add(dl["gid"])
+                        live_gids.add(dl["gid"])
+                pass
+            except Exception as e:
+                print(f"⚠️ [Restore] Could not fetch aria2 status: {e}")
+
             auto_clear = self.store.settings.get("auto_clear_completed", False)
             restored_count = 0
             needs_save = False
@@ -4120,13 +4317,12 @@ class MainWindow(QMainWindow):
             for q in self.store.queues:
                 to_remove = []
 
-                for gid in q.downloads:
-                    info = q.downloads_info.get(gid, {})
+                for download_id in q.downloads:
+                    info = q.downloads_info.get(download_id, {})
                     status = info.get("status", "")
 
                     if auto_clear and status in ["complete", "completed"]:
-                        print(f"✅ Marking completed download for removal: {gid}")
-                        to_remove.append(gid)
+                        to_remove.append(download_id)
                         needs_save = True
                         continue
 
@@ -4140,7 +4336,7 @@ class MainWindow(QMainWindow):
                             "category": "📁 Other",
                             "download_type": "normal",
                         }
-                        q.downloads_info[gid] = info
+                        q.downloads_info[download_id] = info
                         needs_save = True
 
                     total_length = int(info.get("totalLength", 0))
@@ -4153,16 +4349,12 @@ class MainWindow(QMainWindow):
                                 pass
 
                     info_status = info.get("status", "")
-                    if info_status in ["complete", "completed", "error", "removed"]:
-                        status = info_status
-                    else:
-                        status = "paused"
-
                     completed_length = int(info.get("completedLength", 0))
                     files = info.get("files", [])
                     download_type = info.get("download_type", "normal")
                     category = info.get("category", "📁 Other")
                     name = info.get("name", "Unknown")
+                    aria2_gid = info.get("aria2_gid")
 
                     if not files or not files[0].get("path"):
                         dl_save_path = info.get("save_path") or q.save_path
@@ -4177,10 +4369,29 @@ class MainWindow(QMainWindow):
                         if url:
                             name = url.split("/")[-1].split("?")[0]
 
-                    self._all_downloads[gid] = {
-                        "gid": gid,
+                    # ⭐ تصمیم‌گیری دربارهٔ status
+                    if info_status in ["complete", "completed"]:
+                        final_status = "complete"
+                    elif aria2_gid and aria2_gid in live_gids:
+                        # GID معتبر — بعد از restart همه paused می‌شن
+                        final_status = "paused"
+                    else:
+                        # GID نامعتبر — باید re-add بشه
+                        if info_status in ["complete", "completed"]:
+                            final_status = "complete"
+                        else:
+                            final_status = "error"
+                            print(
+                                f"⚠️ [Restore] {download_id[:12]} has dead GID "
+                                f"({aria2_gid}) → marking as error for re-add"
+                            )
+
+                    self._all_downloads[download_id] = {
+                        "id": download_id,
+                        "aria2_gid": aria2_gid,
+                        "gid": aria2_gid,
                         "name": name,
-                        "status": status,
+                        "status": final_status,
                         "totalLength": total_length,
                         "completedLength": completed_length,
                         "downloadSpeed": 0,
@@ -4193,16 +4404,17 @@ class MainWindow(QMainWindow):
                         "download_type": download_type,
                     }
 
-                    q.downloads_info[gid]["status"] = status
-                    q.downloads_info[gid]["totalLength"] = total_length
+                    q.downloads_info[download_id]["status"] = final_status
+                    q.downloads_info[download_id]["totalLength"] = total_length
+                    q.downloads_info[download_id]["aria2_gid"] = aria2_gid
                     restored_count += 1
 
-                for gid in to_remove:
-                    q.downloads.remove(gid)
-                    if gid in q.downloads_info:
-                        del q.downloads_info[gid]
-                    if gid in self._all_downloads:
-                        del self._all_downloads[gid]
+                for download_id in to_remove:
+                    q.downloads.remove(download_id)
+                    if download_id in q.downloads_info:
+                        del q.downloads_info[download_id]
+                    if download_id in self._all_downloads:
+                        del self._all_downloads[download_id]
 
             if needs_save:
                 self.store.save()
@@ -4210,7 +4422,25 @@ class MainWindow(QMainWindow):
             print(f"✅ Loaded {restored_count} download(s)")
             print(f"📊 _all_downloads has {len(self._all_downloads)} entries")
 
-            self._pause_all_aria2_downloads()
+            # ⭐ قفل کردن status برای همه دانلودهای غیر-complete/error
+            for download_id, data in self._all_downloads.items():
+                if data.get("status") not in ("complete", "error", "removed"):
+                    data["status"] = "paused"
+                    # TTL خیلی بلند — تا worker نتونه overwrite کنه
+                    self._pending_status[download_id] = (
+                        "paused",
+                        time.time() + 999999,
+                    )
+
+            for q in self.store.queues:
+                q.paused = True
+                q.manually_paused = True
+            self.store.save()
+
+            print(
+                f"⏸️ [Restore] All downloads set to paused "
+                f"({len(self._all_downloads)} items)"
+            )
 
         finally:
             self.aria2.on_error = original_on_error
@@ -4287,7 +4517,7 @@ class MainWindow(QMainWindow):
 
         for gid in completed_gids:
             try:
-                self.worker.remove_requested.emit(gid)
+                self._worker_remove(gid)
             except Exception:
                 pass
 
@@ -4303,68 +4533,99 @@ class MainWindow(QMainWindow):
         self._update_queue_buttons()
 
     def _manage_schedules(self) -> None:
+        from datetime import datetime
+
+        now = datetime.now()
+        now_time = now.time()
+        now_weekday = now.weekday()  # 0=Monday
+
         for q in self.store.queues:
             if not q.schedule_enabled:
                 continue
 
-            is_scheduled_time = q.is_scheduled_now()
+            # ⭐ مقایسه‌ی مستقیم زمان‌ها (بدون تکیه بر is_scheduled_now)
+            start_t = q.schedule_start
+            end_t = q.schedule_end
+            days = q.days
+            weekday_ok = now_weekday in days if days else True
+
+            # چک کردن بازه
+            if start_t <= end_t:
+                # بازه‌ی معمولی: مثلاً 14:30 - 14:35
+                time_ok = start_t <= now_time <= end_t
+            else:
+                # بازه‌ی wrap-around: مثلاً 23:00 - 02:00
+                time_ok = (now_time >= start_t) or (now_time <= end_t)
+
+            is_scheduled_time = weekday_ok and time_ok
+
             manually_paused = getattr(q, "manually_paused", False)
 
             if is_scheduled_time:
-
+                # داخل بازه
                 if q.paused and not manually_paused:
+                    print(f"▶️ [Schedule] Queue '{q.name}' entering window — starting")
                     q.paused = False
                     q.manually_paused = False
                     self.store.save()
                     self._queue_list_dirty = True
                     self._refresh_queue_list()
 
-                    for gid in q.downloads:
-                        download_type = self._all_downloads.get(gid, {}).get(
-                            "download_type", "normal"
-                        )
-                        if download_type == "youtube":
-                            if (
-                                self._all_downloads.get(gid, {}).get("status")
-                                == "paused"
-                            ):
-                                self._start_youtube_download(gid)
-                        else:
-                            if gid in self._all_downloads:
-                                status = self._all_downloads[gid].get("status", "")
-                                if status == "paused":
-                                    self.worker.resume_requested.emit(gid)
-                                    self._all_downloads[gid]["status"] = "active"
-            else:
+                    for download_id in q.downloads:
+                        data = self._all_downloads.get(download_id, {})
+                        download_type = data.get("download_type", "normal")
 
+                        if download_type == "youtube":
+                            if data.get("status") == "paused":
+                                self._start_youtube_download(download_id)
+                        else:
+                            if download_id in self._all_downloads:
+                                status = self._all_downloads[download_id].get(
+                                    "status", ""
+                                )
+                                if status == "paused":
+                                    self._worker_resume(download_id)
+                                    self._all_downloads[download_id][
+                                        "status"
+                                    ] = "active"
+            else:
+                # خارج از بازه
                 if not q.paused:
+                    print(f"⏸️ [Schedule] Queue '{q.name}' leaving window — pausing")
                     q.paused = True
                     q.manually_paused = False
                     self.store.save()
                     self._queue_list_dirty = True
                     self._refresh_queue_list()
 
-                    for gid in q.downloads:
-                        download_type = self._all_downloads.get(gid, {}).get(
-                            "download_type", "normal"
-                        )
+                    for download_id in q.downloads:
+                        data = self._all_downloads.get(download_id, {})
+                        download_type = data.get("download_type", "normal")
+                        status = data.get("status", "")
 
                         if download_type == "youtube":
-                            if gid in self._all_downloads:
-                                status = self._all_downloads[gid].get("status", "")
+                            if download_id in self._all_downloads:
                                 if status in ["downloading", "active", "waiting"]:
-                                    self._pause_youtube_download(gid)
-                                    self._all_downloads[gid]["status"] = "paused"
+                                    self._pause_youtube_download(download_id)
+                                    self._all_downloads[download_id][
+                                        "status"
+                                    ] = "paused"
                         else:
-                            if gid in self._all_downloads:
-                                status = self._all_downloads[gid].get("status", "")
-                                if status in ["active", "waiting", "downloading"]:
-                                    self.worker.pause_requested.emit(gid)
-                                    self._all_downloads[gid]["status"] = "paused"
-                                    self._all_downloads[gid]["downloadSpeed"] = 0
-                                elif status in ["error", "stopped"]:
+                            if download_id in self._all_downloads:
+                                aria2_gid = data.get("aria2_gid")
 
-                                    self._all_downloads[gid]["status"] = "paused"
+                                if status in ["active", "waiting", "downloading"]:
+                                    self._worker_pause(download_id)
+                                    self._all_downloads[download_id][
+                                        "status"
+                                    ] = "paused"
+                                    self._all_downloads[download_id][
+                                        "downloadSpeed"
+                                    ] = 0
+                                elif status in ["error", "stopped"]:
+                                    self._all_downloads[download_id][
+                                        "status"
+                                    ] = "paused"
 
     def _update_youtube_dialogs(self, youtube_downloads: List[Dict]) -> None:
         for yt_data in youtube_downloads:
@@ -4621,6 +4882,9 @@ class MainWindow(QMainWindow):
     def closeEvent(self, event: QCloseEvent) -> None:
         if self._countdown_timer:
             self._countdown_timer.stop()
+        if self._schedule_timer:
+            self._schedule_timer.stop()
+
         for t in self._retry_timers.values():
             t.stop()
         self._retry_timers.clear()
@@ -4670,6 +4934,9 @@ class MainWindow(QMainWindow):
 
         if self._countdown_timer:
             self._countdown_timer.stop()
+        if self._schedule_timer:
+            self._schedule_timer.stop()
+
         for t in self._retry_timers.values():
             t.stop()
         self._retry_timers.clear()
@@ -4705,7 +4972,7 @@ class MainWindow(QMainWindow):
                         status = self._all_downloads[gid].get("status", "")
                         if status in ["active", "waiting", "downloading"]:
                             if self.worker:
-                                self.worker.pause_requested.emit(gid)
+                                self._worker_pause(gid)
                             self._all_downloads[gid]["status"] = "paused"
                             self._all_downloads[gid]["downloadSpeed"] = 0
                 except Exception:
@@ -4905,7 +5172,7 @@ class MainWindow(QMainWindow):
             self._retrying_gids.discard(download_id)
             return
 
-        max_tries = self.store.settings.get("max_tries", 5)
+        max_tries = self.store.settings.get("max_retry_attempts", 5)
         next_attempt = attempt + 1
 
         if next_attempt > max_tries:
@@ -4933,6 +5200,7 @@ class MainWindow(QMainWindow):
         data["status_detail"] = (
             f"🔄 Retrying in {retry_delay}s... ({next_attempt}/{max_tries})"
         )
+        print(f"🔍 [Retry] Set status_detail='{data['status_detail']}'")
 
         # جلوگیری از overwrite شدن status توسط aria2 stats
         self._pending_status[download_id] = (
@@ -5000,6 +5268,11 @@ class MainWindow(QMainWindow):
                 if data.get("status_detail") != new_detail:
                     data["status_detail"] = new_detail
                     data["status"] = "retrying"
+                    # تمدید _pending_status
+                    self._pending_status[download_id] = (
+                        "retrying",
+                        time.time() + 3.0,
+                    )
                     any_change = True
 
         for download_id in finished:
