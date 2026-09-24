@@ -500,7 +500,7 @@ class MainWindow(QMainWindow):
         self.table.setColumnWidth(2, 180)
         self.table.setColumnWidth(3, 110)
         self.table.setColumnWidth(4, 100)
-        self.table.setColumnWidth(5, 220)
+        self.table.setColumnWidth(5, 150)
 
         self.table.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self.table.customContextMenuRequested.connect(self._context_menu)
@@ -1749,6 +1749,10 @@ class MainWindow(QMainWindow):
             aria2_gid = data.get("aria2_gid")
             if aria2_gid:
                 gid_to_download_id[aria2_gid] = download_id
+        download_to_queue: Dict[str, Queue] = {}
+        for q in self.store.queues:
+            for download_id in q.downloads:
+                download_to_queue[download_id] = q
 
         # ⭐ saved_data با کلید download_id (نه gid)
         saved_data = {}
@@ -1830,6 +1834,22 @@ class MainWindow(QMainWindow):
 
                 old_status = self._all_downloads[download_id].get("status", "")
                 new_status = dl.get("status", "")
+
+                # ⭐ اگه queue paused هست و old_status "paused" بود،
+                # status رو "paused" نگه‌دار (حتی اگه aria2 "waiting"/"active" بگه)
+                parent_queue = download_to_queue.get(download_id)
+                if (
+                    parent_queue
+                    and parent_queue.paused
+                    and new_status in ("waiting", "active")
+                    and old_status == "paused"
+                ):
+                    dl = dict(dl)
+                    dl["status"] = "paused"
+                    dl["downloadSpeed"] = "0"
+                    new_status = "paused"
+
+                
 
                 if download_id in self._retry_state:
                     dl = dict(dl)
@@ -4545,7 +4565,6 @@ class MainWindow(QMainWindow):
             if not q.schedule_enabled:
                 continue
 
-            # ⭐ مقایسه‌ی مستقیم زمان‌ها (بدون تکیه بر is_scheduled_now)
             start_t = q.schedule_start
             end_t = q.schedule_end
             days = q.days
@@ -4553,18 +4572,15 @@ class MainWindow(QMainWindow):
 
             # چک کردن بازه
             if start_t <= end_t:
-                # بازه‌ی معمولی: مثلاً 14:30 - 14:35
                 time_ok = start_t <= now_time <= end_t
             else:
-                # بازه‌ی wrap-around: مثلاً 23:00 - 02:00
                 time_ok = (now_time >= start_t) or (now_time <= end_t)
 
             is_scheduled_time = weekday_ok and time_ok
-
             manually_paused = getattr(q, "manually_paused", False)
 
             if is_scheduled_time:
-                # داخل بازه
+                # ===== داخل بازه‌ی Schedule =====
                 if q.paused and not manually_paused:
                     print(f"▶️ [Schedule] Queue '{q.name}' entering window — starting")
                     q.paused = False
@@ -4590,8 +4606,9 @@ class MainWindow(QMainWindow):
                                     self._all_downloads[download_id][
                                         "status"
                                     ] = "active"
+                                    self._pending_status.pop(download_id, None)
             else:
-                # خارج از بازه
+                # ===== خارج از بازه‌ی Schedule =====
                 if not q.paused:
                     print(f"⏸️ [Schedule] Queue '{q.name}' leaving window — pausing")
                     q.paused = True
@@ -4614,8 +4631,6 @@ class MainWindow(QMainWindow):
                                     ] = "paused"
                         else:
                             if download_id in self._all_downloads:
-                                aria2_gid = data.get("aria2_gid")
-
                                 if status in ["active", "waiting", "downloading"]:
                                     self._worker_pause(download_id)
                                     self._all_downloads[download_id][
@@ -4624,10 +4639,18 @@ class MainWindow(QMainWindow):
                                     self._all_downloads[download_id][
                                         "downloadSpeed"
                                     ] = 0
+                                    self._pending_status[download_id] = (
+                                        "paused",
+                                        time.time() + 3.0,
+                                    )
                                 elif status in ["error", "stopped"]:
                                     self._all_downloads[download_id][
                                         "status"
                                     ] = "paused"
+                                    self._pending_status[download_id] = (
+                                        "paused",
+                                        time.time() + 3.0,
+                                    )
 
     def _update_youtube_dialogs(self, youtube_downloads: List[Dict]) -> None:
         for yt_data in youtube_downloads:

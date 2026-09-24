@@ -264,6 +264,7 @@ class BackendWorker(QThread):
             "stopped": stopped,
             "youtube_downloads": youtube_status,
         }
+
         return snapshot
 
     def _get_complete_download_info(
