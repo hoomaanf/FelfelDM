@@ -254,6 +254,7 @@ class RulesDialog(QDialog):
         self.list_widget = QListWidget()
         self.list_widget.setAlternatingRowColors(True)
         self.list_widget.itemDoubleClicked.connect(self._on_edit)
+        self.list_widget.itemSelectionChanged.connect(self._update_buttons)
         main_layout.addWidget(self.list_widget, 1)
 
         # Buttons row
