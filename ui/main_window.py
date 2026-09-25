@@ -38,6 +38,7 @@ from core.local_server import LocalServer
 from utils.style import setup_style
 from ui.splash import SplashScreen
 from core.proxy_manager import ProxyManager
+from core.rule_engine import expand_path
 
 
 class MainWindow(QMainWindow):
@@ -1849,8 +1850,6 @@ class MainWindow(QMainWindow):
                     dl["downloadSpeed"] = "0"
                     new_status = "paused"
 
-                
-
                 if download_id in self._retry_state:
                     dl = dict(dl)
                     dl.pop("status", None)
@@ -2127,10 +2126,54 @@ class MainWindow(QMainWindow):
         print(f"📂 [Add] URLs: {len(d['urls'])}")
 
         for url in d["urls"]:
+            # ⭐ Apply download rules
+            rule = self.store.rule_engine.find_match(url)
+
+            # Default values from the dialog
             url_options = options.copy()
-            if not is_direct and target_queue.paused:
+            url_queue = target_queue
+            url_path = d["path"]
+            url_connections = d["connections"]
+            url_speed_limit = getattr(target_queue, "speed_limit", 0)
+
+            if rule:
+                # Override queue
+                if rule.queue:
+                    for q in self.store.queues:
+                        if q.name == rule.queue:
+                            url_queue = q
+                            break
+                    else:
+                        url_queue = self._get_or_create_queue(rule.queue)
+
+                # Override folder
+                if rule.folder:
+                    url_path = expand_path(rule.folder)
+
+                # Override connections
+                if rule.connections:
+                    url_connections = rule.connections
+                    url_options["split"] = str(rule.connections)
+                    url_options["max-connection-per-server"] = str(rule.connections)
+
+                # Override speed limit
+                if rule.speed_limit:
+                    url_speed_limit = rule.speed_limit
+
+                # Override dir in aria2 options
+                url_options["dir"] = url_path
+
+                print(
+                    f"🎯 [Rules] '{rule.name}' matched for {url[:50]}... "
+                    f"→ queue='{url_queue.name}', folder='{url_path}', "
+                    f"conn={url_connections}, speed={url_speed_limit}"
+                )
+
+            url_is_direct = url_queue.name == "__direct__"
+            if not url_is_direct and url_queue.paused:
                 url_options["pause"] = "true"
 
+            # ⭐ Add the download to aria2
             gid = self.aria2.add_url(url, url_options)
             if not gid:
                 print(f"❌ [Add] aria2.add_url returned None for URL: {url!r}")
@@ -2141,17 +2184,17 @@ class MainWindow(QMainWindow):
             if gid in self._cleared_gids:
                 self._cleared_gids.remove(gid)
 
-            target_queue.downloads.append(download_id)
+            url_queue.downloads.append(download_id)
 
             clean_name = self._extract_filename(url)
-            full_path = os.path.join(d["path"], clean_name)
+            full_path = os.path.join(url_path, clean_name)
 
-            if is_direct or not target_queue.paused:
+            if url_is_direct or not url_queue.paused:
                 initial_status = "active"
             else:
                 initial_status = "paused"
 
-            target_queue.downloads_info[download_id] = {
+            url_queue.downloads_info[download_id] = {
                 "id": download_id,
                 "aria2_gid": gid,
                 "url": url,
@@ -2162,7 +2205,7 @@ class MainWindow(QMainWindow):
                 "files": [{"path": full_path}],
                 "category": "📁 Other",
                 "download_type": "normal",
-                "save_path": d["path"],
+                "save_path": url_path,
             }
 
             self._all_downloads[download_id] = {
@@ -2179,15 +2222,16 @@ class MainWindow(QMainWindow):
                 "category": "📁 Other",
                 "size_fetch_attempts": 0,
                 "download_type": "normal",
-                "save_path": d["path"],
+                "save_path": url_path,
             }
 
-            if getattr(target_queue, "speed_limit", 0) > 0:
-                self._worker_set_speed_limit(download_id, target_queue.speed_limit)
+            # ⭐ Speed limit: rule > queue > none
+            final_speed = url_speed_limit or getattr(url_queue, "speed_limit", 0)
+            if final_speed > 0:
+                self._worker_set_speed_limit(download_id, final_speed)
 
             new_gids.append(download_id)
             added += 1
-
         self.store.save()
         self._queue_list_dirty = True
         self._refresh_queue_list()

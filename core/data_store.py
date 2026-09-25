@@ -39,6 +39,7 @@ except ImportError:
     KEYRING_AVAILABLE = False
 
 from core.proxy_manager import ProxyConfig
+from core.rule_engine import Rule, RuleEngine
 
 KEYRING_SERVICE = "felfelDM"
 KEYRING_KEY = "aria2_secret"
@@ -270,6 +271,7 @@ class DataStore:
         self.settings = self._get_default_settings()
         self.download_proxies: Dict[str, Any] = {}
         self.youtube_downloads: Dict[str, dict] = {}
+        self.rule_engine = RuleEngine()
 
         self._main_dirty = False
         self._yt_dirty = threading.Event()
@@ -301,7 +303,7 @@ class DataStore:
             "aria2_secret": "",
             "connections": 8,
             "max_tries": 5,
-                        "max_retry_attempts": 5,
+            "max_retry_attempts": 5,
             "max_concurrent": 5,
             "shutdown_after_finish": False,
             "speed_limit": 0,
@@ -430,6 +432,7 @@ class DataStore:
                     self.settings = settings
                     self.download_proxies = data.get("download_proxies", {})
                     self._main_dirty = needs_save_after_migration
+                self.rule_engine.load(data.get("rules", []))
 
                 if needs_save_after_migration:
                     print("💾 [Migration] Saving migrated data.json...")
@@ -533,10 +536,11 @@ class DataStore:
 
             secret = self.settings.pop("aria2_secret", "")
             payload = {
-                "version": DATA_VERSION, 
+                "version": DATA_VERSION,
                 "queues": [q.to_dict() for q in self.queues],
                 "settings": deepcopy(self.settings),
                 "download_proxies": deepcopy(self.download_proxies),
+                "rules": self.rule_engine.to_dict_list(),
             }
             self.settings["aria2_secret"] = secret
 

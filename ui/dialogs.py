@@ -2032,6 +2032,23 @@ class SettingsDialog(QDialog):
         cleanup_layout.addWidget(self.auto_clear_completed)
         general_layout.addWidget(cleanup_group)
 
+        # ─── Download Rules ───
+        rules_group = QGroupBox("Download Rules")
+        rules_layout = QVBoxLayout(rules_group)
+
+        rules_info = QLabel(
+            "Automatically apply actions (queue, folder, speed) based on URL, "
+            "extension, domain, or size."
+        )
+        rules_info.setStyleSheet("color: #95a5a6; font-size: 11px;")
+        rules_info.setWordWrap(True)
+        rules_layout.addWidget(rules_info)
+
+        rules_btn = QPushButton(get_icon("configure"), "Manage Rules...")
+        rules_btn.clicked.connect(self._open_rules_dialog)
+        rules_layout.addWidget(rules_btn)
+        general_layout.addWidget(rules_group)
+
         general_layout.addStretch()
 
         ssl_group = QGroupBox("SSL/TLS Settings")
@@ -2246,6 +2263,21 @@ class SettingsDialog(QDialog):
         notif_layout.addWidget(notif_group)
         notif_layout.addStretch()
         tabs.addTab(notif_tab, get_icon("applications-multimedia"), "Notifications")
+
+    def _open_rules_dialog(self):
+        from ui.rules_dialog import RulesDialog
+
+        if not hasattr(self._main_window, "store"):
+            return
+
+        dlg = RulesDialog(
+            rule_engine=self._main_window.store.rule_engine,
+            queues=self._main_window.store.queues,
+            parent=self,
+        )
+        dlg.exec()
+        # Persist rules to disk
+        self._main_window.store.save()
 
     def _toggle_global_speed(self, checked):
         self.global_speed_spin.setEnabled(checked)
