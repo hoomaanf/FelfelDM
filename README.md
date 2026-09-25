@@ -99,8 +99,6 @@ Rules let you define conditions and actions that are applied automatically when 
 
 **Where to configure:** Settings → General → Download Rules → Manage Rules...
 
-**Import/Export:** Rules can be exported to JSON for backup and imported back.
-
 ### 🎯 Preview Sizes Before Downloading
 
 No need to add the file to see its size! When you enter URLs:
