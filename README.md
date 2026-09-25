@@ -813,4 +813,3 @@ python3 main.py
 <div align="center">
   <sub>Built with ❤️ and 🌶️</sub>
 </div>
-```
