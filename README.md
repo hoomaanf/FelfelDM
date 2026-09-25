@@ -57,6 +57,7 @@ bash <(curl -s https://raw.githubusercontent.com/hoomaanf/FelfelDM/main/install.
 - 🚀 **Multiple Queues** — Create and manage multiple download queues
 - ⏰ **Scheduled Downloads** — Set time windows for automatic downloads
 - 📊 **Real-time Progress** — Live download speed and progress tracking
+- 🎯 **Download Rules** — Automatically apply queue, folder, connections, and speed limit based on URL pattern, extension, domain, or file size
 - 🎯 **Smart Management** — Intelligent auto-retry with configurable delay, pause/resume, and error handling
 - 🔄 **Smart Retry** — Automatically retry transient errors (timeout, 5xx, 429) with a configurable delay; fail fast on permanent errors (404, 403, 401, TLS/certificate issues)
 - ⏱️ **Countdown Retry** — Live countdown in the Status column while waiting between retry attempts (e.g. `🔄 Retrying in 5s... (2/5)`)
@@ -64,6 +65,41 @@ bash <(curl -s https://raw.githubusercontent.com/hoomaanf/FelfelDM/main/install.
 - 🎵 **YouTube Download** — Download videos and audio from YouTube with dynamic quality selection
 - 📋 **Details Panel** — View download details (name, size, downloaded, status, path) with quick actions
 - ⌨️ **Keyboard Shortcuts** — Full keyboard navigation for power users
+
+### Download Rules
+
+Rules let you define conditions and actions that are applied automatically when a new download is added.
+
+**Conditions (all must match — AND logic):**
+
+| Condition        | Example                       | Description                                  |
+| ---------------- | ----------------------------- | -------------------------------------------- |
+| **URL contains** | `.iso`                        | Substring match (case-insensitive)           |
+| **URL regex**    | `^https?://.*\.iso$`          | Regular expression match                     |
+| **Extension is** | `iso`, `zip`, `mp4`           | File extension (with or without dot)         |
+| **Domain is**    | `github.com` / `*.github.com` | Hostname (exact or subdomain match)          |
+| **Size**         | `500M` to `5G`                | File size range (supports B, KB, MB, GB, TB) |
+
+**Actions:**
+
+| Action          | Example           | Description                                      |
+| --------------- | ----------------- | ------------------------------------------------ |
+| **Queue**       | `Linux ISOs`      | Send download to a specific queue                |
+| **Folder**      | `~/Downloads/ISO` | Save to a specific folder (supports ~ expansion) |
+| **Connections** | `8`               | Number of parallel connections                   |
+| **Speed limit** | `500` KB/s        | Per-download speed limit                         |
+
+**How it works:**
+
+- Rules are evaluated **top-to-bottom**; the **first match wins**
+- Rules are applied **only when adding a new download** (not to downloads already in progress)
+- The matched rule's name is shown in the download list: `file.zip  [rule: Linux ISOs]`
+- Rules survive app restarts and are re-applied automatically
+- Rule speed limit **overrides** queue speed limit when both are set
+
+**Where to configure:** Settings → General → Download Rules → Manage Rules...
+
+**Import/Export:** Rules can be exported to JSON for backup and imported back.
 
 ### 🎯 Preview Sizes Before Downloading
 
@@ -128,6 +164,7 @@ The "Remove & Delete Files" operation no longer freezes the UI:
 - 🚀 **Parallel Size Fetching** — Fetch sizes for multiple URLs in parallel
 - 🎯 **Preview Before Download** — See file sizes and select files before adding them
 - 🏗️ **Robust Download Tracking** — UUID-based internal identifiers keep downloads stable across retries and restarts
+- 📋 **Rules Manager UI** — Card-based interface to add/edit/delete/reorder rules with live preview
 
 ### YouTube Download Features
 
@@ -479,6 +516,24 @@ _all_downloads[download_id]["aria2_gid"] = new_gid
 # Only one field changes — everything else stays intact
 ```
 
+### Download Rules Flow
+
+```
+Add Download
+    ↓
+rule_engine.find_match(url)
+    ↓
+[Rule matched]
+    ↓
+Override queue / folder / connections / speed limit
+    ↓
+Store matched rule name + speed limit in _all_downloads[download_id]
+    ↓
+[Restart]
+    ↓
+Re-apply rule on restore — matched_rule survives
+```
+
 ### Retry State Machine
 
 ```
@@ -520,6 +575,7 @@ FelfelDM/
     │   ├── proxy_manager.py           # Proxy configuration
     │   ├── queue_model.py             # Queue data model
     │   ├── queue_worker.py            # Queue operation worker
+    │   ├── rule_engine.py             # Download rules engine
     │   ├── size_fetcher_worker.py     # Parallel size fetcher (5 threads)
     │   ├── temp_db.py                 # Temporary in-memory database
     │   ├── worker.py                  # Background download worker
@@ -534,6 +590,7 @@ FelfelDM/
     │   ├── export_manager.py          # Export manager
     │   ├── main_window.py             # Main application window
     │   ├── proxy_dialog.py            # Proxy settings dialog
+    │   ├── rules_dialog.py            # Rules manager dialog
     │   ├── splash.py                  # Splash screen
     │   ├── table_model.py             # Download table model
     │   ├── update_dialog.py           # Update dialog
@@ -676,6 +733,20 @@ chmod +x uninstall.sh
 2. Permanent errors (404, 403, 401, TLS) are **not** retried by design
 3. Transient errors (timeout, 5xx) are retried with the configured delay
 4. The Status column shows the countdown: `🔄 Retrying in 5s... (2/5)`
+
+### Rules not being applied
+
+1. Check that the rule is **enabled** in Settings → Download Rules
+2. Rules are evaluated **top-to-bottom**; the first match wins — make sure no earlier rule matches first
+3. Rules only apply to **new downloads** — downloads already in progress are not affected
+4. Check the console for `🎯 [Rules] '<name>' matched for ...` messages
+5. If the rule has a regex, make sure it's valid (the dialog shows a live validation indicator)
+
+### Rule speed limit not working
+
+1. Rule speed limit **overrides** queue speed limit — if both are set, the rule's value wins
+2. Make sure the rule is matched (check `[rule: ...]` badge next to the download name)
+3. Check the console for `⚡ [SpeedLimit]` messages
 
 ### Speed limit not being applied
 
