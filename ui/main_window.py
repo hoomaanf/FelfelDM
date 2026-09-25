@@ -1137,13 +1137,23 @@ class MainWindow(QMainWindow):
                     "size_fetch_attempts": 0,
                     "error_count": info.get("error_count", 0),
                     "errorMessage": info.get("errorMessage", ""),
+                    "matched_rule": info.get("matched_rule"),
+                    "rule_speed_limit": info.get("rule_speed_limit", 0),
                 }
                 self._all_downloads[download_id] = row.copy()
 
-            if search_text and search_text not in row.get("name", "").lower():
+            display_name = row.get("name", "Unknown")
+            matched_rule = row.get("matched_rule")
+            if matched_rule:
+                display_row = row.copy()
+                display_row["name"] = f"{display_name}  [rule: {matched_rule}]"
+            else:
+                display_row = row
+
+            if search_text and search_text not in display_name.lower():
                 continue
 
-            rows.append(row)
+            rows.append(display_row)
 
         self.model.update_rows(rows)
 
@@ -1818,12 +1828,25 @@ class MainWindow(QMainWindow):
                         and download_id not in self._retrying_gids
                         and download_id not in self._pending_status
                     ):
-                        for key in ["status", "downloadSpeed"]:
-                            if key in dl:
-                                self._all_downloads[download_id][key] = dl[key]
-                    # files رو همیشه آپدیت کن
-                    if "files" in dl:
-                        self._all_downloads[download_id]["files"] = dl["files"]
+                        # ⭐ اگه صف paused هست، status رو paused نگه‌دار
+                        parent_queue = download_to_queue.get(download_id)
+                        if (
+                            parent_queue
+                            and parent_queue.paused
+                            and dl.get("status") in ("waiting", "active")
+                        ):
+                            # status رو overwrite نکن
+                            if "files" in dl:
+                                self._all_downloads[download_id]["files"] = dl["files"]
+                        else:
+                            for key in ["status", "downloadSpeed"]:
+                                if key in dl:
+                                    self._all_downloads[download_id][key] = dl[key]
+                            if "files" in dl:
+                                self._all_downloads[download_id]["files"] = dl["files"]
+                    else:
+                        if "files" in dl:
+                            self._all_downloads[download_id]["files"] = dl["files"]
 
                     self._all_downloads[download_id]["totalLength"] = saved_data[
                         download_id
@@ -1839,6 +1862,7 @@ class MainWindow(QMainWindow):
                 # ⭐ اگه queue paused هست و old_status "paused" بود،
                 # status رو "paused" نگه‌دار (حتی اگه aria2 "waiting"/"active" بگه)
                 parent_queue = download_to_queue.get(download_id)
+
                 if (
                     parent_queue
                     and parent_queue.paused
@@ -2206,6 +2230,10 @@ class MainWindow(QMainWindow):
                 "category": "📁 Other",
                 "download_type": "normal",
                 "save_path": url_path,
+                "matched_rule": rule.name if rule else None,
+                "rule_speed_limit": (
+                    rule.speed_limit if rule and rule.speed_limit else 0
+                ),
             }
 
             self._all_downloads[download_id] = {
@@ -2223,7 +2251,16 @@ class MainWindow(QMainWindow):
                 "size_fetch_attempts": 0,
                 "download_type": "normal",
                 "save_path": url_path,
+                "matched_rule": rule.name if rule else None,
+                "rule_speed_limit": (
+                    rule.speed_limit if rule and rule.speed_limit else 0
+                ),
             }
+
+            rule_speed_for_this = 0
+            if rule and rule.speed_limit:
+                rule_speed_for_this = rule.speed_limit
+                self._all_downloads[download_id]["rule_speed_limit"] = rule.speed_limit
 
             # ⭐ Speed limit: rule > queue > none
             final_speed = url_speed_limit or getattr(url_queue, "speed_limit", 0)
@@ -2258,6 +2295,12 @@ class MainWindow(QMainWindow):
                 except Exception as e:
                     print(f"⚠️ Could not resume {download_id}: {e}")
             self.store.save()
+            
+            for download_id in new_gids:
+                QTimer.singleShot(
+                    300,  # کمی صبر تا دانلود توی UI ثبت بشه
+                    lambda did=download_id: self._open_progress_dialog(did),
+                )
 
         if is_direct:
             msg = f"✅ Added {added} download(s) to Direct Downloads (started)"
@@ -2523,7 +2566,6 @@ class MainWindow(QMainWindow):
         QShortcut(QKeySequence("Ctrl+Tab"), self, self._next_queue)
         QShortcut(QKeySequence("Ctrl+Shift+Tab"), self, self._prev_queue)
 
-        QShortcut(QKeySequence("Ctrl+,"), self, self._open_settings)
         QShortcut(QKeySequence("F5"), self, self._refresh_table)
         QShortcut(QKeySequence("F1"), self, self._show_shortcuts)
 
@@ -3587,20 +3629,38 @@ class MainWindow(QMainWindow):
         except Exception as e:
             print(f"⚠️ [SpeedLimit] Failed to set global limit: {e}")
 
+    def _get_effective_speed_limit(self, download_id: str, q: Optional[Queue]) -> int:
+        """
+        محاسبه‌ی speed limit نهایی برای یه دانلود.
+        اولویت: rule > queue > global (صفر یعنی بدون محدودیت)
+        """
+        # اگه rule قبلاً برای این دانلود اعمال شده، از یه فیلد جدا نگه‌داری کن
+        data = self._all_downloads.get(download_id, {})
+        rule_speed = data.get("rule_speed_limit", 0)
+        if rule_speed > 0:
+            return rule_speed
+
+        if q and q.speed_limit > 0:
+            return q.speed_limit  # تقسیمش توی caller انجام می‌شه
+
+        return 0
+
     def _apply_queue_speed_limit(self, q: Optional[Queue]) -> None:
         """
         اعمال محدودیت سرعت صف.
-
-        منطق: q.speed_limit = سرعت کل صف (KB/s)
-        بین دانلودهای active/Downloading تقسیم می‌شه.
+        بین دانلودهای active تقسیم می‌شه.
+        دانلودهایی که rule speed دارن، دست‌نخورده می‌مونن.
         """
         if not q or not self.aria2:
             return
 
         if q.speed_limit <= 0:
-            # صف بدون محدودیت — محدودیت همه دانلودها رو پاک کن
+            # ⭐ صف بدون محدودیت — فقط دانلودهایی که rule speed ندارن آزاد شن
             for download_id in q.downloads:
                 data = self._all_downloads.get(download_id, {})
+                if data.get("rule_speed_limit", 0) > 0:
+                    # rule speed داره — دست نزن
+                    continue
                 aria2_gid = data.get("aria2_gid")
                 if aria2_gid:
                     try:
@@ -3609,7 +3669,7 @@ class MainWindow(QMainWindow):
                         pass
             return
 
-        # شمارش دانلودهای فعال/در انتظار
+        # صف speed داره
         active_downloads = []
         for download_id in q.downloads:
             data = self._all_downloads.get(download_id, {})
@@ -3620,17 +3680,33 @@ class MainWindow(QMainWindow):
         if not active_downloads:
             return
 
-        # تقسیم سرعت بین دانلودها
-        n = len(active_downloads)
-        per_download = max(1, q.speed_limit // n)
+        # ⭐ دانلودهایی که rule speed دارن رو از تقسیم‌بندی خارج کن
+        rule_downloads = [
+            d
+            for d in active_downloads
+            if self._all_downloads.get(d, {}).get("rule_speed_limit", 0) > 0
+        ]
+        queue_downloads = [d for d in active_downloads if d not in rule_downloads]
 
-        print(
-            f"⚡ [SpeedLimit] Queue '{q.name}': {q.speed_limit}K total "
-            f"split over {n} → {per_download}K each"
-        )
+        # سهم صف بین دانلودهای بدون rule تقسیم می‌شه
+        if queue_downloads:
+            n = len(queue_downloads)
+            per_download = max(1, q.speed_limit // n)
 
-        for download_id in active_downloads:
-            self._worker_set_speed_limit(download_id, per_download)
+            print(
+                f"⚡ [SpeedLimit] Queue '{q.name}': {q.speed_limit}K total "
+                f"split over {n} queue downloads → {per_download}K each "
+                f"({len(rule_downloads)} rule-limited downloads untouched)"
+            )
+
+            for download_id in queue_downloads:
+                self._worker_set_speed_limit(download_id, per_download)
+
+        # rule downloads رو دوباره اعمال کن (شاید overwrite شده باشن)
+        for download_id in rule_downloads:
+            rule_speed = self._all_downloads[download_id].get("rule_speed_limit", 0)
+            if rule_speed > 0:
+                self._worker_set_speed_limit(download_id, rule_speed)
 
     def _apply_proxy_to_aria2(self) -> None:
         proxy = self.proxy_manager.get_proxy_for_queue(None)
@@ -3815,10 +3891,15 @@ class MainWindow(QMainWindow):
             return
 
         real_status = self._all_downloads[gid].get("status", "")
-        if real_status in ["active", "waiting"]:
+        if real_status in ["active", "waiting", "downloading"]:
             self._worker_pause(gid)
             self._all_downloads[gid]["status"] = "paused"
             self._all_downloads[gid]["downloadSpeed"] = 0
+            # ⭐ قفل status برای جلوگیری از overwrite توسط worker
+            self._pending_status[gid] = (
+                "paused",
+                time.time() + 5.0,
+            )
             self.store.save()
             self._refresh_table()
             self._update_queue_buttons()
@@ -3842,6 +3923,12 @@ class MainWindow(QMainWindow):
         if real_status == "paused":
             self._worker_resume(gid)
             self._all_downloads[gid]["status"] = "active"
+            # ⭐ قفل status برای جلوگیری از overwrite توسط worker
+            self._pending_status[gid] = (
+                "active",
+                time.time() + 5.0,
+            )
+            # ⭐ پاک کردن قفل paused از صف
             self.store.mark_dirty()
             self._refresh_table()
             self._update_queue_buttons()
@@ -3919,6 +4006,15 @@ class MainWindow(QMainWindow):
                 self._pause_youtube_download(gid)
                 return
 
+            # ⭐ آپدیت UI + قفل status
+            self._all_downloads[gid]["status"] = "paused"
+            self._all_downloads[gid]["downloadSpeed"] = 0
+            self._pending_status[gid] = (
+                "paused",
+                time.time() + 5.0,
+            )
+            self._refresh_table()
+
         self._worker_pause(gid)
 
     def _resume_selected(self) -> None:
@@ -3943,6 +4039,11 @@ class MainWindow(QMainWindow):
             if real_status == "paused":
                 self._worker_resume(gid)
                 self._all_downloads[gid]["status"] = "active"
+                # ⭐ قفل status
+                self._pending_status[gid] = (
+                    "active",
+                    time.time() + 5.0,
+                )
                 self.store.mark_dirty()
                 self._refresh_table()
                 self._update_queue_buttons()
@@ -3951,10 +4052,14 @@ class MainWindow(QMainWindow):
             if real_status == "waiting":
                 self._worker_resume(gid)
                 self._all_downloads[gid]["status"] = "active"
+                # ⭐ قفل status
+                self._pending_status[gid] = (
+                    "active",
+                    time.time() + 5.0,
+                )
                 self.store.mark_dirty()
                 self._refresh_table()
                 self._update_queue_buttons()
-
     def _retry_single_download(self, gid: str) -> None:
         if not gid or gid not in self._all_downloads:
             return
@@ -4452,6 +4557,21 @@ class MainWindow(QMainWindow):
                                 f"({aria2_gid}) → marking as error for re-add"
                             )
 
+                            # ⭐ rule رو دوباره match کن تا بعد از restart هم اسمش بمونه
+                    matched_rule_name = info.get("matched_rule")
+                    rule_speed = info.get("rule_speed_limit", 0)
+
+                    url = info.get("url", "")
+                    if url and download_type == "normal":
+                        try:
+                            _rule = self.store.rule_engine.find_match(url)
+                            if _rule:
+                                matched_rule_name = _rule.name
+                                if _rule.speed_limit:
+                                    rule_speed = _rule.speed_limit
+                        except Exception as e:
+                            print(f"⚠️ [Restore] Rule match failed for {url}: {e}")
+
                     self._all_downloads[download_id] = {
                         "id": download_id,
                         "aria2_gid": aria2_gid,
@@ -4468,11 +4588,15 @@ class MainWindow(QMainWindow):
                         "size_fetch_attempts": (1 if total_length > 0 else 0),
                         "error_count": 0,
                         "download_type": download_type,
+                        "matched_rule": matched_rule_name,
+                        "rule_speed_limit": rule_speed,
                     }
 
                     q.downloads_info[download_id]["status"] = final_status
                     q.downloads_info[download_id]["totalLength"] = total_length
                     q.downloads_info[download_id]["aria2_gid"] = aria2_gid
+                    q.downloads_info[download_id]["matched_rule"] = matched_rule_name
+                    q.downloads_info[download_id]["rule_speed_limit"] = rule_speed
                     restored_count += 1
 
                 for download_id in to_remove:

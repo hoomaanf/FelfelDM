@@ -267,6 +267,36 @@ class AddDownloadDialog(QDialog):
         table_layout.addWidget(self.fetch_progress)
         table_layout.addSpacing(6)
 
+        # ── Rule info banner (hidden by default) ──
+        self.rule_banner = QFrame()
+        self.rule_banner.setObjectName("rule_banner")
+        self.rule_banner.setStyleSheet("""
+            QFrame#rule_banner {
+                background-color: rgba(137, 180, 250, 0.15);
+                border: 1px solid #89b4fa;
+                border-radius: 4px;
+                padding: 6px;
+            }
+        """)
+        self.rule_banner.setVisible(False)
+
+        banner_layout = QHBoxLayout(self.rule_banner)
+        banner_layout.setContentsMargins(8, 4, 8, 4)
+        banner_layout.setSpacing(8)
+
+        self.rule_banner_icon = QLabel("🎯")
+        self.rule_banner_icon.setStyleSheet("font-size: 16px;")
+        banner_layout.addWidget(self.rule_banner_icon)
+
+        self.rule_banner_label = QLabel("")
+        self.rule_banner_label.setWordWrap(True)
+        self.rule_banner_label.setStyleSheet(
+            "color: #89b4fa; font-size: 11px; font-weight: 500;"
+        )
+        banner_layout.addWidget(self.rule_banner_label, 1)
+
+        table_layout.addWidget(self.rule_banner)
+
         # ── Table ──
         self.table = QTableWidget(0, 4, self)
         self.table.setHorizontalHeaderLabels(["", "Filename", "Size", "Status"])
@@ -510,6 +540,7 @@ class AddDownloadDialog(QDialog):
         self._url_to_status = {}
 
         self._populate_table(urls)
+        self._update_rule_banner(urls)
 
         self._set_progress_state(
             f"Fetching sizes... (0/{len(urls)})",
@@ -525,6 +556,56 @@ class AddDownloadDialog(QDialog):
         self._fetcher.progress.connect(self._on_fetch_progress)
         self._fetcher.all_done.connect(self._on_fetch_done)
         self._fetcher.start()
+
+    def _update_rule_banner(self, urls):
+        """Check which URLs match a rule and show the banner."""
+        if not self._main_window or not hasattr(self._main_window, "store"):
+            self.rule_banner.setVisible(False)
+            return
+
+        rule_engine = self._main_window.store.rule_engine
+
+        # Find matches for each URL
+        matches = []
+        for url in urls:
+            rule = rule_engine.find_match(url)
+            if rule:
+                matches.append((url, rule))
+
+        if not matches:
+            self.rule_banner.setVisible(False)
+            return
+
+        # Build banner text
+        if len(matches) == 1:
+            url, rule = matches[0]
+            filename = self._extract_filename(url)
+            actions = []
+            if rule.queue:
+                actions.append(f"Queue: {rule.queue}")
+            if rule.folder:
+                actions.append(f"Folder: {rule.folder}")
+            if rule.connections:
+                actions.append(f"Connections: {rule.connections}")
+            if rule.speed_limit:
+                actions.append(f"Speed: {rule.speed_limit} KB/s")
+
+            actions_str = "  •  ".join(actions) if actions else "(no actions)"
+            self.rule_banner_label.setText(
+                f"Rule '<b>{rule.name}</b>' will be applied to "
+                f"'{filename}'<br>"
+                f"<span style='font-size: 10px; color: #a6adc8;'>{actions_str}</span>"
+            )
+        else:
+            # Multiple matches
+            rule_names = list({rule.name for _, rule in matches})
+            self.rule_banner_label.setText(
+                f"<b>{len(matches)}</b> URL(s) will match "
+                f"<b>{len(rule_names)}</b> rule(s): "
+                f"{', '.join(rule_names)}"
+            )
+
+        self.rule_banner.setVisible(True)
 
     def _set_progress_state(self, message: str, value: int, maximum: int):
         """Update progress bar text and value."""
