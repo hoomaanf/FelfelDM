@@ -1694,7 +1694,8 @@ class MainWindow(QMainWindow):
             if not gid:
                 continue
             new_status = dl.get("status", "")
-            if new_status in ("error", "stopped"):
+            # ⭐ فقط error های واقعی، نه stopped (stopped یعنی pause/remove)
+            if new_status == "error":
                 download_id = None
                 for did, ddata in self._all_downloads.items():
                     if ddata.get("aria2_gid") == gid:
@@ -1702,10 +1703,22 @@ class MainWindow(QMainWindow):
                         break
                 if download_id:
                     old_status = self._all_downloads[download_id].get("status", "")
-                    if old_status not in ("error", "stopped"):
+                    # ⭐ اگه قبلاً paused بوده، error نده
+                    if old_status not in ("error", "stopped", "paused"):
                         new_errors.append((download_id, dl.get("errorMessage", "")))
 
         self._update_downloads_from_stats(downloads_list)
+
+        for dl in downloads_list:
+            if isinstance(dl, dict):
+                gid = dl.get("gid")
+                status = dl.get("status")
+                speed = dl.get("downloadSpeed")
+                completed = dl.get("completedLength")
+                if status in ("active", "waiting"):
+                    print(
+                        f"🔍 [aria2] gid={gid[:12] if gid else None}, status={status}, speed={speed}, completed={completed}"
+                    )
 
         for download_id, error_msg in new_errors:
             self._on_download_error(download_id, error_msg)
@@ -1890,6 +1903,19 @@ class MainWindow(QMainWindow):
                             dl.pop("status", None)
                             dl.pop("downloadSpeed", None)
                             new_status = old_status
+
+                if new_status == "stopped":
+                    parent_queue = download_to_queue.get(download_id)
+                    if parent_queue and parent_queue.paused:
+                        dl = dict(dl)
+                        dl["status"] = "paused"
+                        dl["downloadSpeed"] = "0"
+                        new_status = "paused"
+                    elif old_status == "paused":
+                        dl = dict(dl)
+                        dl["status"] = "paused"
+                        dl["downloadSpeed"] = "0"
+                        new_status = "paused"
 
                 if new_status in ["complete", "completed"] and old_status not in [
                     "complete",
@@ -2295,7 +2321,7 @@ class MainWindow(QMainWindow):
                 except Exception as e:
                     print(f"⚠️ Could not resume {download_id}: {e}")
             self.store.save()
-            
+
             for download_id in new_gids:
                 QTimer.singleShot(
                     300,  # کمی صبر تا دانلود توی UI ثبت بشه
@@ -4060,6 +4086,7 @@ class MainWindow(QMainWindow):
                 self.store.mark_dirty()
                 self._refresh_table()
                 self._update_queue_buttons()
+
     def _retry_single_download(self, gid: str) -> None:
         if not gid or gid not in self._all_downloads:
             return
@@ -5328,6 +5355,10 @@ class MainWindow(QMainWindow):
 
     def _on_download_error(self, download_id: str, error_msg: str) -> None:
         """وقتی یه دانلود تازه error می‌خوره، این صدا زده می‌شه."""
+        print(
+            f"🔴 [Error] _on_download_error CALLED for {download_id[:12]}, msg={error_msg[:100]!r}"
+        )
+
         data = self._all_downloads.get(download_id)
         if not data:
             return
@@ -5341,6 +5372,83 @@ class MainWindow(QMainWindow):
         if download_id in self._retry_state:
             return
 
+        # ⭐ اگه پیام خطا خالیه، احتمالاً timeout موقتی هست
+        if not error_msg or not error_msg.strip():
+            print(
+                f"⏭️ [Retry] Empty error for {download_id[:12]} — letting aria2 retry"
+            )
+            return
+
+        # ⭐ اگه خطا موقتی هست، به aria2 فرصت بده خودش retry کنه
+        error_lower = error_msg.lower()
+        transient_errors = [
+            "timeout",
+            "connection",
+            "network",
+            "temporary",
+            "reset by peer",
+            "timed out",
+            "no route",
+            "unreachable",
+            "no uri available",
+            "name resolution",
+            "could not contact dns",
+            "dns servers",
+            "could not resolve",
+            "unable to resolve",
+            "resource temporarily",
+            "try again",
+            "service unavailable",
+            "bad gateway",
+            "gateway timeout",
+            "internal server error",
+        ]
+        if any(t in error_lower for t in transient_errors):
+            print(
+                f"⏭️ [Retry] Transient error for {download_id[:12]} — will retry: {error_msg[:60]}"
+            )
+
+            # ⭐ چک کن status واقعی aria2 چیه
+            aria2_gid = data.get("aria2_gid")
+            if aria2_gid and self.aria2:
+                try:
+                    status_data = self.aria2.get_status(aria2_gid)
+                    if status_data:
+                        real_status = status_data.get("status", "")
+                        print(
+                            f"🔍 [Retry] aria2 status for {aria2_gid[:12]}: {real_status}"
+                        )
+
+                        if real_status == "error":
+                            # ⭐ aria2 خودش retry نکرده — باید re-add کنیم
+                            print(
+                                f"🔄 [Retry] aria2 gave up — scheduling re-add for {download_id[:12]}"
+                            )
+                            self._retrying_gids.add(download_id)
+                            error_count = self._to_int(data.get("error_count", 0))
+                            self._schedule_retry(download_id, error_count)
+                            return
+
+                        elif real_status in ("paused", "stopped", "waiting"):
+                            # ⭐ دوباره unpause کن
+                            self.aria2.resume(aria2_gid)
+                            data["status"] = "active"
+                            print(f"▶️ [Retry] Unpaused {aria2_gid[:12]}")
+                            return
+
+                        elif real_status == "active":
+                            # aria2 خودش داره تلاش می‌کنه، کاری نکن
+                            print(
+                                f"⏳ [Retry] aria2 is still active for {aria2_gid[:12]}"
+                            )
+                            return
+
+                except Exception as e:
+                    print(f"⚠️ [Retry] Could not check status: {e}")
+
+            return
+
+        print(f"🔴 [Retry] Permanent error for {download_id[:12]} — scheduling retry")
         self._retrying_gids.add(download_id)
 
         if error_msg:
