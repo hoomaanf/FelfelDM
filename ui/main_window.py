@@ -19,6 +19,8 @@ from core import (
     BackendWorker,
     TempDB,
     QueueOperationWorker,
+    ScheduleManagerThread,
+    ScheduleConfig,
 )
 from ui.dialogs import *
 from ui.table_model import DownloadTableModel
@@ -72,6 +74,8 @@ class MainWindow(QMainWindow):
         self._init_services()
         self._setup_shortcuts()
 
+        self._startup_complete = True
+
         if self.store.settings.get("start_minimized", False):
             QTimer.singleShot(0, self._minimize_to_tray)
 
@@ -119,6 +123,10 @@ class MainWindow(QMainWindow):
         self._last_tray_state = False
         self._startup_complete = False
         self.export_manager = ExportManager(self)
+        self.schedule_thread = ScheduleManagerThread(check_interval=5.0)
+        self.schedule_thread.start_queue.connect(self._on_schedule_start)
+        self.schedule_thread.pause_queue.connect(self._on_schedule_pause)
+        self.schedule_thread.start()
 
     def _init_ui(self) -> None:
         theme_setting: str = self.store.settings.get("theme", "auto")
@@ -146,11 +154,6 @@ class MainWindow(QMainWindow):
         self._countdown_timer = QTimer(self)
         self._countdown_timer.setInterval(1000)
         self._countdown_timer.timeout.connect(self._tick_retry_countdown)
-
-        self._schedule_timer = QTimer(self)
-        self._schedule_timer.setInterval(1000)
-        self._schedule_timer.timeout.connect(self._manage_schedules)
-        self._schedule_timer.start()
 
     def _init_backend(self) -> None:
         if self.splash is None:
@@ -201,7 +204,7 @@ class MainWindow(QMainWindow):
         self.splash.update_status("Restoring downloads...", 93)
         QApplication.processEvents()
         self._restore_downloads()
-
+        self._load_schedules()
         self.speed_update_timer = QTimer()
         self.speed_update_timer.timeout.connect(self._update_speed_display)
         self.speed_update_timer.start(300)
@@ -209,8 +212,6 @@ class MainWindow(QMainWindow):
         self.splash.update_status("Ready!", 100)
         QApplication.processEvents()
         QTimer.singleShot(800, self._close_splash)
-
-        self._startup_complete = False
 
     def _init_services(self) -> None:
         if self.splash:
@@ -307,6 +308,53 @@ class MainWindow(QMainWindow):
                 "aria2 Not Found",
                 "aria2 is not installed.",
             )
+
+    def _on_schedule_start(self, queue_name: str):
+        print(f"▶️ [Schedule] Starting queue: {queue_name}")
+
+        for i, q in enumerate(self.store.queues):
+            if q.name == queue_name:
+
+                self._current_queue_idx = i
+                self._refresh_queue_list()
+
+                if q.paused:
+                    q.paused = False
+                    q.manually_paused = False
+                    self.store.save()
+                    self._start_current_queue()
+                break
+
+    def _on_schedule_pause(self, queue_name: str):
+        print(f"⏸️ [Schedule] Pausing queue: {queue_name}")
+
+        for i, q in enumerate(self.store.queues):
+            if q.name == queue_name:
+                self._current_queue_idx = i
+                self._refresh_queue_list()
+
+                if not q.paused:
+                    q.paused = True
+                    q.manually_paused = False
+                    self.store.save()
+                    self._pause_current_queue()
+                break
+
+    def _load_schedules(self):
+        schedules = []
+        for q in self.store.queues:
+            if q.schedule_enabled:
+                schedules.append(
+                    ScheduleConfig(
+                        queue_name=q.name,
+                        start=q.schedule_start,
+                        end=q.schedule_end,
+                        days=set(q.days),
+                        enabled=True,
+                    )
+                )
+        self.schedule_thread.set_schedules(schedules)
+        print(f"📅 [Schedule] Loaded {len(schedules)} schedule(s)")
 
     def _stop_own_aria2(self) -> None:
         """Stop only the aria2 instance we started"""
@@ -778,7 +826,7 @@ class MainWindow(QMainWindow):
                 self._all_downloads[gid]["status"] = "waiting"
                 if gid in q.downloads_info:
                     q.downloads_info[gid]["status"] = "waiting"
-                # ⭐ پاک کردن _pending_status تا worker بتونه status رو آپدیت کنه
+
                 self._pending_status.pop(gid, None)
 
         q.manually_paused = False
@@ -1003,10 +1051,6 @@ class MainWindow(QMainWindow):
             return 0
 
     def _get_aria2_gid(self, download_id: str) -> Optional[str]:
-        """
-        دریافت aria2_gid از download_id.
-        worker فقط aria2_gid رو می‌فهمه.
-        """
         if not download_id:
             return None
         data = self._all_downloads.get(download_id)
@@ -1574,8 +1618,15 @@ class MainWindow(QMainWindow):
 
     def _update_shutdown_button_state(self) -> None:
         q = self._current_queue()
+
         if not q or q.name == "__direct__" or len(q.downloads) == 0:
             self.shutdown_cb.setEnabled(False)
+            if self.shutdown_cb.isChecked():
+                self.shutdown_cb.blockSignals(True)
+                self.shutdown_cb.setChecked(False)
+                self.shutdown_cb.blockSignals(False)
+                self.store.settings["shutdown_after_finish"] = False
+                self.store.save()
             return
 
         all_complete = all(
@@ -1694,7 +1745,7 @@ class MainWindow(QMainWindow):
             if not gid:
                 continue
             new_status = dl.get("status", "")
-            # ⭐ فقط error های واقعی، نه stopped (stopped یعنی pause/remove)
+
             if new_status == "error":
                 download_id = None
                 for did, ddata in self._all_downloads.items():
@@ -1703,7 +1754,7 @@ class MainWindow(QMainWindow):
                         break
                 if download_id:
                     old_status = self._all_downloads[download_id].get("status", "")
-                    # ⭐ اگه قبلاً paused بوده، error نده
+
                     if old_status not in ("error", "stopped", "paused"):
                         new_errors.append((download_id, dl.get("errorMessage", "")))
 
@@ -1715,10 +1766,6 @@ class MainWindow(QMainWindow):
                 status = dl.get("status")
                 speed = dl.get("downloadSpeed")
                 completed = dl.get("completedLength")
-                if status in ("active", "waiting"):
-                    print(
-                        f"🔍 [aria2] gid={gid[:12] if gid else None}, status={status}, speed={speed}, completed={completed}"
-                    )
 
         for download_id, error_msg in new_errors:
             self._on_download_error(download_id, error_msg)
@@ -1767,7 +1814,7 @@ class MainWindow(QMainWindow):
             self._check_already_complete()
 
     def _update_downloads_from_stats(self, downloads_list: List[Dict]) -> None:
-        # ⭐ ساخت نگاشت GID → download_id (از state ذخیره‌شده)
+
         gid_to_download_id: Dict[str, str] = {}
         for download_id, data in self._all_downloads.items():
             aria2_gid = data.get("aria2_gid")
@@ -1778,7 +1825,6 @@ class MainWindow(QMainWindow):
             for download_id in q.downloads:
                 download_to_queue[download_id] = q
 
-        # ⭐ saved_data با کلید download_id (نه gid)
         saved_data = {}
         for download_id, data in self._all_downloads.items():
             try:
@@ -1808,19 +1854,17 @@ class MainWindow(QMainWindow):
             if not gid:
                 continue
 
-            # ⭐ نگاشت GID → download_id
             download_id = gid_to_download_id.get(gid)
 
             if download_id and download_id in self._all_downloads:
                 pass
             elif gid in self._all_downloads:
-                # transitional: هنوز بعضی دانلودها با GID keyed هستن
+
                 download_id = gid
             else:
-                # دانلود ناشناخته (worker خودش پاکش می‌کنه)
+
                 continue
 
-            # ⭐ از این به بعد فقط download_id استفاده می‌کنیم
             if download_id in self._all_downloads:
                 new_total = 0
                 try:
@@ -1835,20 +1879,20 @@ class MainWindow(QMainWindow):
                     and download_id in saved_data
                     and saved_data[download_id]["totalLength"] > 0
                 ):
-                    # ⭐ status رو فقط اگه توی retry نیستیم overwrite کن
+
                     if (
                         download_id not in self._retry_state
                         and download_id not in self._retrying_gids
                         and download_id not in self._pending_status
                     ):
-                        # ⭐ اگه صف paused هست، status رو paused نگه‌دار
+
                         parent_queue = download_to_queue.get(download_id)
                         if (
                             parent_queue
                             and parent_queue.paused
                             and dl.get("status") in ("waiting", "active")
                         ):
-                            # status رو overwrite نکن
+
                             if "files" in dl:
                                 self._all_downloads[download_id]["files"] = dl["files"]
                         else:
@@ -1872,8 +1916,6 @@ class MainWindow(QMainWindow):
                 old_status = self._all_downloads[download_id].get("status", "")
                 new_status = dl.get("status", "")
 
-                # ⭐ اگه queue paused هست و old_status "paused" بود،
-                # status رو "paused" نگه‌دار (حتی اگه aria2 "waiting"/"active" بگه)
                 parent_queue = download_to_queue.get(download_id)
 
                 if (
@@ -1927,13 +1969,12 @@ class MainWindow(QMainWindow):
 
                 self._all_downloads[download_id].update(dl)
             else:
-                # دانلود جدید که هنوز توی _all_downloads نیست — با download_id اضافه کن
+
                 self._all_downloads[download_id] = dl
 
         for download_id in newly_completed:
             self._play_completion_sound()
 
-        # ⭐ cleanup: دانلودهایی که توی هیچ queue نیستن
         current_gids = {dl.get("gid") for dl in downloads_list if dl.get("gid")}
         for download_id in list(self._all_downloads.keys()):
             if self._all_downloads[download_id].get("download_type") == "youtube":
@@ -1943,7 +1984,6 @@ class MainWindow(QMainWindow):
             if not in_queue and aria2_gid not in current_gids:
                 del self._all_downloads[download_id]
 
-        # ⭐ sync queue info
         for q in self.store.queues:
             for download_id in q.downloads:
                 if download_id in self._all_downloads:
@@ -2003,7 +2043,6 @@ class MainWindow(QMainWindow):
             print(f"⚠️ [Size] Invalid size for {gid}: {size}")
             return
 
-        # ⭐ نگاشت GID → download_id
         download_id = None
         if gid in self._all_downloads:
             download_id = gid
@@ -2014,7 +2053,7 @@ class MainWindow(QMainWindow):
                     break
 
         if not download_id:
-            # ممکنه دانلود از بین رفته باشه (حذف شده یا هنوز add نشده)
+
             print(f"⚠️ [MainWindow] GID {gid[:12]} not found in _all_downloads")
             return
 
@@ -2176,10 +2215,9 @@ class MainWindow(QMainWindow):
         print(f"📂 [Add] URLs: {len(d['urls'])}")
 
         for url in d["urls"]:
-            # ⭐ Apply download rules
+
             rule = self.store.rule_engine.find_match(url)
 
-            # Default values from the dialog
             url_options = options.copy()
             url_queue = target_queue
             url_path = d["path"]
@@ -2187,7 +2225,7 @@ class MainWindow(QMainWindow):
             url_speed_limit = getattr(target_queue, "speed_limit", 0)
 
             if rule:
-                # Override queue
+
                 if rule.queue:
                     for q in self.store.queues:
                         if q.name == rule.queue:
@@ -2196,21 +2234,17 @@ class MainWindow(QMainWindow):
                     else:
                         url_queue = self._get_or_create_queue(rule.queue)
 
-                # Override folder
                 if rule.folder:
                     url_path = expand_path(rule.folder)
 
-                # Override connections
                 if rule.connections:
                     url_connections = rule.connections
                     url_options["split"] = str(rule.connections)
                     url_options["max-connection-per-server"] = str(rule.connections)
 
-                # Override speed limit
                 if rule.speed_limit:
                     url_speed_limit = rule.speed_limit
 
-                # Override dir in aria2 options
                 url_options["dir"] = url_path
 
                 print(
@@ -2223,7 +2257,6 @@ class MainWindow(QMainWindow):
             if not url_is_direct and url_queue.paused:
                 url_options["pause"] = "true"
 
-            # ⭐ Add the download to aria2
             gid = self.aria2.add_url(url, url_options)
             if not gid:
                 print(f"❌ [Add] aria2.add_url returned None for URL: {url!r}")
@@ -2288,7 +2321,6 @@ class MainWindow(QMainWindow):
                 rule_speed_for_this = rule.speed_limit
                 self._all_downloads[download_id]["rule_speed_limit"] = rule.speed_limit
 
-            # ⭐ Speed limit: rule > queue > none
             final_speed = url_speed_limit or getattr(url_queue, "speed_limit", 0)
             if final_speed > 0:
                 self._worker_set_speed_limit(download_id, final_speed)
@@ -2324,7 +2356,7 @@ class MainWindow(QMainWindow):
 
             for download_id in new_gids:
                 QTimer.singleShot(
-                    300,  # کمی صبر تا دانلود توی UI ثبت بشه
+                    300,
                     lambda did=download_id: self._open_progress_dialog(did),
                 )
 
@@ -2806,7 +2838,7 @@ class MainWindow(QMainWindow):
 
         delete_files = result["value"] == "remove_files"
 
-        deleted_files_info = {}  # {gid: {"name": ..., "save_path": ..., "url": ...}}
+        deleted_files_info = {}
         if delete_files:
             for gid in gids_to_remove:
                 dl_info = self._all_downloads.get(gid, {})
@@ -2954,7 +2986,6 @@ class MainWindow(QMainWindow):
 
         print(f"🗑️ [_delete_download_files] START for gid: {gid}")
 
-        # تلاش برای گرفتن اطلاعات از downloads_info
         for q in self.store.queues:
             if gid in q.downloads_info:
                 info = q.downloads_info[gid]
@@ -2970,7 +3001,6 @@ class MainWindow(QMainWindow):
                         file_paths.append(f["path"])
                 break
 
-        # تلاش از _all_downloads
         if gid in self._all_downloads:
             dl = self._all_downloads[gid]
             name = name or dl.get("name", "")
@@ -3656,36 +3686,28 @@ class MainWindow(QMainWindow):
             print(f"⚠️ [SpeedLimit] Failed to set global limit: {e}")
 
     def _get_effective_speed_limit(self, download_id: str, q: Optional[Queue]) -> int:
-        """
-        محاسبه‌ی speed limit نهایی برای یه دانلود.
-        اولویت: rule > queue > global (صفر یعنی بدون محدودیت)
-        """
-        # اگه rule قبلاً برای این دانلود اعمال شده، از یه فیلد جدا نگه‌داری کن
+
         data = self._all_downloads.get(download_id, {})
         rule_speed = data.get("rule_speed_limit", 0)
         if rule_speed > 0:
             return rule_speed
 
         if q and q.speed_limit > 0:
-            return q.speed_limit  # تقسیمش توی caller انجام می‌شه
+            return q.speed_limit
 
         return 0
 
     def _apply_queue_speed_limit(self, q: Optional[Queue]) -> None:
-        """
-        اعمال محدودیت سرعت صف.
-        بین دانلودهای active تقسیم می‌شه.
-        دانلودهایی که rule speed دارن، دست‌نخورده می‌مونن.
-        """
+
         if not q or not self.aria2:
             return
 
         if q.speed_limit <= 0:
-            # ⭐ صف بدون محدودیت — فقط دانلودهایی که rule speed ندارن آزاد شن
+
             for download_id in q.downloads:
                 data = self._all_downloads.get(download_id, {})
                 if data.get("rule_speed_limit", 0) > 0:
-                    # rule speed داره — دست نزن
+
                     continue
                 aria2_gid = data.get("aria2_gid")
                 if aria2_gid:
@@ -3695,7 +3717,6 @@ class MainWindow(QMainWindow):
                         pass
             return
 
-        # صف speed داره
         active_downloads = []
         for download_id in q.downloads:
             data = self._all_downloads.get(download_id, {})
@@ -3706,7 +3727,6 @@ class MainWindow(QMainWindow):
         if not active_downloads:
             return
 
-        # ⭐ دانلودهایی که rule speed دارن رو از تقسیم‌بندی خارج کن
         rule_downloads = [
             d
             for d in active_downloads
@@ -3714,7 +3734,6 @@ class MainWindow(QMainWindow):
         ]
         queue_downloads = [d for d in active_downloads if d not in rule_downloads]
 
-        # سهم صف بین دانلودهای بدون rule تقسیم می‌شه
         if queue_downloads:
             n = len(queue_downloads)
             per_download = max(1, q.speed_limit // n)
@@ -3728,7 +3747,6 @@ class MainWindow(QMainWindow):
             for download_id in queue_downloads:
                 self._worker_set_speed_limit(download_id, per_download)
 
-        # rule downloads رو دوباره اعمال کن (شاید overwrite شده باشن)
         for download_id in rule_downloads:
             rule_speed = self._all_downloads[download_id].get("rule_speed_limit", 0)
             if rule_speed > 0:
@@ -3785,7 +3803,6 @@ class MainWindow(QMainWindow):
             self._check_already_complete()
 
     def _check_already_complete(self) -> None:
-
         if not self._startup_complete:
             return
 
@@ -3842,6 +3859,32 @@ class MainWindow(QMainWindow):
             QSystemTrayIcon.MessageIcon.Information,
             3000,
         )
+
+        self.quit_app()
+
+        try:
+            from PyQt6.QtDBus import QDBusInterface, QDBusConnection
+
+            bus = QDBusConnection.systemBus()
+            logind = QDBusInterface(
+                "org.freedesktop.login1",
+                "/org/freedesktop/login1",
+                "org.freedesktop.login1.Manager",
+                bus,
+            )
+
+            if logind.isValid():
+                can = logind.call("CanPowerOff").arguments()
+                if can and can[0] == "yes":
+                    print("✅ [Shutdown] DBus PowerOff")
+                    logind.call("PowerOff", False)
+                    return
+                else:
+                    print(f"⚠️ [Shutdown] DBus cannot poweroff: {can}")
+        except Exception as e:
+            print(f"⚠️ [Shutdown] DBus failed: {e}")
+
+        print("🔄 [Shutdown] Falling back to systemctl")
         os.system("systemctl poweroff")
 
     def _cancel_shutdown(self) -> None:
@@ -3921,7 +3964,7 @@ class MainWindow(QMainWindow):
             self._worker_pause(gid)
             self._all_downloads[gid]["status"] = "paused"
             self._all_downloads[gid]["downloadSpeed"] = 0
-            # ⭐ قفل status برای جلوگیری از overwrite توسط worker
+
             self._pending_status[gid] = (
                 "paused",
                 time.time() + 5.0,
@@ -3949,12 +3992,12 @@ class MainWindow(QMainWindow):
         if real_status == "paused":
             self._worker_resume(gid)
             self._all_downloads[gid]["status"] = "active"
-            # ⭐ قفل status برای جلوگیری از overwrite توسط worker
+
             self._pending_status[gid] = (
                 "active",
                 time.time() + 5.0,
             )
-            # ⭐ پاک کردن قفل paused از صف
+
             self.store.mark_dirty()
             self._refresh_table()
             self._update_queue_buttons()
@@ -4032,7 +4075,6 @@ class MainWindow(QMainWindow):
                 self._pause_youtube_download(gid)
                 return
 
-            # ⭐ آپدیت UI + قفل status
             self._all_downloads[gid]["status"] = "paused"
             self._all_downloads[gid]["downloadSpeed"] = 0
             self._pending_status[gid] = (
@@ -4065,7 +4107,7 @@ class MainWindow(QMainWindow):
             if real_status == "paused":
                 self._worker_resume(gid)
                 self._all_downloads[gid]["status"] = "active"
-                # ⭐ قفل status
+
                 self._pending_status[gid] = (
                     "active",
                     time.time() + 5.0,
@@ -4078,7 +4120,7 @@ class MainWindow(QMainWindow):
             if real_status == "waiting":
                 self._worker_resume(gid)
                 self._all_downloads[gid]["status"] = "active"
-                # ⭐ قفل status
+
                 self._pending_status[gid] = (
                     "active",
                     time.time() + 5.0,
@@ -4314,11 +4356,10 @@ class MainWindow(QMainWindow):
         self._update_queue_buttons()
         self._apply_settings_to_aria2()
 
-        # ⭐ اگه این queue سرعت داره، global رو صفر کن
         if q.speed_limit > 0:
             self.aria2.change_global_option({"max-overall-download-limit": "0"})
             print(f"⚡ [SpeedLimit] Global disabled (queue '{q.name}' has limit)")
-
+        self._load_schedules()
         self._apply_queue_speed_limit(q)
 
     def _delete_queue(self) -> None:
@@ -4486,7 +4527,6 @@ class MainWindow(QMainWindow):
                         print(f"✅ aria2 connected after {attempt+1} attempts")
                         break
 
-            # ⭐ گرفتن وضعیت GIDهای aria2
             active_gids = set()
             waiting_gids = set()
             stopped_gids = set()
@@ -4567,14 +4607,13 @@ class MainWindow(QMainWindow):
                         if url:
                             name = url.split("/")[-1].split("?")[0]
 
-                    # ⭐ تصمیم‌گیری دربارهٔ status
                     if info_status in ["complete", "completed"]:
                         final_status = "complete"
                     elif aria2_gid and aria2_gid in live_gids:
-                        # GID معتبر — بعد از restart همه paused می‌شن
+
                         final_status = "paused"
                     else:
-                        # GID نامعتبر — باید re-add بشه
+
                         if info_status in ["complete", "completed"]:
                             final_status = "complete"
                         else:
@@ -4584,7 +4623,6 @@ class MainWindow(QMainWindow):
                                 f"({aria2_gid}) → marking as error for re-add"
                             )
 
-                            # ⭐ rule رو دوباره match کن تا بعد از restart هم اسمش بمونه
                     matched_rule_name = info.get("matched_rule")
                     rule_speed = info.get("rule_speed_limit", 0)
 
@@ -4639,11 +4677,10 @@ class MainWindow(QMainWindow):
             print(f"✅ Loaded {restored_count} download(s)")
             print(f"📊 _all_downloads has {len(self._all_downloads)} entries")
 
-            # ⭐ قفل کردن status برای همه دانلودهای غیر-complete/error
             for download_id, data in self._all_downloads.items():
                 if data.get("status") not in ("complete", "error", "removed"):
                     data["status"] = "paused"
-                    # TTL خیلی بلند — تا worker نتونه overwrite کنه
+
                     self._pending_status[download_id] = (
                         "paused",
                         time.time() + 999999,
@@ -4748,104 +4785,6 @@ class MainWindow(QMainWindow):
         self._refresh_queue_list()
         self._refresh_table()
         self._update_queue_buttons()
-
-    def _manage_schedules(self) -> None:
-        from datetime import datetime
-
-        now = datetime.now()
-        now_time = now.time()
-        now_weekday = now.weekday()  # 0=Monday
-
-        for q in self.store.queues:
-            if not q.schedule_enabled:
-                continue
-
-            start_t = q.schedule_start
-            end_t = q.schedule_end
-            days = q.days
-            weekday_ok = now_weekday in days if days else True
-
-            # چک کردن بازه
-            if start_t <= end_t:
-                time_ok = start_t <= now_time <= end_t
-            else:
-                time_ok = (now_time >= start_t) or (now_time <= end_t)
-
-            is_scheduled_time = weekday_ok and time_ok
-            manually_paused = getattr(q, "manually_paused", False)
-
-            if is_scheduled_time:
-                # ===== داخل بازه‌ی Schedule =====
-                if q.paused and not manually_paused:
-                    print(f"▶️ [Schedule] Queue '{q.name}' entering window — starting")
-                    q.paused = False
-                    q.manually_paused = False
-                    self.store.save()
-                    self._queue_list_dirty = True
-                    self._refresh_queue_list()
-
-                    for download_id in q.downloads:
-                        data = self._all_downloads.get(download_id, {})
-                        download_type = data.get("download_type", "normal")
-
-                        if download_type == "youtube":
-                            if data.get("status") == "paused":
-                                self._start_youtube_download(download_id)
-                        else:
-                            if download_id in self._all_downloads:
-                                status = self._all_downloads[download_id].get(
-                                    "status", ""
-                                )
-                                if status == "paused":
-                                    self._worker_resume(download_id)
-                                    self._all_downloads[download_id][
-                                        "status"
-                                    ] = "active"
-                                    self._pending_status.pop(download_id, None)
-            else:
-                # ===== خارج از بازه‌ی Schedule =====
-                if not q.paused:
-                    print(f"⏸️ [Schedule] Queue '{q.name}' leaving window — pausing")
-                    q.paused = True
-                    q.manually_paused = False
-                    self.store.save()
-                    self._queue_list_dirty = True
-                    self._refresh_queue_list()
-
-                    for download_id in q.downloads:
-                        data = self._all_downloads.get(download_id, {})
-                        download_type = data.get("download_type", "normal")
-                        status = data.get("status", "")
-
-                        if download_type == "youtube":
-                            if download_id in self._all_downloads:
-                                if status in ["downloading", "active", "waiting"]:
-                                    self._pause_youtube_download(download_id)
-                                    self._all_downloads[download_id][
-                                        "status"
-                                    ] = "paused"
-                        else:
-                            if download_id in self._all_downloads:
-                                if status in ["active", "waiting", "downloading"]:
-                                    self._worker_pause(download_id)
-                                    self._all_downloads[download_id][
-                                        "status"
-                                    ] = "paused"
-                                    self._all_downloads[download_id][
-                                        "downloadSpeed"
-                                    ] = 0
-                                    self._pending_status[download_id] = (
-                                        "paused",
-                                        time.time() + 3.0,
-                                    )
-                                elif status in ["error", "stopped"]:
-                                    self._all_downloads[download_id][
-                                        "status"
-                                    ] = "paused"
-                                    self._pending_status[download_id] = (
-                                        "paused",
-                                        time.time() + 3.0,
-                                    )
 
     def _update_youtube_dialogs(self, youtube_downloads: List[Dict]) -> None:
         for yt_data in youtube_downloads:
@@ -4964,20 +4903,18 @@ class MainWindow(QMainWindow):
 
             if not download_id:
                 print(f"⚠️ [Retry] No retrying download found for new_gid={new_gid}")
-                # cleanup orphan
+
                 try:
                     self.aria2.remove(new_gid)
                 except Exception:
                     pass
                 return
 
-            # ⭐ فقط aria2_gid رو آپدیت کن — هیچ migration دیگه‌ای لازم نیست
             old_gid = self._all_downloads[download_id].get("aria2_gid")
 
             self._all_downloads[download_id]["aria2_gid"] = new_gid
             self._all_downloads[download_id]["status"] = "active"
 
-            # آپدیت q.downloads_info
             for q in self.store.queues:
                 if download_id in q.downloads_info:
                     q.downloads_info[download_id]["aria2_gid"] = new_gid
@@ -4986,7 +4923,6 @@ class MainWindow(QMainWindow):
 
             self.store.save()
 
-            # پاک‌سازی state
             self._retrying_gids.discard(download_id)
 
             print(
@@ -4994,7 +4930,6 @@ class MainWindow(QMainWindow):
                 f"aria2_gid: {old_gid} -> {new_gid}"
             )
 
-            # resume جدید
             QTimer.singleShot(
                 100, lambda g=new_gid: self.worker.resume_requested.emit(g)
             )
@@ -5100,6 +5035,8 @@ class MainWindow(QMainWindow):
         dlg.activateWindow()
 
     def closeEvent(self, event: QCloseEvent) -> None:
+        if hasattr(self, "schedule_thread"):
+            self.schedule_thread.stop()
         if self._countdown_timer:
             self._countdown_timer.stop()
         if self._schedule_timer:
@@ -5151,6 +5088,9 @@ class MainWindow(QMainWindow):
 
     def quit_app(self) -> None:
         print("🛑 Shutting down...")
+
+        if hasattr(self, "schedule_thread"):
+            self.schedule_thread.stop()
 
         if self._countdown_timer:
             self._countdown_timer.stop()
@@ -5347,14 +5287,12 @@ class MainWindow(QMainWindow):
         )
 
     def _is_retriable_error(self, error_msg: str) -> bool:
-        """تشخیص موقتی vs دائمی. Default = موقتی (retriable)."""
         if not error_msg:
             return True
         msg = error_msg.lower()
         return not any(p in msg for p in self._PERMANENT_ERROR_PATTERNS)
 
     def _on_download_error(self, download_id: str, error_msg: str) -> None:
-        """وقتی یه دانلود تازه error می‌خوره، این صدا زده می‌شه."""
         print(
             f"🔴 [Error] _on_download_error CALLED for {download_id[:12]}, msg={error_msg[:100]!r}"
         )
@@ -5372,14 +5310,12 @@ class MainWindow(QMainWindow):
         if download_id in self._retry_state:
             return
 
-        # ⭐ اگه پیام خطا خالیه، احتمالاً timeout موقتی هست
         if not error_msg or not error_msg.strip():
             print(
                 f"⏭️ [Retry] Empty error for {download_id[:12]} — letting aria2 retry"
             )
             return
 
-        # ⭐ اگه خطا موقتی هست، به aria2 فرصت بده خودش retry کنه
         error_lower = error_msg.lower()
         transient_errors = [
             "timeout",
@@ -5408,7 +5344,6 @@ class MainWindow(QMainWindow):
                 f"⏭️ [Retry] Transient error for {download_id[:12]} — will retry: {error_msg[:60]}"
             )
 
-            # ⭐ چک کن status واقعی aria2 چیه
             aria2_gid = data.get("aria2_gid")
             if aria2_gid and self.aria2:
                 try:
@@ -5420,7 +5355,7 @@ class MainWindow(QMainWindow):
                         )
 
                         if real_status == "error":
-                            # ⭐ aria2 خودش retry نکرده — باید re-add کنیم
+
                             print(
                                 f"🔄 [Retry] aria2 gave up — scheduling re-add for {download_id[:12]}"
                             )
@@ -5430,14 +5365,14 @@ class MainWindow(QMainWindow):
                             return
 
                         elif real_status in ("paused", "stopped", "waiting"):
-                            # ⭐ دوباره unpause کن
+
                             self.aria2.resume(aria2_gid)
                             data["status"] = "active"
                             print(f"▶️ [Retry] Unpaused {aria2_gid[:12]}")
                             return
 
                         elif real_status == "active":
-                            # aria2 خودش داره تلاش می‌کنه، کاری نکن
+
                             print(
                                 f"⏳ [Retry] aria2 is still active for {aria2_gid[:12]}"
                             )
@@ -5458,7 +5393,6 @@ class MainWindow(QMainWindow):
         self._schedule_retry(download_id, error_count)
 
     def _schedule_retry(self, download_id: str, attempt: int) -> None:
-        """ثبت retry با تأخیر. attempt = تعداد تلاش‌های انجام‌شده."""
         data = self._all_downloads.get(download_id)
         if not data:
             return
@@ -5488,14 +5422,12 @@ class MainWindow(QMainWindow):
         if old_timer:
             old_timer.stop()
 
-        # ثبت state
         self._retry_state[download_id] = {
             "deadline": time.time() + retry_delay,
             "attempt": next_attempt,
             "max_tries": max_tries,
         }
 
-        # آپدیت وضعیت
         data["status"] = "retrying"
         data["downloadSpeed"] = 0
         data["status_detail"] = (
@@ -5503,13 +5435,11 @@ class MainWindow(QMainWindow):
         )
         print(f"🔍 [Retry] Set status_detail='{data['status_detail']}'")
 
-        # جلوگیری از overwrite شدن status توسط aria2 stats
         self._pending_status[download_id] = (
             "retrying",
             time.time() + retry_delay + 2.0,
         )
 
-        # تایمر
         timer = QTimer(self)
         timer.setSingleShot(True)
         timer.timeout.connect(lambda d=download_id: self._do_delayed_retry(d))
@@ -5526,13 +5456,12 @@ class MainWindow(QMainWindow):
         )
 
     def _do_delayed_retry(self, download_id: str) -> None:
-        """بعد از پایان تأخیر — اجرای واقعی retry."""
         timer = self._retry_timers.pop(download_id, None)
         if timer:
             timer.stop()
 
         self._retry_state.pop(download_id, None)
-        # ⭐ قفل رو باز کن تا _retry_single_download بتونه اجرا بشه
+
         self._retrying_gids.discard(download_id)
 
         if download_id not in self._all_downloads:
@@ -5544,7 +5473,6 @@ class MainWindow(QMainWindow):
         self._retry_single_download(download_id)
 
     def _tick_retry_countdown(self) -> None:
-        """هر ۱ ثانیه — شمارش معکوس رو آپدیت کن."""
         if not self._retry_state:
             if self._countdown_timer:
                 self._countdown_timer.stop()
@@ -5569,7 +5497,7 @@ class MainWindow(QMainWindow):
                 if data.get("status_detail") != new_detail:
                     data["status_detail"] = new_detail
                     data["status"] = "retrying"
-                    # تمدید _pending_status
+
                     self._pending_status[download_id] = (
                         "retrying",
                         time.time() + 3.0,

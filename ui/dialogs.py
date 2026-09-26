@@ -2032,7 +2032,6 @@ class SettingsDialog(QDialog):
         self._main_window = parent
         self.setWindowTitle("Settings")
         self.setMinimumWidth(540)
-        self.setMinimumHeight(300)
         self.setSizeGripEnabled(True)
 
         self.settings = settings
@@ -2290,8 +2289,6 @@ class SettingsDialog(QDialog):
         tabs.addTab(service_tab, get_icon("applications-system"), "Service")
 
         main_layout.addWidget(tabs)
-
-        tabs.currentChanged.connect(lambda idx: QTimer.singleShot(50, self.adjustSize))
 
         btn_box = QDialogButtonBox(
             QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel

@@ -56,6 +56,7 @@ bash <(curl -s https://raw.githubusercontent.com/hoomaanf/FelfelDM/main/install.
 
 - 🚀 **Multiple Queues** — Create and manage multiple download queues
 - ⏰ **Scheduled Downloads** — Set time windows for automatic downloads
+- 🕐 **Schedule that Works When Locked** — Schedules run in a separate thread, so downloads start on time even when the screen is locked
 - 📊 **Real-time Progress** — Live download speed and progress tracking
 - 🎯 **Download Rules** — Automatically apply queue, folder, connections, and speed limit based on URL pattern, extension, domain, or file size
 - 🎯 **Smart Management** — Intelligent auto-retry with configurable delay, pause/resume, and error handling
@@ -134,6 +135,8 @@ The "Remove & Delete Files" operation no longer freezes the UI:
   - Queues start automatically at the scheduled time and pause when the window ends
   - Manual pause overrides the schedule until the next window
   - All downloads pause cleanly when the window ends (no flicker or partial states)
+  - **Works even when the screen is locked** — schedule runs in a background thread independent of the Qt event loop
+  - After unlocking, the UI reflects the real state automatically
 - 🔒 **Manual Override** — User pause/resume overrides automatic scheduling
 - 📊 **Queue Progress** — Overall progress bar for each queue
 
@@ -147,6 +150,10 @@ The "Remove & Delete Files" operation no longer freezes the UI:
   - **Queue Speed Limit** — Limits the total speed of a queue; the limit is split evenly across the active downloads in that queue (e.g. 100 KB/s across 3 active downloads → ~33 KB/s each)
   - **Queue overrides Global** — When a queue has its own speed limit, it takes priority over the global one
 - 🖥️ **System Tray** — Minimize to tray with status indicator
+- 🛑 **Shutdown on Finish** — Automatically shut down the system when all downloads complete
+  - Auto-unchecks when the queue becomes empty (so an empty queue never triggers shutdown)
+  - Stays checked when downloads finish, so shutdown runs as expected
+  - Uses DBus for passwordless shutdown (falls back to `systemctl` if needed)
 - 🔄 **Download Interception** — Catch browser downloads automatically
 - 🎬 **Splash Screen** — Beautiful loading animation with circular logo
 - 🔧 **Systemd Service** — Run as background service
@@ -354,6 +361,17 @@ FelfelDM shows the current status of each queue in the sidebar:
 | **▶ Running (🕐 Scheduled)** | Queue is running within its scheduled time window            |
 | **⏸ Paused (🕐 Scheduled)**  | Queue is paused but within its scheduled time window         |
 | **⏰ Waiting for Schedule**  | Queue is waiting for its scheduled time to start             |
+
+### Schedule Settings
+
+FelfelDM schedules run in a **background thread**, independent of the main Qt event loop. This means:
+
+- ✅ Downloads start on time **even when the screen is locked**
+- ✅ Downloads pause cleanly when the scheduled window ends
+- ✅ After unlocking, the UI shows the real state automatically
+- ✅ Manual pause overrides the schedule until the next window
+
+**Configure these in:** QueueSettings → Schedule
 
 ### Retry Settings
 
@@ -573,6 +591,7 @@ FelfelDM/
     │   ├── proxy_manager.py           # Proxy configuration
     │   ├── queue_model.py             # Queue data model
     │   ├── queue_worker.py            # Queue operation worker
+    │   ├── schedule_manager.py        # Schedule thread
     │   ├── rule_engine.py             # Download rules engine
     │   ├── size_fetcher_worker.py     # Parallel size fetcher (5 threads)
     │   ├── temp_db.py                 # Temporary in-memory database
