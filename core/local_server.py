@@ -4,8 +4,21 @@ import json
 import socket
 import subprocess
 import os
+from typing import Optional
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from PyQt6.QtCore import QThread, pyqtSignal
+
+# Only the browser extension itself is allowed to call this server
+# cross-origin. Echoing "*" back let ANY website the user has open in a
+# tab silently POST to /add via fetch() and queue arbitrary downloads.
+ALLOWED_ORIGIN_PREFIXES = ("chrome-extension://", "moz-extension://")
+
+
+def _cors_origin(headers) -> Optional[str]:
+    origin = headers.get("Origin")
+    if origin and origin.startswith(ALLOWED_ORIGIN_PREFIXES):
+        return origin
+    return None
 
 
 class ServerThread(QThread):
@@ -53,7 +66,9 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_OPTIONS(self):
         self.send_response(200)
-        self.send_header("Access-Control-Allow-Origin", "*")
+        origin = _cors_origin(self.headers)
+        if origin:
+            self.send_header("Access-Control-Allow-Origin", origin)
         self.send_header("Access-Control-Allow-Headers", "Content-Type")
         self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
         self.end_headers()
@@ -62,7 +77,9 @@ class Handler(BaseHTTPRequestHandler):
         if self.path == "/ping":
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
-            self.send_header("Access-Control-Allow-Origin", "*")
+            origin = _cors_origin(self.headers)
+            if origin:
+                self.send_header("Access-Control-Allow-Origin", origin)
             self.end_headers()
             self.wfile.write(json.dumps({"status": "ok"}).encode())
         else:
@@ -71,6 +88,20 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_POST(self):
         if self.path == "/add":
+            # A cross-origin POST with a "simple" content-type (e.g.
+            # text/plain) skips the CORS preflight entirely, so a
+            # malicious page could still get this handler to run even
+            # though it can't read the response. Reject any request that
+            # carries a browser-set Origin header we don't recognize
+            # *before* doing anything with the body. Requests with no
+            # Origin header at all (non-browser callers) are left alone.
+            origin_header = self.headers.get("Origin")
+            if origin_header and not origin_header.startswith(ALLOWED_ORIGIN_PREFIXES):
+                print(f"🚫 Rejected /add from disallowed origin: {origin_header}")
+                self.send_response(403)
+                self.end_headers()
+                return
+
             try:
                 length = int(self.headers.get("Content-Length", 0))
                 data = json.loads(self.rfile.read(length).decode())
@@ -102,7 +133,9 @@ class Handler(BaseHTTPRequestHandler):
 
                 self.send_response(200)
                 self.send_header("Content-Type", "application/json")
-                self.send_header("Access-Control-Allow-Origin", "*")
+                origin = _cors_origin(self.headers)
+                if origin:
+                    self.send_header("Access-Control-Allow-Origin", origin)
                 self.end_headers()
                 self.wfile.write(json.dumps({"status": "success"}).encode())
 

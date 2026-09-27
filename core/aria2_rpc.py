@@ -144,8 +144,6 @@ class Aria2RPC:
             cmd = [
                 "aria2c",
                 "--enable-rpc",
-                "--rpc-listen-all",
-                "--rpc-allow-origin-all",
                 "--daemon",
                 f"--rpc-listen-port={self.port}",
                 f"--max-concurrent-downloads={max_concurrent}",

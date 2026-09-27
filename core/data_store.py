@@ -2,6 +2,7 @@
 
 import os
 import json
+import secrets
 import shutil
 import threading
 import uuid
@@ -481,10 +482,23 @@ class DataStore:
             try:
                 with open(secret_file, "r", encoding="utf-8") as f:
                     secret = f.read().strip()
-                with self._lock:
-                    self.settings["aria2_secret"] = secret
+                if secret:
+                    with self._lock:
+                        self.settings["aria2_secret"] = secret
+                    return
             except Exception as e:
                 print(f"⚠️ Could not read fallback secret file: {e}")
+
+        # No secret found anywhere (fresh install, or keyring/file both
+        # empty): aria2's RPC interface must never run without one, so
+        # generate a fresh, unguessable secret now and persist it.
+        secret = secrets.token_urlsafe(32)
+        with self._lock:
+            self.settings["aria2_secret"] = secret
+        if self._save_secret(secret):
+            print("🔐 Generated new aria2 RPC secret")
+        else:
+            print("⚠️ Generated aria2 RPC secret but could not persist it")
 
     def _save_secret(self, secret: str) -> bool:
         if not secret:
