@@ -2224,6 +2224,10 @@ class MainWindow(QMainWindow):
             url_connections = d["connections"]
             url_speed_limit = getattr(target_queue, "speed_limit", 0)
 
+            is_schedule_active = (
+                url_queue.schedule_enabled and url_queue.is_scheduled_now()
+            )
+
             if rule:
 
                 if rule.queue:
@@ -2254,7 +2258,7 @@ class MainWindow(QMainWindow):
                 )
 
             url_is_direct = url_queue.name == "__direct__"
-            if not url_is_direct and url_queue.paused:
+            if not url_is_direct and url_queue.paused and not is_schedule_active:
                 url_options["pause"] = "true"
 
             gid = self.aria2.add_url(url, url_options)
@@ -2272,8 +2276,11 @@ class MainWindow(QMainWindow):
             clean_name = self._extract_filename(url)
             full_path = os.path.join(url_path, clean_name)
 
-            if url_is_direct or not url_queue.paused:
+            if url_is_direct or not url_queue.paused or is_schedule_active:
                 initial_status = "active"
+                if is_schedule_active and url_queue.paused:
+                    url_queue.paused = False
+                    url_queue.manually_paused = False
             else:
                 initial_status = "paused"
 
@@ -2315,6 +2322,17 @@ class MainWindow(QMainWindow):
                     rule.speed_limit if rule and rule.speed_limit else 0
                 ),
             }
+
+            if is_schedule_active:
+                try:
+                    status = self.aria2.get_status(gid)
+                    if status and status.get("status") in ("paused", "waiting"):
+                        self.worker.resume_requested.emit(gid)
+                        self._all_downloads[download_id]["status"] = "active"
+                        if download_id in url_queue.downloads_info:
+                            url_queue.downloads_info[download_id]["status"] = "active"
+                except Exception as e:
+                    print(f"⚠️ Could not resume {download_id}: {e}")
 
             rule_speed_for_this = 0
             if rule and rule.speed_limit:
