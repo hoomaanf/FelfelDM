@@ -239,7 +239,8 @@ class YouTubeWorker(QThread):
         if self.process and not self.is_paused and self._is_running:
             self.is_paused = True
             try:
-                self.process.send_signal(signal.SIGSTOP)
+                pgid = os.getpgid(self.process.pid)
+                os.killpg(pgid, signal.SIGSTOP)
                 self.paused.emit()
                 self.status.emit("⏸ Paused")
                 print("⏸️ YouTube download paused")
@@ -250,7 +251,8 @@ class YouTubeWorker(QThread):
         if self.process and self.is_paused and self._is_running:
             self.is_paused = False
             try:
-                self.process.send_signal(signal.SIGCONT)
+                pgid = os.getpgid(self.process.pid)
+                os.killpg(pgid, signal.SIGCONT)
                 self.resumed.emit()
                 self.status.emit("▶ Resuming...")
                 print("▶️ YouTube download resumed")
@@ -263,13 +265,31 @@ class YouTubeWorker(QThread):
         self.is_cancelled = True
         if self.process:
             try:
-                self.process.terminate()
+                pgid = os.getpgid(self.process.pid)
+                # If the process was paused, wake the whole group up first so
+                # it can actually receive and act on SIGTERM/SIGKILL.
+                try:
+                    os.killpg(pgid, signal.SIGCONT)
+                except Exception:
+                    pass
+                os.killpg(pgid, signal.SIGTERM)
                 time.sleep(0.3)
                 if self.process.poll() is None:
-                    self.process.kill()
-            except:
+                    os.killpg(pgid, signal.SIGKILL)
+            except ProcessLookupError:
                 pass
+            except Exception:
+                # Fallback in case the process group is unavailable for
+                # some reason (e.g. it already exited).
+                try:
+                    self.process.terminate()
+                    time.sleep(0.3)
+                    if self.process.poll() is None:
+                        self.process.kill()
+                except Exception:
+                    pass
         self._delete_partial_files()
+        self.speed_eta.emit("", "")
         self.wait()
         self.finished.emit(False, "Download cancelled by user")
 
@@ -394,6 +414,15 @@ class YouTubeWorker(QThread):
             else:
                 cmd.extend(["-f", "bv+ba/b"])
 
+            # When merging separate video+audio streams, yt-dlp picks a
+            # container based on the source codecs (often .mkv/.webm),
+            # which doesn't match the ".mp4" extension the app assumes
+            # for the saved file entry. Force the container to mp4 for
+            # video downloads so the predicted filename/extension the app
+            # stores actually matches what ends up on disk.
+            if self.format_type not in ("mp3", "audio", "m4a"):
+                cmd.extend(["--merge-output-format", "mp4"])
+
             cmd.append(self.url)
             print(f"📥 Full command: {' '.join(cmd)}")
             self.status.emit("⬇ Downloading...")
@@ -426,6 +455,7 @@ class YouTubeWorker(QThread):
                 text=True,
                 bufsize=1,
                 env=env,
+                start_new_session=True,
             )
 
             error_lines = []

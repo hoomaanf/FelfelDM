@@ -3063,28 +3063,58 @@ class MainWindow(QMainWindow):
                     file_paths.append(direct_path)
                     print(f"✅ Found main file directly: {name}")
 
-            if not file_paths:
+            if not any(os.path.exists(p) for p in file_paths):
+                if file_paths:
+                    print(
+                        f"⚠️ Known file path(s) don't exist on disk "
+                        f"(likely extension mismatch), falling back to scan: {file_paths}"
+                    )
                 print(f"🔍 Scanning directory for leftovers: {save_path}")
+                print(f"🔎 [DEBUG] name={name!r} gid={gid!r} save_path={save_path!r}")
+
+                # yt-dlp sanitizes characters that can't legally appear in a
+                # filename (e.g. "/", ":", "|", "?", '"') when it writes the
+                # file to disk, but `name` here is the raw, unsanitized video
+                # title. A plain substring check breaks whenever the title
+                # contains any such character. Normalize both sides down to
+                # just letters/digits/underscore before comparing so
+                # punctuation differences don't cause a false negative.
+                def _norm(s: str) -> str:
+                    return re.sub(r"[^\w]+", "", s.lower()) if s else ""
+
+                name_norm = _norm(name)
+
                 try:
                     entries = os.listdir(save_path)
+                    print(f"🔎 [DEBUG] directory has {len(entries)} entries")
                     for file in entries:
                         full_path = os.path.join(save_path, file)
                         lower = file.lower()
+                        file_norm = _norm(os.path.splitext(file)[0])
 
-                        if name and name.lower() in lower:
-                            if not any(
-                                x in lower
-                                for x in [".aria2", ".part", ".f", ".temp", ".ytdl"]
-                            ):
-                                if full_path not in file_paths:
-                                    file_paths.append(full_path)
-                                    print(f"✅ Found main file by name: {file}")
+                        is_temp = any(
+                            x in lower
+                            for x in [".aria2", ".part", ".f", ".temp", ".ytdl"]
+                        )
+
+                        name_matches = name_norm and (
+                            name_norm in file_norm
+                            # yt-dlp may truncate very long titles when
+                            # writing to disk; treat a long enough prefix
+                            # match as the same file too.
+                            or (
+                                len(file_norm) >= 15
+                                and name_norm.startswith(file_norm)
+                            )
+                        )
+
+                        if name_matches and not is_temp:
+                            if full_path not in file_paths:
+                                file_paths.append(full_path)
+                                print(f"✅ Found main file by name: {file}")
 
                         if gid in file:
-                            if not any(
-                                x in lower
-                                for x in [".aria2", ".part", ".f", ".temp", ".ytdl"]
-                            ):
+                            if not is_temp:
                                 if full_path not in file_paths:
                                     file_paths.append(full_path)
                                     print(f"✅ Found main file by GID: {file}")
