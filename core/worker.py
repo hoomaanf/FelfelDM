@@ -530,7 +530,19 @@ class BackendWorker(QThread):
             speed_limit = 0
             matched_id = None
 
-            # ⭐ مرحله ۱: به عنوان download_id (UUID) امتحان کن
+            def _report(new_gid=None, error=None):
+                # Always tell the UI WHICH download this result is for, so
+                # concurrent retries can't be attributed to the wrong one.
+                self.operation_result.emit(
+                    "re_add",
+                    {
+                        "id": matched_id or download_id_or_gid,
+                        "new": new_gid,
+                        "success": new_gid is not None,
+                        "error": error,
+                    },
+                )
+
             for q in self.store.queues:
                 if download_id_or_gid in q.downloads_info:
                     info = q.downloads_info[download_id_or_gid]
@@ -540,7 +552,6 @@ class BackendWorker(QThread):
                     matched_id = download_id_or_gid
                     break
 
-            # ⭐ مرحله ۲ (fallback): به عنوان aria2_gid امتحان کن
             if not url:
                 for q in self.store.queues:
                     for dl_id, info in q.downloads_info.items():
@@ -568,7 +579,7 @@ class BackendWorker(QThread):
                 print(
                     f"❌ [Worker] Cannot re-add: missing info for {download_id_or_gid}"
                 )
-                self.operation_result.emit("re_add", None)
+                _report(error="missing download info")
                 return
 
             options = {
@@ -587,12 +598,12 @@ class BackendWorker(QThread):
                 id_short = matched_id[:12] if matched_id else download_id_or_gid[:12]
                 print(f"🔄 [Worker] Re-added id={id_short} -> gid={new_gid}")
                 # main_window (فاز B.3) خودش aria2_gid رو آپدیت می‌کنه
-                self.operation_result.emit("re_add", new_gid)
+                _report(new_gid=new_gid)
             else:
-                self.operation_result.emit("re_add", None)
+                _report(error="aria2 rejected add_url")
         except Exception as e:
             print(f"⚠️ [Worker] Re-add failed: {e}")
-            self.operation_result.emit("re_add", None)
+            _report(error=str(e))
 
     @pyqtSlot(str, int)
     def _on_set_speed_limit(self, gid: str, speed_kb: int):

@@ -2096,11 +2096,24 @@ class SettingsDialog(QDialog):
             "Delay between retry attempts (for transient errors only)"
         )
 
+        self.retry_reset_after = QSpinBox()
+        self.retry_reset_after.setRange(0, 3600)
+        self.retry_reset_after.setSingleStep(10)
+        self.retry_reset_after.setSpecialValueText("Never")
+        self.retry_reset_after.setSuffix(" seconds")
+        self.retry_reset_after.setValue(settings.get("retry_reset_after", 60))
+        self.retry_reset_after.setToolTip(
+            "If a retried download keeps downloading successfully for this long,\n"
+            "its failed-attempt counter is reset to 0.\n"
+            "Set to 'Never' to keep the counter until you restart the download."
+        )
+
         dl_layout.addRow("Max Concurrent:", self.max_concurrent)
         dl_layout.addRow("Max Retry Attempts:", self.max_retry_attempts)
         dl_layout.addRow("Max Tries (aria2):", self.max_tries)
         dl_layout.addRow("Default Connections:", self.conns)
         dl_layout.addRow("Retry Delay:", self.retry_delay)
+        dl_layout.addRow("Reset Retries After:", self.retry_reset_after)
         general_layout.addWidget(dl_group)
 
         cleanup_group = QGroupBox("Cleanup")
@@ -2676,6 +2689,7 @@ WantedBy=default.target
             "run_as_service": self.run_as_service.isChecked(),
             "speed_limit": speed_limit,
             "retry_delay": self.retry_delay.value(),
+            "retry_reset_after": self.retry_reset_after.value(),
             "run_on_startup": self.run_on_startup.isChecked(),
             "start_minimized": self.start_minimized.isChecked(),
             "sound_enabled": self.sound_enabled_cb.isChecked(),

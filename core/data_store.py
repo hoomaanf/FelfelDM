@@ -314,6 +314,7 @@ class DataStore:
             "start_minimized": False,
             "run_on_startup": False,
             "retry_delay": 5.0,
+            "retry_reset_after": 60,
             "proxy_settings": {"global": None, "queues": {}},
             "sound_enabled": True,
             "sound_path": "",

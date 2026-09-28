@@ -89,6 +89,8 @@ class MainWindow(QMainWindow):
         self._retrying_gids: Set[str] = set()
         self._retry_timers: Dict[str, QTimer] = {}
         self._retry_state: Dict[str, dict] = {}
+        # download_id -> (time healthy streak began, completedLength at that time)
+        self._healthy_since: Dict[str, tuple] = {}
         self._countdown_timer: Optional[QTimer] = None
         self._schedule_timer: Optional[QTimer] = None
         self._cleared_gids: Set[str] = set()
@@ -898,11 +900,6 @@ class MainWindow(QMainWindow):
                     gids_to_pause.append(gid)
                     self._all_downloads[gid]["status"] = "paused"
                     self._all_downloads[gid]["downloadSpeed"] = 0
-                    self._mark_pending_status(gid, "paused")
-                    if gid in q.downloads_info:
-                        q.downloads_info[gid]["status"] = "paused"
-                elif current_status in ["error", "stopped"]:
-                    self._all_downloads[gid]["status"] = "paused"
                     self._mark_pending_status(gid, "paused")
                     if gid in q.downloads_info:
                         q.downloads_info[gid]["status"] = "paused"
@@ -1983,6 +1980,8 @@ class MainWindow(QMainWindow):
             aria2_gid = self._all_downloads[download_id].get("aria2_gid")
             if not in_queue and aria2_gid not in current_gids:
                 del self._all_downloads[download_id]
+
+        self._maybe_reset_error_counts()
 
         for q in self.store.queues:
             for download_id in q.downloads:
@@ -3103,8 +3102,7 @@ class MainWindow(QMainWindow):
                             # writing to disk; treat a long enough prefix
                             # match as the same file too.
                             or (
-                                len(file_norm) >= 15
-                                and name_norm.startswith(file_norm)
+                                len(file_norm) >= 15 and name_norm.startswith(file_norm)
                             )
                         )
 
@@ -4932,67 +4930,91 @@ class MainWindow(QMainWindow):
         except RuntimeError:
             self._youtube_dialogs.pop(download_id, None)
 
-    def _on_worker_operation_result(self, operation: str, result: Any) -> None:
-        """Handle results from worker operations (re_add, add_url, etc.)"""
+    def _handle_re_add_result(self, result: dict) -> None:
+        """Apply the outcome of a re-add to the download it belongs to.
 
-        if operation == "re_add" and result is not None:
-            print(f"✅ Re-add result: {result}")
+        The worker reports the download id together with the result, so
+        several retries in flight at once can never be mixed up.
+        """
+        req_id = result.get("id")
+        new_gid = result.get("new")
 
-            if not isinstance(result, str):
-                return
-
-            new_gid = result
-
-            download_id = None
-            for did in list(self._retrying_gids):
-                if did in self._all_downloads:
+        download_id = None
+        if req_id in self._all_downloads:
+            download_id = req_id
+        else:
+            for did, ddata in self._all_downloads.items():
+                if ddata.get("aria2_gid") == req_id:
                     download_id = did
                     break
 
-            if not download_id:
-                print(f"⚠️ [Retry] No retrying download found for new_gid={new_gid}")
+        if not result.get("success") or not isinstance(new_gid, str):
+            reason = result.get("error") or "re-add failed"
+            print(f"❌ [Retry] Re-add failed for {str(req_id)[:12]}: {reason}")
+            if download_id:
+                # Release the "already retrying" lock, otherwise this download
+                # could never be retried again (manually or automatically).
+                self._retrying_gids.discard(download_id)
+                self._all_downloads[download_id]["status"] = "error"
+                if not self._all_downloads[download_id].get("errorMessage"):
+                    self._all_downloads[download_id]["errorMessage"] = (
+                        f"Retry failed: {reason}"
+                    )
+                self._refresh_table()
+                self._update_queue_buttons()
+            return
 
-                try:
-                    self.aria2.remove(new_gid)
-                except Exception:
-                    pass
+        print(f"✅ Re-add result: {new_gid}")
+
+        if not download_id:
+            print(f"⚠️ [Retry] No download found for new_gid={new_gid}")
+            try:
+                self.aria2.remove(new_gid)
+            except Exception:
+                pass
+            return
+
+        old_gid = self._all_downloads[download_id].get("aria2_gid")
+
+        self._all_downloads[download_id]["aria2_gid"] = new_gid
+        self._all_downloads[download_id]["status"] = "active"
+
+        for q in self.store.queues:
+            if download_id in q.downloads_info:
+                q.downloads_info[download_id]["aria2_gid"] = new_gid
+                q.downloads_info[download_id]["status"] = "active"
+                break
+
+        self.store.save()
+
+        self._retrying_gids.discard(download_id)
+
+        print(
+            f"✅ [Retry] Complete: id={download_id[:12]} "
+            f"aria2_gid: {old_gid} -> {new_gid}"
+        )
+
+        QTimer.singleShot(100, lambda g=new_gid: self.worker.resume_requested.emit(g))
+
+        self._refresh_table()
+        self._queue_list_dirty = True
+        self._refresh_queue_list()
+        self._update_queue_buttons()
+
+        self.tray.showMessage(
+            "FelfelDM",
+            "✅ Download retried successfully",
+            QSystemTrayIcon.MessageIcon.Information,
+            2000,
+        )
+
+    def _on_worker_operation_result(self, operation: str, result: Any) -> None:
+        """Handle results from worker operations (re_add, add_url, etc.)"""
+
+        if operation == "re_add":
+            if not isinstance(result, dict):
                 return
-
-            old_gid = self._all_downloads[download_id].get("aria2_gid")
-
-            self._all_downloads[download_id]["aria2_gid"] = new_gid
-            self._all_downloads[download_id]["status"] = "active"
-
-            for q in self.store.queues:
-                if download_id in q.downloads_info:
-                    q.downloads_info[download_id]["aria2_gid"] = new_gid
-                    q.downloads_info[download_id]["status"] = "active"
-                    break
-
-            self.store.save()
-
-            self._retrying_gids.discard(download_id)
-
-            print(
-                f"✅ [Retry] Complete: id={download_id[:12]} "
-                f"aria2_gid: {old_gid} -> {new_gid}"
-            )
-
-            QTimer.singleShot(
-                100, lambda g=new_gid: self.worker.resume_requested.emit(g)
-            )
-
-            self._refresh_table()
-            self._queue_list_dirty = True
-            self._refresh_queue_list()
-            self._update_queue_buttons()
-
-            self.tray.showMessage(
-                "FelfelDM",
-                "✅ Download retried successfully",
-                QSystemTrayIcon.MessageIcon.Information,
-                2000,
-            )
+            self._handle_re_add_result(result)
 
         elif operation == "add_url" and result is not None:
             print(f"✅ Add URL result: {result}")
@@ -5519,6 +5541,70 @@ class MainWindow(QMainWindow):
 
         print(f"🔄 [Retry] Executing delayed retry for {download_id[:12]}")
         self._retry_single_download(download_id)
+
+    def _maybe_reset_error_counts(self) -> None:
+        """Reset a download's failed-attempt counter once it has been
+        downloading healthily for `retry_reset_after` seconds.
+
+        "Healthy" means: status is active, no retry is pending, and
+        completedLength actually advanced during the window (so a stalled
+        or still-connecting download never earns a reset).
+        """
+        reset_after = self._to_int(self.store.settings.get("retry_reset_after", 60))
+        if reset_after <= 0:
+            self._healthy_since.clear()
+            return
+
+        now = time.time()
+
+        for download_id in list(self._healthy_since):
+            if download_id not in self._all_downloads:
+                self._healthy_since.pop(download_id, None)
+
+        for download_id, data in self._all_downloads.items():
+            if data.get("download_type") == "youtube":
+                continue
+
+            if self._to_int(data.get("error_count", 0)) <= 0:
+                self._healthy_since.pop(download_id, None)
+                continue
+
+            healthy = (
+                data.get("status") in ("active", "downloading")
+                and download_id not in self._retry_state
+                and download_id not in self._retrying_gids
+            )
+            if not healthy:
+                self._healthy_since.pop(download_id, None)
+                continue
+
+            completed = self._to_int(data.get("completedLength", 0))
+            entry = self._healthy_since.get(download_id)
+
+            if entry is None or completed < entry[1]:
+                self._healthy_since[download_id] = (now, completed)
+                continue
+
+            since, base_completed = entry
+            if now - since < reset_after:
+                continue
+
+            if completed > base_completed:
+                old_count = self._to_int(data.get("error_count", 0))
+                data["error_count"] = 0
+                for q in self.store.queues:
+                    if download_id in q.downloads_info:
+                        q.downloads_info[download_id]["error_count"] = 0
+                        break
+                self._healthy_since.pop(download_id, None)
+                self.store.mark_dirty()
+                print(
+                    f"✅ [Retry] {download_id[:12]} healthy for {reset_after}s — "
+                    f"error_count reset {old_count} -> 0"
+                )
+            else:
+                # Active but no data moved during the whole window: not healthy.
+                self._healthy_since[download_id] = (now, completed)
 
     def _tick_retry_countdown(self) -> None:
         if not self._retry_state:
