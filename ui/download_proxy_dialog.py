@@ -112,14 +112,8 @@ class DownloadProxyDialog(QDialog):
 
         # Buttons
         btn_box = QDialogButtonBox(
-            QDialogButtonBox.StandardButton.Ok
-            | QDialogButtonBox.StandardButton.Cancel
-            | QDialogButtonBox.StandardButton.Apply
+            QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
         )
-
-        apply_btn = btn_box.button(QDialogButtonBox.StandardButton.Apply)
-        apply_btn.setText("Apply & Test")
-        apply_btn.clicked.connect(self._apply_and_test)
 
         btn_box.accepted.connect(self.accept)
         btn_box.rejected.connect(self.reject)
@@ -185,21 +179,6 @@ class DownloadProxyDialog(QDialog):
         except Exception as e:
             self.status_label.setText(f"❌ Error: {str(e)[:60]}")
             self.status_label.setStyleSheet("color: #e74c3c; font-size: 11px;")
-
-    def _apply_and_test(self):
-        """Apply settings and test"""
-        if self.use_custom_cb.isChecked():
-            config = self._get_custom_config()
-            if config.is_valid():
-                self._temp_config = config
-                self.status_label.setText("✅ Settings applied. Testing...")
-                self.status_label.setStyleSheet("color: #27ae60; font-size: 11px;")
-            else:
-                self.status_label.setText("❌ Invalid configuration")
-                self.status_label.setStyleSheet("color: #e74c3c; font-size: 11px;")
-                return
-
-        self._test_proxy()
 
     def _get_custom_config(self) -> ProxyConfig:
         type_str = self.type_combo.currentText().lower()
@@ -311,14 +290,8 @@ class SimpleProxyDialog(QDialog):
 
         # Buttons
         btn_box = QDialogButtonBox(
-            QDialogButtonBox.StandardButton.Ok
-            | QDialogButtonBox.StandardButton.Cancel
-            | QDialogButtonBox.StandardButton.Apply
+            QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
         )
-
-        apply_btn = btn_box.button(QDialogButtonBox.StandardButton.Apply)
-        apply_btn.setText("Apply & Test")
-        apply_btn.clicked.connect(self._apply_and_test)
 
         btn_box.accepted.connect(self.accept)
         btn_box.rejected.connect(self.reject)
@@ -372,18 +345,6 @@ class SimpleProxyDialog(QDialog):
                 self.status_label.setStyleSheet("color: #f39c12; font-size: 11px;")
         except Exception as e:
             self.status_label.setText(f"❌ Error: {str(e)[:60]}")
-            self.status_label.setStyleSheet("color: #e74c3c; font-size: 11px;")
-
-    def _apply_and_test(self):
-        """Apply settings and test"""
-        config = self._get_config()
-        if config.is_valid():
-            self._temp_config = config
-            self.status_label.setText("✅ Settings applied. Testing...")
-            self.status_label.setStyleSheet("color: #27ae60; font-size: 11px;")
-            self._test_proxy()
-        else:
-            self.status_label.setText("❌ Invalid configuration")
             self.status_label.setStyleSheet("color: #e74c3c; font-size: 11px;")
 
     def _get_config(self) -> ProxyConfig:
