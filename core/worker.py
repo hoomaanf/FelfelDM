@@ -9,6 +9,7 @@ from datetime import datetime
 import os
 import re
 import glob
+import time
 
 from core.youtube_worker import YouTubeWorker
 from core.data_store import DataStore
@@ -49,6 +50,7 @@ class BackendWorker(QThread):
 
         self._fetching_sizes: Set[str] = set()
         self._fetched_sizes: Set[str] = set()
+        self._failed_sizes: Dict[str, float] = {}
 
         self._size_executor = ThreadPoolExecutor(
             max_workers=5, thread_name_prefix="SizeFetch"
@@ -365,6 +367,12 @@ class BackendWorker(QThread):
         if gid in self._fetched_sizes:
             print(f"⏭️ [Worker] Size already fetched for {gid}, skipping")
             return
+            # Skip recently-failed gids to avoid spamming the fetcher every poll.
+        failed_at = self._failed_sizes.get(gid)
+        if failed_at is not None:
+            if time.time() - failed_at < 300.0:  # 5 minutes
+                return
+            del self._failed_sizes[gid]
 
         for q in self.store.queues:
             if gid in q.downloads_info:
@@ -416,6 +424,7 @@ class BackendWorker(QThread):
 
             if size and size > 0:
                 self._fetched_sizes.add(gid)
+                self._failed_sizes.pop(gid, None)
 
                 filename = None
                 for q in self.store.queues:
@@ -432,12 +441,14 @@ class BackendWorker(QThread):
                     f"{size} bytes ({size/1024/1024/1024:.2f} GB)"
                 )
             else:
-                print(f"⚠️ [BackendWorker] Could not fetch size for {gid}")
+                print(f"⚠️ [Worker] Could not fetch size for {gid}")
+                self._failed_sizes[gid] = time.time()
 
         except Exception as e:
             import traceback
 
             traceback.print_exc()
+            self._failed_sizes[gid] = time.time()
         finally:
             self._fetching_sizes.discard(gid)
 
@@ -597,7 +608,6 @@ class BackendWorker(QThread):
             if new_gid:
                 id_short = matched_id[:12] if matched_id else download_id_or_gid[:12]
                 print(f"🔄 [Worker] Re-added id={id_short} -> gid={new_gid}")
-                # main_window (فاز B.3) خودش aria2_gid رو آپدیت می‌کنه
                 _report(new_gid=new_gid)
             else:
                 _report(error="aria2 rejected add_url")
@@ -639,7 +649,6 @@ class BackendWorker(QThread):
             print(f"⚠️ [Worker] Shutdown failed: {e}")
 
     def add_youtube_download(self, download_data: dict) -> str:
-        print(f"🔥🔥🔥 add_youtube_download CALLED")
         download_id = download_data.get("id") or str(uuid.uuid4())
         existing = self.store.get_youtube_download(download_id)
         if existing:
@@ -679,7 +688,6 @@ class BackendWorker(QThread):
         return download_id
 
     def _fetch_youtube_size(self, download_id: str):
-        print(f"📏📏📏 _fetch_youtube_size CALLED for {download_id}")
         with self.youtube_lock:
             if download_id not in self.youtube_downloads:
                 return
@@ -756,7 +764,6 @@ class BackendWorker(QThread):
             del self._size_workers[download_id]
 
     def _start_youtube_download(self, download_id: str):
-        print(f"🎬🎬🎬 _start_youtube_download CALLED for: {download_id}")
         with self.youtube_lock:
             if download_id not in self.youtube_downloads:
                 print(f"❌ [START] download_id not in youtube_downloads")

@@ -267,3 +267,106 @@ def get_resource_path(relative_path):
         base_path = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
     return os.path.join(base_path, relative_path)
+
+
+def get_error_reason(error_msg: str) -> str:
+    """Map a raw aria2 error message to a short human-readable label.
+
+    Only the most common patterns are handled; anything unrecognized
+    falls back to a generic "Download failed".
+    """
+    if not error_msg:
+        return "Download failed"
+
+    msg = error_msg.lower()
+
+    # HTTP status codes
+    if "404" in msg or "not found" in msg:
+        return "404 Not Found"
+    if "403" in msg or "forbidden" in msg:
+        return "403 Forbidden"
+    if "401" in msg or "unauthorized" in msg:
+        return "401 Unauthorized"
+    if "410" in msg or "gone" in msg:
+        return "410 Gone"
+    if "451" in msg:
+        return "451 Unavailable for Legal Reasons"
+    if "429" in msg or "too many requests" in msg:
+        return "429 Too Many Requests"
+    if "500" in msg or "internal server error" in msg:
+        return "500 Server Error"
+    if "502" in msg or "bad gateway" in msg:
+        return "502 Bad Gateway"
+    if "503" in msg or "service unavailable" in msg:
+        return "503 Service Unavailable"
+    if "504" in msg or "gateway timeout" in msg:
+        return "504 Gateway Timeout"
+
+    # TLS / certificate
+    if (
+        "certificate" in msg
+        or "cert verify" in msg
+        or "tls" in msg
+        or "ssl" in msg
+    ):
+        return "TLS/Certificate error"
+
+    # DNS
+    if (
+        "name resolution" in msg
+        or "could not resolve" in msg
+        or "unable to resolve" in msg
+        or "could not contact dns" in msg
+        or "dns servers" in msg
+    ):
+        return "DNS resolution failed"
+
+    # Timeouts
+    if "timeout" in msg or "timed out" in msg:
+        return "Connection timeout"
+
+    # Connection issues
+    if (
+        "connection" in msg
+        or "reset by peer" in msg
+        or "refused" in msg
+        or "eof from the server" in msg
+        or "got eof" in msg
+    ):
+        return "Connection error"
+
+    if "no route" in msg or "unreachable" in msg:
+        return "Network unreachable"
+
+    return "Download failed"
+
+
+def get_retry_status(download: dict) -> str:
+    """Return a short label describing the current retry state.
+
+    Uses only fields already present on the download dict, so it stays
+    in sync with whatever the UI knows at that moment.
+    """
+    if not download:
+        return "—"
+
+    status = download.get("status", "")
+
+    if status == "retrying":
+        detail = download.get("status_detail", "")
+        # status_detail looks like: "🔄 Retrying in 12s... (2/5)"
+        # Extract just the "12s" part if possible.
+        import re as _re
+
+        m = _re.search(r"in (\d+)s", detail)
+        if m:
+            return f"In {m.group(1)}s"
+        return "In progress"
+
+    if status in ("active", "downloading"):
+        return "—"
+
+    if status == "error":
+        return "Not retryable"
+
+    return "—"

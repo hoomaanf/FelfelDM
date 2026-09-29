@@ -145,9 +145,15 @@ class QueueOperationWorker(QThread):
             pass
 
         if resumed_count > 0:
-            self.finished.emit(True, f"✅ Started {resumed_count} download(s)")
+            self.finished.emit(
+                True,
+                f"Queue '{self.queue.name}' started ({resumed_count} download(s))",
+            )
         else:
-            self.finished.emit(True, "ℹ️ No downloads to resume")
+            self.finished.emit(
+                True,
+                f"Queue '{self.queue.name}' started",
+            )
 
     def _pause_queue(self):
         q = self.queue

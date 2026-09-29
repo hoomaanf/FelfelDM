@@ -120,6 +120,7 @@ class MainWindow(QMainWindow):
         self._open_dialogs: Dict[str, QDialog] = {}
         self._pending_status: Dict[str, tuple] = {}
         self._last_speed_limit_active_count: Optional[int] = None
+        self._last_schedules_hash: Optional[int] = None
         self.tray_icon_normal = None
         self.tray_icon_active = None
         self._last_tray_state = False
@@ -355,6 +356,23 @@ class MainWindow(QMainWindow):
                         enabled=True,
                     )
                 )
+
+        # Only push to the schedule thread if something actually changed.
+        # _load_schedules is called from several places (startup, queue edit,
+        # settings save) and re-pushing an identical schedule list churns the
+        # manager's _running_queues set, causing spurious start/pause signals.
+        fingerprint = hash(
+            tuple(
+                sorted(
+                    (s.queue_name, s.start, s.end, tuple(sorted(s.days)))
+                    for s in schedules
+                )
+            )
+        )
+        if fingerprint == self._last_schedules_hash:
+            return
+
+        self._last_schedules_hash = fingerprint
         self.schedule_thread.set_schedules(schedules)
         print(f"📅 [Schedule] Loaded {len(schedules)} schedule(s)")
 
@@ -565,7 +583,8 @@ class MainWindow(QMainWindow):
             )
 
         self.details_panel = self._build_details_panel()
-        self.details_panel.setVisible(False)
+        self.details_panel.setVisible(True)
+        self._details_visible = True
         ma_lay.addWidget(self.details_panel)
 
         self._build_status_bar()
@@ -1750,6 +1769,17 @@ class MainWindow(QMainWindow):
                         download_id = did
                         break
                 if download_id:
+                    # Skip if this download is already being retried.
+                    # Otherwise every poll tick re-detects the same error
+                    # and calls _on_download_error again in a loop.
+                    if (
+                        download_id in self._retry_state
+                        or download_id in self._retrying_gids
+                    ):
+                        continue
+                    if self._all_downloads[download_id].get("status") == "retrying":
+                        continue
+
                     old_status = self._all_downloads[download_id].get("status", "")
 
                     if old_status not in ("error", "stopped", "paused"):
@@ -2030,16 +2060,11 @@ class MainWindow(QMainWindow):
         self.status_label.setText(f"⚠ {message}")
 
     def _on_size_fetched(self, gid: str, size: int, category: str = "📁 Other") -> None:
-        print(
-            f"📏 [MainWindow] Size fetched: gid={gid}, size={size}, category={category}"
-        )
 
         if size < 0:
             size = size & 0xFFFFFFFF
-            print(f"🔄 [Size] Converted negative to unsigned: {size}")
 
         if size <= 0:
-            print(f"⚠️ [Size] Invalid size for {gid}: {size}")
             return
 
         download_id = None
@@ -2062,10 +2087,6 @@ class MainWindow(QMainWindow):
             current_size = 0
 
         if current_size > 0 and current_size == size:
-            print(
-                f"⏭️ [MainWindow] Size already exists for "
-                f"{download_id[:12]}: {size}, skipping"
-            )
             return
 
         self._all_downloads[download_id]["totalLength"] = size
@@ -2080,11 +2101,6 @@ class MainWindow(QMainWindow):
         self.store.save()
         self._refresh_table()
         self._update_progress_bar()
-
-        print(
-            f"✅ [MainWindow] Size updated for {download_id[:12]}: "
-            f"{size} bytes ({size/1024/1024/1024:.2f} GB)"
-        )
 
     def _on_table_double_click(self, index: QModelIndex) -> None:
         gid = self.model.get_gid(index.row())
@@ -2434,7 +2450,8 @@ class MainWindow(QMainWindow):
             ("package-x-generic", "Size:", "size", 1),
             ("emblem-downloads", "Downloaded:", "downloaded", 2),
             ("dialog-information", "Status:", "status", 3),
-            ("folder", "Path:", "path", 4),
+            ("dialog-warning", "Reason:", "reason", 4),
+            ("folder", "Path:", "path", 5),
         ]
 
         self.detail_labels = {}
@@ -2588,6 +2605,25 @@ class MainWindow(QMainWindow):
                 f"font-size: 12px; color: {color};"
             )
 
+            from utils.helpers import get_error_reason
+
+            if status in ("error", "retrying"):
+                reason_text = get_error_reason(data.get("errorMessage", ""))
+            else:
+                reason_text = "—"
+
+            self.detail_labels["reason"].setText(reason_text)
+            if status == "error":
+                self.detail_labels["reason"].setStyleSheet(
+                    "font-size: 12px; color: #e74c3c;"
+                )
+            elif status == "retrying":
+                self.detail_labels["reason"].setStyleSheet(
+                    "font-size: 12px; color: #f39c12;"
+                )
+            else:
+                self.detail_labels["reason"].setStyleSheet("font-size: 12px;")
+
             files = data.get("files", [])
             if files and files[0].get("path"):
                 path = os.path.dirname(files[0]["path"])
@@ -2597,6 +2633,7 @@ class MainWindow(QMainWindow):
 
         if hasattr(self, "detail_pause_btn"):
             real_status = data.get("status", "")
+            download_type = data.get("download_type", "normal")
 
             if real_status in ["active", "waiting", "downloading"]:
                 self.detail_pause_btn.setEnabled(True)
@@ -2606,6 +2643,20 @@ class MainWindow(QMainWindow):
                 self.detail_pause_btn.setEnabled(True)
                 self.detail_pause_btn.setText("Resume")
                 self.detail_pause_btn.setIcon(get_icon("media-playback-start"))
+            elif real_status == "error":
+                # Errored downloads can be retried (which re-adds them
+                # with a fresh gid), even if they're marked permanent.
+                self.detail_pause_btn.setEnabled(True)
+                self.detail_pause_btn.setText("Retry")
+                self.detail_pause_btn.setIcon(get_icon("view-refresh"))
+            elif real_status == "retrying":
+                self.detail_pause_btn.setEnabled(False)
+                self.detail_pause_btn.setText("Retrying...")
+                self.detail_pause_btn.setIcon(get_icon("view-refresh"))
+            elif real_status in ("complete", "completed"):
+                self.detail_pause_btn.setEnabled(False)
+                self.detail_pause_btn.setText("Completed")
+                self.detail_pause_btn.setIcon(get_icon("emblem-default"))
             else:
                 self.detail_pause_btn.setEnabled(False)
                 self.detail_pause_btn.setText("Pause")
@@ -2613,7 +2664,16 @@ class MainWindow(QMainWindow):
 
         if hasattr(self, "detail_cancel_btn"):
             real_status = data.get("status", "")
-            if real_status in ["active", "waiting", "downloading", "paused"]:
+            # Cancel is available for anything that isn't already
+            # complete/retrying — a retrying download is already being
+            # handled by the retry logic.
+            if real_status in [
+                "active",
+                "waiting",
+                "downloading",
+                "paused",
+                "error",
+            ]:
                 self.detail_cancel_btn.setEnabled(True)
             else:
                 self.detail_cancel_btn.setEnabled(False)
@@ -2698,51 +2758,47 @@ class MainWindow(QMainWindow):
             self.queue_list.setCurrentRow(prev_idx)
 
     def _remove_with_files(self) -> None:
-        """Remove selected downloads and delete files (Shift+Delete)"""
+        """Remove selected downloads and delete files (Shift+Delete)."""
         selected = self.table.selectionModel().selectedRows()
         if not selected:
             return
 
-        reply = QMessageBox.question(
-            self,
-            "Remove & Delete Files",
-            f"Remove {len(selected)} download(s) and delete all associated files?",
-            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-        )
+        gids_to_remove = [
+            self.model.get_gid(idx.row())
+            for idx in selected
+            if self.model.get_gid(idx.row())
+        ]
+        if not gids_to_remove:
+            return
 
-        if reply == QMessageBox.StandardButton.Yes:
-            gids_to_remove = [
-                self.model.get_gid(idx.row())
-                for idx in selected
-                if self.model.get_gid(idx.row())
-            ]
+        # Show the confirmation dialog first.
+        if not self._delete_files_with_confirmation(gids_to_remove):
+            return
 
-            for gid in gids_to_remove:
-                try:
-                    self._worker_remove(gid)
-                except Exception:
-                    pass
+        # Now remove from UI + aria2
+        for gid in gids_to_remove:
+            try:
+                self._worker_remove(gid)
+            except Exception:
+                pass
+            try:
+                self.aria2._call("aria2.removeDownloadResult", [gid])
+            except Exception:
+                pass
 
-                try:
-                    self.aria2._call("aria2.removeDownloadResult", [gid])
-                except Exception:
-                    pass
+            for q in self.store.queues:
+                if gid in q.downloads:
+                    q.downloads.remove(gid)
+                if gid in q.downloads_info:
+                    del q.downloads_info[gid]
+            if gid in self._all_downloads:
+                del self._all_downloads[gid]
 
-                for q in self.store.queues:
-                    if gid in q.downloads:
-                        q.downloads.remove(gid)
-                    if gid in q.downloads_info:
-                        self._delete_download_files(gid)
-                        del q.downloads_info[gid]
-
-                if gid in self._all_downloads:
-                    del self._all_downloads[gid]
-
-            self.store.save()
-            self._refresh_table()
-            self._queue_list_dirty = True
-            self._refresh_queue_list()
-            self._update_queue_buttons()
+        self.store.save()
+        self._refresh_table()
+        self._queue_list_dirty = True
+        self._refresh_queue_list()
+        self._update_queue_buttons()
 
     def _quick_download(self) -> None:
         """Open the Quick Download dialog (Direct Downloads mode)."""
@@ -2855,38 +2911,21 @@ class MainWindow(QMainWindow):
 
         delete_files = result["value"] == "remove_files"
 
-        deleted_files_info = {}
+        # If the user chose "Remove & Delete Files", show the confirmation
+        # dialog FIRST — before touching any UI state — so cancelling is safe.
         if delete_files:
-            for gid in gids_to_remove:
-                dl_info = self._all_downloads.get(gid, {})
-                info = {}
-                for q in self.store.queues:
-                    if gid in q.downloads_info:
-                        info = q.downloads_info[gid]
-                        break
+            if not self._delete_files_with_confirmation(gids_to_remove):
+                return
 
-                deleted_files_info[gid] = {
-                    "name": dl_info.get("name") or info.get("name", ""),
-                    "save_path": dl_info.get("save_path") or info.get("save_path"),
-                    "url": info.get("url", ""),
-                }
-
-        gids_for_disk_cleanup = []
-
+        # Now remove from UI + aria2
         for gid in gids_to_remove:
-
             for q in self.store.queues:
                 if gid in q.downloads:
                     q.downloads.remove(gid)
                 if gid in q.downloads_info:
-
-                    if delete_files:
-                        gids_for_disk_cleanup.append(gid)
                     del q.downloads_info[gid]
-
             if gid in self._all_downloads:
                 del self._all_downloads[gid]
-
             if gid in self._retrying_gids:
                 self._retrying_gids.discard(gid)
 
@@ -2894,7 +2933,6 @@ class MainWindow(QMainWindow):
             self._worker_remove_multi(gids_to_remove)
         except Exception as e:
             print(f"⚠️ Batch remove failed: {e}")
-
             for gid in gids_to_remove:
                 try:
                     self._worker_remove(gid)
@@ -2908,66 +2946,6 @@ class MainWindow(QMainWindow):
         self._refresh_queue_list()
         self._update_queue_buttons()
 
-        if delete_files and gids_for_disk_cleanup:
-            from PyQt6.QtCore import QTimer
-
-            QTimer.singleShot(
-                100,
-                lambda: self._delete_files_in_background(
-                    gids_for_disk_cleanup, deleted_files_info
-                ),
-            )
-
-    def _delete_files_in_background(self, gids: list, files_info: dict = None) -> None:
-        """
-        Delete files for multiple GIDs in a background thread.
-        Uses QThreadPool to avoid blocking the UI.
-        """
-        from PyQt6.QtCore import QRunnable, QThreadPool, QObject, pyqtSignal
-
-        files_info = files_info or {}
-
-        class DeleteSignals(QObject):
-            finished = pyqtSignal()
-            progress = pyqtSignal(int, int)
-
-        class DeleteTask(QRunnable):
-            def __init__(self, main_window, gids, files_info):
-                super().__init__()
-                self.main_window = main_window
-                self.gids = gids
-                self.files_info = files_info
-                self.signals = DeleteSignals()
-
-            def run(self):
-                total = len(self.gids)
-                for i, gid in enumerate(self.gids):
-                    try:
-                        info = self.files_info.get(gid, {})
-                        self.main_window._delete_download_files(
-                            gid,
-                            name_hint=info.get("name"),
-                            save_path_hint=info.get("save_path"),
-                            url_hint=info.get("url"),
-                        )
-                    except Exception as e:
-                        print(f"⚠️ Error deleting files for {gid}: {e}")
-                    self.signals.progress.emit(i + 1, total)
-                self.signals.finished.emit()
-
-        task = DeleteTask(self, gids, files_info)
-        task.signals.finished.connect(
-            lambda: self.status_label.setText(
-                f"✅ Deleted files for {len(gids)} download(s)"
-            )
-        )
-        task.signals.progress.connect(
-            lambda done, total: self.status_label.setText(
-                f"🗑️ Deleting files... ({done}/{total})"
-            )
-        )
-        QThreadPool.globalInstance().start(task)
-
     def _reset_speed_if_idle(self) -> None:
         has_active = any(
             self._all_downloads.get(g, {}).get("status") in ("active", "downloading")
@@ -2980,205 +2958,252 @@ class MainWindow(QMainWindow):
             if hasattr(self, "speed_status_label"):
                 self.speed_status_label.setText("0 B/s")
 
-    def _delete_download_files(
-        self,
-        gid: str,
-        name_hint: Optional[str] = None,
-        save_path_hint: Optional[str] = None,
-        url_hint: Optional[str] = None,
-    ) -> None:
+    def _collect_files_for_gids(self, gids: List[str]) -> List[Dict[str, Any]]:
+        """Build a list of files that WOULD be deleted for the given gids.
+
+        Each entry is:
+            {
+                "gid": download_id,
+                "path": absolute file path,
+                "name": basename,
+                "size": int (bytes) or 0,
+                "kind": "main" | "sidecar",
+                "exists": bool,
+            }
+
+        This function does not touch the filesystem beyond stat() calls.
         """
-        Delete downloaded files for a given GID.
-        """
-        import glob
+        entries: List[Dict[str, Any]] = []
+        seen_paths: set = set()
 
-        file_paths = []
-        aria2_files = []
-        save_path = save_path_hint
-        name = name_hint
-        url = url_hint
-        download_type = None
-        status = None
-        completed_length = 0
+        for gid in gids:
+            file_paths: List[str] = []
+            aria2_files: List[str] = []
+            save_path: Optional[str] = None
+            name: Optional[str] = None
+            url: Optional[str] = None
+            status: Optional[str] = None
+            completed_length = 0
 
-        print(f"🗑️ [_delete_download_files] START for gid: {gid}")
-
-        for q in self.store.queues:
-            if gid in q.downloads_info:
-                info = q.downloads_info[gid]
-                save_path = save_path or info.get("save_path") or q.save_path
-                name = name or info.get("name", "").strip()
-                url = url or info.get("url", "")
-                download_type = info.get("download_type", "normal")
-                status = info.get("status", "")
-                completed_length = int(info.get("completedLength", 0) or 0)
-                files = info.get("files", [])
-                for f in files:
-                    if f.get("path"):
-                        file_paths.append(f["path"])
-                break
-
-        if gid in self._all_downloads:
-            dl = self._all_downloads[gid]
-            name = name or dl.get("name", "")
-            url = url or dl.get("url", "")
-            status = status or dl.get("status", "")
-            completed_length = completed_length or int(
-                dl.get("completedLength", 0) or 0
-            )
-            files = dl.get("files", [])
-            for f in files:
-                if f.get("path") and f["path"] not in file_paths:
-                    file_paths.append(f["path"])
-
-        if not save_path:
+            # 1. Look up metadata from the queue info.
             for q in self.store.queues:
-                if gid in q.downloads:
-                    save_path = q.save_path
+                if gid in q.downloads_info:
+                    info = q.downloads_info[gid]
+                    save_path = info.get("save_path") or q.save_path
+                    name = (info.get("name") or "").strip() or None
+                    url = info.get("url", "")
+                    status = info.get("status", "")
+                    completed_length = self._to_int(info.get("completedLength", 0))
+                    for f in info.get("files", []):
+                        if f.get("path"):
+                            file_paths.append(f["path"])
                     break
-        if not save_path:
-            save_path = os.path.expanduser("~/Downloads")
 
-        file_never_started = status == "paused" and completed_length == 0
+            if gid in self._all_downloads:
+                dl = self._all_downloads[gid]
+                name = name or dl.get("name", "") or None
+                url = url or dl.get("url", "")
+                status = status or dl.get("status", "")
+                completed_length = completed_length or self._to_int(
+                    dl.get("completedLength", 0)
+                )
+                for f in dl.get("files", []):
+                    if f.get("path") and f["path"] not in file_paths:
+                        file_paths.append(f["path"])
 
-        if file_never_started and not file_paths:
-            print(
-                f"⏭️ [_delete_download_files] Download never started "
-                f"(status={status}, completed={completed_length}). "
-                f"Skipping filesystem scan for {gid}."
-            )
-            return
+            if not save_path:
+                for q in self.store.queues:
+                    if gid in q.downloads:
+                        save_path = q.save_path
+                        break
+            if not save_path:
+                save_path = os.path.expanduser("~/Downloads")
 
-        if not name and url:
-            name = url.split("/")[-1].split("?")[0]
-        if not name:
-            name = f"download_{gid[:8]}"
+            if not name and url:
+                name = url.split("/")[-1].split("?")[0]
+            if not name:
+                name = f"download_{gid[:8]}"
 
-        if save_path and os.path.exists(save_path):
+            # 2. If the download never started, there's nothing on disk.
+            if status == "paused" and completed_length == 0 and not file_paths:
+                continue
 
-            if name:
+            # 3. Direct paths from stored info.
+            if save_path and os.path.exists(save_path):
                 direct_path = os.path.join(save_path, name)
                 if os.path.exists(direct_path) and direct_path not in file_paths:
                     file_paths.append(direct_path)
-                    print(f"✅ Found main file directly: {name}")
 
-            if not any(os.path.exists(p) for p in file_paths):
-                if file_paths:
-                    print(
-                        f"⚠️ Known file path(s) don't exist on disk "
-                        f"(likely extension mismatch), falling back to scan: {file_paths}"
-                    )
-                print(f"🔍 Scanning directory for leftovers: {save_path}")
-                print(f"🔎 [DEBUG] name={name!r} gid={gid!r} save_path={save_path!r}")
+                # If nothing stored exists on disk, scan the directory
+                # for files matching this download's name or gid.
+                if not any(os.path.exists(p) for p in file_paths):
 
-                # yt-dlp sanitizes characters that can't legally appear in a
-                # filename (e.g. "/", ":", "|", "?", '"') when it writes the
-                # file to disk, but `name` here is the raw, unsanitized video
-                # title. A plain substring check breaks whenever the title
-                # contains any such character. Normalize both sides down to
-                # just letters/digits/underscore before comparing so
-                # punctuation differences don't cause a false negative.
-                def _norm(s: str) -> str:
-                    return re.sub(r"[^\w]+", "", s.lower()) if s else ""
+                    def _norm(s: str) -> str:
+                        return re.sub(r"[^\w]+", "", s.lower()) if s else ""
 
-                name_norm = _norm(name)
+                    name_norm = _norm(name)
+                    try:
+                        for file in os.listdir(save_path):
+                            full_path = os.path.join(save_path, file)
+                            lower = file.lower()
+                            stem = os.path.splitext(file)[0]
+                            file_norm = _norm(stem)
 
-                try:
-                    entries = os.listdir(save_path)
-                    print(f"🔎 [DEBUG] directory has {len(entries)} entries")
-                    for file in entries:
-                        full_path = os.path.join(save_path, file)
-                        lower = file.lower()
-                        file_norm = _norm(os.path.splitext(file)[0])
-
-                        is_temp = any(
-                            x in lower
-                            for x in [".aria2", ".part", ".f", ".temp", ".ytdl"]
-                        )
-
-                        name_matches = name_norm and (
-                            name_norm in file_norm
-                            # yt-dlp may truncate very long titles when
-                            # writing to disk; treat a long enough prefix
-                            # match as the same file too.
-                            or (
-                                len(file_norm) >= 15 and name_norm.startswith(file_norm)
+                            name_matches = name_norm and (
+                                name_norm in file_norm
+                                or (
+                                    len(file_norm) >= 15
+                                    and name_norm.startswith(file_norm)
+                                )
                             )
-                        )
+                            gid_matches = bool(gid) and gid in file
 
-                        if name_matches and not is_temp:
-                            if full_path not in file_paths:
-                                file_paths.append(full_path)
-                                print(f"✅ Found main file by name: {file}")
+                            if not (name_matches or gid_matches):
+                                continue
 
-                        if gid in file:
-                            if not is_temp:
+                            if lower.endswith(".aria2"):
+                                aria2_files.append(full_path)
+                                continue
+
+                            temp_suffix = (
+                                lower.endswith(".part")
+                                or lower.endswith(".ytdl")
+                                or lower.endswith(".temp")
+                                or re.search(r"\.f\d+$", lower) is not None
+                            )
+
+                            if temp_suffix:
+                                aria2_files.append(full_path)
+                            else:
                                 if full_path not in file_paths:
                                     file_paths.append(full_path)
-                                    print(f"✅ Found main file by GID: {file}")
+                    except Exception as e:
+                        print(f"⚠️ Dir list error for {gid}: {e}")
 
-                        if ".aria2" in lower:
-                            aria2_files.append(full_path)
-                            print(f"✅ Found .aria2 file: {file}")
+            # 3b. Always look for .aria2 sidecars next to known files,
+            # even if the main file exists on disk. aria2 leaves these
+            # next to the target filename (e.g. "foo.exe.aria2").
+            for p in list(file_paths):
+                sidecar = p + ".aria2"
+                if os.path.exists(sidecar) and sidecar not in aria2_files:
+                    aria2_files.append(sidecar)
 
-                        if any(x in lower for x in [".part", ".f", ".temp", ".ytdl"]):
-                            aria2_files.append(full_path)
-                            print(f"✅ Found temp file: {file}")
+            # 3c. Also look for common temp suffixes next to known files
+            # (e.g. ".part", ".ytdl", ".f137") that aria2 or yt-dlp may
+            # leave behind when the main file already exists.
+            for p in list(file_paths):
+                base_dir = os.path.dirname(p)
+                base_name = os.path.basename(p)
+                if not base_dir or not os.path.exists(base_dir):
+                    continue
+                try:
+                    for file in os.listdir(base_dir):
+                        if not file.startswith(base_name):
+                            continue
+                        if file == base_name:
+                            continue
+                        lower = file.lower()
+                        temp_suffix = (
+                            lower.endswith(".aria2")
+                            or lower.endswith(".part")
+                            or lower.endswith(".ytdl")
+                            or lower.endswith(".temp")
+                            or re.search(r"\.f\d+$", lower) is not None
+                        )
+                        if temp_suffix:
+                            full = os.path.join(base_dir, file)
+                            if full not in aria2_files:
+                                aria2_files.append(full)
+                except OSError:
+                    pass
 
-                except Exception as e:
-                    print(f"⚠️ Dir list error: {e}")
+            # 4. Build entries.
+            for p in file_paths:
+                if p in seen_paths:
+                    continue
+                seen_paths.add(p)
+                try:
+                    size = os.path.getsize(p) if os.path.exists(p) else 0
+                except OSError:
+                    size = 0
+                entries.append(
+                    {
+                        "gid": gid,
+                        "path": p,
+                        "name": os.path.basename(p),
+                        "size": size,
+                        "kind": "main",
+                        "exists": os.path.exists(p),
+                    }
+                )
 
-        if save_path and os.path.exists(save_path) and (file_paths or aria2_files):
-            patterns = [
-                f"{name}.aria2",
-                f"{name}.*.aria2",
-            ]
-            for pattern in patterns:
-                full_pattern = os.path.join(save_path, pattern)
-                for f in glob.glob(full_pattern):
-                    if f not in aria2_files:
-                        aria2_files.append(f)
-                        print(f"✅ Found .aria2 with pattern: {os.path.basename(f)}")
+            for p in aria2_files:
+                if p in seen_paths:
+                    continue
+                seen_paths.add(p)
+                try:
+                    size = os.path.getsize(p) if os.path.exists(p) else 0
+                except OSError:
+                    size = 0
+                entries.append(
+                    {
+                        "gid": gid,
+                        "path": p,
+                        "name": os.path.basename(p),
+                        "size": size,
+                        "kind": "sidecar",
+                        "exists": os.path.exists(p),
+                    }
+                )
 
-        print(f"📊 Files to delete: {file_paths}")
-        deleted_count = 0
-        for path in set(file_paths):
+        return entries
+
+    def _delete_files_with_confirmation(self, gids: List[str]) -> bool:
+        """Collect files for the given gids, show a confirmation dialog,
+        and delete only what the user confirmed.
+
+        Returns True if deletion proceeded, False if the user cancelled.
+        """
+        entries = self._collect_files_for_gids(gids)
+        if not entries:
+            print("🗑️ [Delete] No files to delete")
+            return True
+
+        from ui.dialogs import DeleteFilesConfirmationDialog
+
+        dlg = DeleteFilesConfirmationDialog(entries, parent=self)
+        if dlg.exec() != QDialog.DialogCode.Accepted:
+            print("🗑️ [Delete] Cancelled by user")
+            return False
+
+        paths = dlg.get_paths_to_delete()
+        if not paths:
+            print("🗑️ [Delete] Nothing selected")
+            return True
+
+        deleted = 0
+        for path in paths:
             try:
-                if os.path.exists(path):
-                    if os.path.isfile(path):
-                        os.remove(path)
-                        deleted_count += 1
-                        print(f"🗑️ DELETED FILE: {os.path.basename(path)}")
-                    elif os.path.isdir(path):
-                        shutil.rmtree(path)
-                        deleted_count += 1
-                        print(f"🗑️ DELETED FOLDER: {path}")
+                if os.path.isfile(path):
+                    os.remove(path)
+                    deleted += 1
+                    print(f"🗑️ DELETED: {os.path.basename(path)}")
+                elif os.path.isdir(path):
+                    shutil.rmtree(path)
+                    deleted += 1
+                    print(f"🗑️ DELETED DIR: {path}")
             except PermissionError:
                 try:
                     subprocess.run(["rm", "-f", path], capture_output=True)
+                    deleted += 1
                     print(f"🗑️ DELETED (force): {os.path.basename(path)}")
-                    deleted_count += 1
-                except Exception as e2:
-                    print(f"⚠️ Force delete failed {path}: {e2}")
+                except Exception as e:
+                    print(f"⚠️ Force delete failed {path}: {e}")
             except Exception as e:
                 print(f"⚠️ Delete failed {path}: {e}")
 
-        print(f"📊 .aria2/temp files to delete: {aria2_files}")
-        for path in set(aria2_files):
-            try:
-                if os.path.exists(path):
-                    os.remove(path)
-                    print(f"🗑️ DELETED TEMP: {os.path.basename(path)}")
-            except PermissionError:
-                try:
-                    subprocess.run(["rm", "-f", path], capture_output=True)
-                    print(f"🗑️ DELETED TEMP (force): {os.path.basename(path)}")
-                except Exception as e2:
-                    print(f"⚠️ Force delete temp failed {path}: {e2}")
-            except Exception as e:
-                print(f"⚠️ Delete temp failed {path}: {e}")
-
-        print(f"✅ Deleted {deleted_count} file(s)")
+        print(f"✅ Deleted {deleted} file(s)")
+        return True
 
     def _youtube_download(self) -> None:
         queues = [q for q in self.store.queues if q.name != "__direct__"]
@@ -4078,6 +4103,9 @@ class MainWindow(QMainWindow):
         self._progress_dialog = None
 
     def _cancel_with_delete_from_dialog(self, gid: str) -> None:
+        # Ask for confirmation FIRST, before touching aria2 or the UI.
+        if not self._delete_files_with_confirmation([gid]):
+            return
 
         try:
             self.aria2.force_remove(gid)
@@ -4086,12 +4114,10 @@ class MainWindow(QMainWindow):
             print(f"❌ force_remove failed: {e}")
             try:
                 self._worker_remove(gid)
-            except:
+            except Exception:
                 pass
 
         QApplication.processEvents()
-
-        self._delete_download_files(gid)
 
         for q in self.store.queues:
             if gid in q.downloads:
@@ -4957,14 +4983,12 @@ class MainWindow(QMainWindow):
                 self._retrying_gids.discard(download_id)
                 self._all_downloads[download_id]["status"] = "error"
                 if not self._all_downloads[download_id].get("errorMessage"):
-                    self._all_downloads[download_id]["errorMessage"] = (
-                        f"Retry failed: {reason}"
-                    )
+                    self._all_downloads[download_id][
+                        "errorMessage"
+                    ] = f"Retry failed: {reason}"
                 self._refresh_table()
                 self._update_queue_buttons()
             return
-
-        print(f"✅ Re-add result: {new_gid}")
 
         if not download_id:
             print(f"⚠️ [Retry] No download found for new_gid={new_gid}")
@@ -5000,13 +5024,6 @@ class MainWindow(QMainWindow):
         self._queue_list_dirty = True
         self._refresh_queue_list()
         self._update_queue_buttons()
-
-        self.tray.showMessage(
-            "FelfelDM",
-            "✅ Download retried successfully",
-            QSystemTrayIcon.MessageIcon.Information,
-            2000,
-        )
 
     def _on_worker_operation_result(self, operation: str, result: Any) -> None:
         """Handle results from worker operations (re_add, add_url, etc.)"""
@@ -5363,10 +5380,6 @@ class MainWindow(QMainWindow):
         return not any(p in msg for p in self._PERMANENT_ERROR_PATTERNS)
 
     def _on_download_error(self, download_id: str, error_msg: str) -> None:
-        print(
-            f"🔴 [Error] _on_download_error CALLED for {download_id[:12]}, msg={error_msg[:100]!r}"
-        )
-
         data = self._all_downloads.get(download_id)
         if not data:
             return
@@ -5379,6 +5392,13 @@ class MainWindow(QMainWindow):
 
         if download_id in self._retry_state:
             return
+
+        if data.get("status") == "retrying":
+            return
+
+        print(
+            f"🔴 [Error] _on_download_error for {download_id[:12]}, msg={error_msg[:100]!r}"
+        )
 
         if not error_msg or not error_msg.strip():
             print(
@@ -5408,6 +5428,10 @@ class MainWindow(QMainWindow):
             "bad gateway",
             "gateway timeout",
             "internal server error",
+            "tls packet",
+            "error decoding",
+            "eof from the server",
+            "got eof",
         ]
         if any(t in error_lower for t in transient_errors):
             print(
@@ -5503,7 +5527,6 @@ class MainWindow(QMainWindow):
         data["status_detail"] = (
             f"🔄 Retrying in {retry_delay}s... ({next_attempt}/{max_tries})"
         )
-        print(f"🔍 [Retry] Set status_detail='{data['status_detail']}'")
 
         self._pending_status[download_id] = (
             "retrying",

@@ -60,11 +60,13 @@ bash <(curl -s https://raw.githubusercontent.com/hoomaanf/FelfelDM/main/install.
 - 📊 **Real-time Progress** — Live download speed and progress tracking
 - 🎯 **Download Rules** — Automatically apply queue, folder, connections, and speed limit based on URL pattern, extension, domain, or file size
 - 🎯 **Smart Management** — Intelligent auto-retry with configurable delay, pause/resume, and error handling
-- 🔄 **Smart Retry** — Automatically retry transient errors (timeout, 5xx, 429) with a configurable delay; fail fast on permanent errors (404, 403, 401, TLS/certificate issues)
+- 🔄 **Smart Retry** — Automatically retry transient errors (timeout, DNS, connection, TLS packet, 5xx, 429) with a configurable delay; fail fast on permanent errors (404, 403, 401, certificate issues)
+- 🔁 **Retry Counter Reset** — The failed-attempt counter resets to 0 after a configurable period of healthy downloading, so intermittent network issues don't permanently exhaust the retry budget
 - ⏱️ **Countdown Retry** — Live countdown in the Status column while waiting between retry attempts (e.g. `🔄 Retrying in 5s... (2/5)`)
-- 🗑️ **Safe Removal** — Remove from list or delete files permanently
+- 🗑️ **Safe Removal** — Remove from list, or delete files with a confirmation dialog that lists exactly what will be deleted (main file + aria2 sidecar + temp files)
 - 🎵 **YouTube Download** — Download videos and audio from YouTube with dynamic quality selection
-- 📋 **Details Panel** — View download details (name, size, downloaded, status, path) with quick actions
+- 📋 **Details Panel** — View download details (name, size, downloaded, status, path) with quick actions including Retry for failed downloads
+- 🔄 **Per-Download Retry** — A Retry button appears in the Details Panel when a download fails, re-adding it with a fresh aria2 gid
 - ⌨️ **Keyboard Shortcuts** — Full keyboard navigation for power users
 
 ### Download Rules
@@ -118,14 +120,17 @@ Previously, file sizes were fetched one by one with delays. Now, with **5 parall
 - Works both in the Add Download dialog **and** in the main window table
 - Uses the full `FileSizeFetcher` logic (HEAD → RANGE → STREAM → yt-dlp fallback)
 
-### 🗑️ Delete Files Without UI Freezing
+### 🗑️ Safe File Deletion
 
-The "Remove & Delete Files" operation no longer freezes the UI:
+When you choose "Remove & Delete Files", FelfelDM shows a **confirmation dialog listing every file that will be deleted**:
 
-- **Instant operations** for downloads that never started (nothing on disk to delete)
-- **Background deletion** for partial downloads — files are deleted in a separate thread
-- **Batch RPC** to aria2 instead of dozens of individual requests
-- **Progress feedback** in the status bar during deletion
+- **Full file list** — main file, aria2 sidecar (`.aria2`), and any temp files (`.part`, `.ytdl`, `.f<digits>`)
+- **Per-file details** — filename, size, and location
+- **Total size** — see the total disk space that will be freed
+- **Unrelated files are never touched** — only files matching this download (by name or gid) are collected
+- **Instant for downloads that never started** — nothing on disk to delete
+
+This fixes a previous issue where deleting one download could accidentally remove unrelated files sharing the same folder.
 
 ### Queue Management
 
@@ -323,13 +328,15 @@ The details panel provides quick access to download information and actions:
 **Quick Actions:**
 
 - **Pause/Resume** — Control the selected download
-- **Cancel** — Remove the download (with option to delete files)
+- **Retry** — Retry a failed download (re-adds it with a fresh aria2 gid)
+- **Cancel** — Remove the download (with a confirmation dialog listing files to delete)
 - **Open Folder** — Open the download folder
 - **Copy URL** — Copy the download URL to clipboard
 
 **Toggle Details Panel:**
 
 - Press `Ctrl+D` or click the details button in the toolbar
+- The panel is **open by default** on first launch
 
 ### YouTube Download
 
@@ -377,17 +384,19 @@ FelfelDM schedules run in a **background thread**, independent of the main Qt ev
 
 FelfelDM supports smart retry with configurable behavior:
 
-| Setting                | Default   | Description                                                                |
-| ---------------------- | --------- | -------------------------------------------------------------------------- |
-| **Max Retry Attempts** | 5         | Maximum number of automatic retry attempts for failed downloads            |
-| **Retry Delay**        | 5 seconds | Delay between retry attempts (only for transient errors)                   |
-| **Max Tries (aria2)**  | 5         | aria2's internal retry count per download (separate from FelfelDM's retry) |
+| Setting                 | Default    | Description                                                                         |
+| ----------------------- | ---------- | ----------------------------------------------------------------------------------- |
+| **Max Retry Attempts**  | 5          | Maximum number of automatic retry attempts for failed downloads                     |
+| **Retry Delay**         | 5 seconds  | Delay between retry attempts (only for transient errors)                            |
+| **Reset Retries After** | 60 seconds | Reset the failed-attempt counter after N seconds of healthy downloading (0 = never) |
+| **Max Tries (aria2)**   | 5          | aria2's internal retry count per download (separate from FelfelDM's retry)          |
 
 **How it works:**
 
-- **Transient errors** (timeout, connection reset, 5xx, 429) → automatically retried with the configured delay
-- **Permanent errors** (404, 403, 401, TLS/certificate issues) → fail immediately, no retry
+- **Transient errors** (timeout, DNS, connection, TLS packet, 5xx, 429) → automatically retried with the configured delay
+- **Permanent errors** (404, 403, 401, certificate issues) → fail immediately, no retry
 - **Countdown display** — While waiting, the Status column shows `🔄 Retrying in 5s... (2/5)`
+- **Counter reset** — If a download stays healthy for the configured period, its failed-attempt counter resets to 0
 
 **Configure these in:** Settings → General → Download
 
@@ -575,6 +584,24 @@ Re-apply rule on restore — matched_rule survives
 Permanent errors (404, 403, ...) skip the loop and fail immediately.
 ```
 
+### File Deletion Flow
+
+```
+Remove & Delete Files
+    ↓
+_collect_files_for_gids(gids)  ← build list, no deletion yet
+    ↓
+[No files found]  → skip, nothing on disk
+    ↓
+DeleteFilesConfirmationDialog  ← user reviews and confirms
+    ↓
+[User cancels] → stop, nothing removed
+    ↓
+[User confirms] → delete only the listed files
+    ↓
+Files matching by name or gid only — unrelated files are never touched
+```
+
 ---
 
 ## 📁 Project Structure
@@ -601,7 +628,7 @@ FelfelDM/
     ├── ui/                            # UI components
     │   ├── __init__.py
     │   ├── delegates.py               # Custom table delegates
-    │   ├── dialogs.py                 # Various dialogs (with unified AddDownloadDialog)
+    │   ├── dialogs.py                 # Various dialogs (with unified AddDownloadDialog and DeleteFilesConfirmationDialog)
     │   ├── download_proxy_dialog.py
     │   ├── export_dialog.py           # Export dialog
     │   ├── export_manager.py          # Export manager
@@ -748,8 +775,9 @@ chmod +x uninstall.sh
 
 1. Check **Settings → General → Download → Max Retry Attempts** and **Retry Delay**
 2. Permanent errors (404, 403, 401, TLS) are **not** retried by design
-3. Transient errors (timeout, 5xx) are retried with the configured delay
+3. Transient errors (timeout, DNS, connection, TLS packet, 5xx) are retried with the configured delay
 4. The Status column shows the countdown: `🔄 Retrying in 5s... (2/5)`
+5. **Reset Retries After** controls when the failed-attempt counter resets to 0 (0 = never)
 
 ### Rules not being applied
 
@@ -781,6 +809,12 @@ chmod +x uninstall.sh
 ### UI freezes when removing files
 
 This has been fixed in the latest version. Update FelfelDM to get the fix.
+
+### Unrelated files got deleted when removing a download
+
+1. This was a bug in older versions — fixed in the latest version
+2. Update FelfelDM to get the fix
+3. The delete operation now shows a confirmation dialog listing exactly which files will be removed, and only files matching the download (by name or gid) are included
 
 ### Wrong file size (e.g., 3.00 GB for all files)
 

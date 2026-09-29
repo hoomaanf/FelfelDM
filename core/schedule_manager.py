@@ -34,7 +34,27 @@ class ScheduleManagerThread(QThread):
 
     def set_schedules(self, schedules: List[ScheduleConfig]):
         with QMutexLocker(self._mutex):
-            self._schedules = {s.queue_name: s for s in schedules}
+            new_schedules = {s.queue_name: s for s in schedules}
+
+            # Preserve the "running" state for queues whose schedule
+            # hasn't changed — otherwise a benign settings save would
+            # reset _running_queues and fire start/pause signals again.
+            if new_schedules.keys() == self._schedules.keys():
+                for name in new_schedules:
+                    old = self._schedules[name]
+                    new = new_schedules[name]
+                    if (
+                        old.start == new.start
+                        and old.end == new.end
+                        and old.days == new.days
+                        and old.enabled == new.enabled
+                    ):
+                        continue
+                    # This queue's schedule changed — drop it from running
+                    # so the next tick re-evaluates it cleanly.
+                    self._running_queues.discard(name)
+
+            self._schedules = new_schedules
 
     def stop(self):
         self._stop_requested = True

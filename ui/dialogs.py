@@ -2811,6 +2811,8 @@ class DownloadProgressDialog(QDialog):
             ("alarm-clock", "ETA:", "eta"),
             ("network-transmit", "Connections:", "connections"),
             ("dialog-information", "Status:", "status"),
+            ("dialog-warning", "Reason:", "reason"),
+            ("view-refresh", "Retry:", "retry"),
         ]
 
         self.info_labels = {}
@@ -2833,6 +2835,25 @@ class DownloadProgressDialog(QDialog):
             self.info_labels[key] = val_lbl
 
         main_layout.addWidget(info_group)
+
+        # Technical details (raw error text) — collapsed by default.
+        self.tech_group = QGroupBox("Technical details")
+        self.tech_group.setVisible(False)
+        tech_layout = QVBoxLayout(self.tech_group)
+        tech_layout.setContentsMargins(8, 4, 8, 4)
+
+        self.tech_label = QLabel("")
+        self.tech_label.setWordWrap(True)
+        self.tech_label.setStyleSheet(
+            "font-family: monospace; font-size: 11px; color: #888;"
+        )
+        self.tech_label.setTextInteractionFlags(
+            Qt.TextInteractionFlag.TextSelectableByMouse
+        )
+        tech_layout.addWidget(self.tech_label)
+
+        main_layout.addWidget(self.tech_group)
+
         main_layout.addSpacing(8)
 
         btn_row = QHBoxLayout()
@@ -3020,6 +3041,37 @@ class DownloadProgressDialog(QDialog):
             "error": "Error",
             "removed": "Removed",
         }
+        # Reason + Retry (only meaningful when the download failed or is retrying)
+        from utils.helpers import get_error_reason, get_retry_status
+
+        if status in ("error", "retrying"):
+            reason_text = get_error_reason(dl_data.get("errorMessage", ""))
+            retry_text = get_retry_status(dl_data)
+        else:
+            reason_text = "—"
+            retry_text = "—"
+
+        self.info_labels["reason"].setText(reason_text)
+        if status == "error":
+            self.info_labels["reason"].setStyleSheet(
+                "color: #e74c3c; font-weight: 500;"
+            )
+        elif status == "retrying":
+            self.info_labels["reason"].setStyleSheet(
+                "color: #f39c12; font-weight: 500;"
+            )
+        else:
+            self.info_labels["reason"].setStyleSheet("")
+
+        self.info_labels["retry"].setText(retry_text)
+
+        # Show/hide the raw-error block
+        raw_error = dl_data.get("errorMessage", "").strip()
+        if status in ("error", "retrying") and raw_error:
+            self.tech_label.setText(raw_error)
+            self.tech_group.setVisible(True)
+        else:
+            self.tech_group.setVisible(False)
 
         color = status_colors.get(status, "#6a6a7a")
         text = status_texts.get(status, status.capitalize())
@@ -3275,3 +3327,121 @@ class ShutdownCountdownDialog(QDialog):
             self._timer.stop()
             self._timer = None
         event.accept()
+
+
+class DeleteFilesConfirmationDialog(QDialog):
+    """Confirmation dialog listing which files will be deleted.
+
+    Read-only: the user either confirms the whole list or cancels.
+    """
+
+    def __init__(self, entries: list, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Delete Files")
+        self.setMinimumWidth(560)
+        self.setMinimumHeight(360)
+        self.setModal(True)
+
+        self._entries = entries
+
+        main_layout = QVBoxLayout(self)
+        main_layout.setSpacing(10)
+        main_layout.setContentsMargins(20, 20, 20, 16)
+
+        header = QLabel(f"The following <b>{len(entries)}</b> file(s) will be deleted:")
+        header.setWordWrap(True)
+        main_layout.addWidget(header)
+
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.Shape.StyledPanel)
+        scroll.setMinimumHeight(200)
+
+        list_widget = QWidget()
+        list_layout = QVBoxLayout(list_widget)
+        list_layout.setSpacing(4)
+        list_layout.setContentsMargins(8, 8, 8, 8)
+
+        for entry in entries:
+            row = QHBoxLayout()
+            row.setSpacing(8)
+
+            icon_label = QLabel()
+            if entry.get("kind") == "sidecar":
+                icon_label.setText("📄")
+            else:
+                icon_label.setText("📦")
+            icon_label.setFixedWidth(24)
+            row.addWidget(icon_label)
+
+            info_layout = QVBoxLayout()
+            info_layout.setSpacing(1)
+
+            name_label = QLabel(entry["name"])
+            name_label.setWordWrap(True)
+            if entry.get("kind") == "sidecar":
+                name_label.setStyleSheet("color: #95a5a6; font-size: 12px;")
+            else:
+                name_label.setStyleSheet("font-weight: 500;")
+            info_layout.addWidget(name_label)
+
+            meta_parts = []
+            size = entry.get("size", 0)
+            if size > 0:
+                meta_parts.append(format_size(size))
+            meta_parts.append(os.path.dirname(entry["path"]))
+            if entry.get("kind") == "sidecar":
+                meta_parts.append("(aria2 sidecar)")
+            if not entry.get("exists", True):
+                meta_parts.append("⚠️ already missing")
+
+            meta_label = QLabel("  •  ".join(meta_parts))
+            meta_label.setStyleSheet("color: #95a5a6; font-size: 11px;")
+            meta_label.setWordWrap(True)
+            info_layout.addWidget(meta_label)
+
+            row.addLayout(info_layout, 1)
+            list_layout.addLayout(row)
+
+        list_layout.addStretch()
+        scroll.setWidget(list_widget)
+        main_layout.addWidget(scroll, 1)
+
+        total_size = sum(e.get("size", 0) for e in entries)
+        existing_count = sum(1 for e in entries if e.get("exists", True))
+
+        total_label = QLabel(
+            f"<b>Total:</b> {format_size(total_size)} "
+            f"across {existing_count} existing file(s)"
+        )
+        main_layout.addWidget(total_label)
+
+        warning = QLabel(
+            "⚠️ <b>This action cannot be undone.</b> "
+            "The files will be permanently removed from disk."
+        )
+        warning.setStyleSheet("color: #e74c3c; padding: 6px;")
+        warning.setWordWrap(True)
+        main_layout.addWidget(warning)
+
+        btn_row = QHBoxLayout()
+        btn_row.addStretch()
+
+        cancel_btn = QPushButton("Cancel")
+        cancel_btn.clicked.connect(self.reject)
+        btn_row.addWidget(cancel_btn)
+
+        delete_btn = QPushButton("Delete Files")
+        delete_btn.setIcon(get_icon("edit-delete"))
+        delete_btn.setDefault(True)
+        delete_btn.clicked.connect(self.accept)
+        btn_row.addWidget(delete_btn)
+
+        main_layout.addLayout(btn_row)
+
+    def get_paths_to_delete(self) -> list:
+        """Return all existing file paths shown in the dialog.
+
+        Kept as a method so _delete_files_with_confirmation stays unchanged.
+        """
+        return [entry["path"] for entry in self._entries if entry.get("exists", True)]
