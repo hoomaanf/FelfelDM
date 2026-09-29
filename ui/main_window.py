@@ -1053,7 +1053,20 @@ class MainWindow(QMainWindow):
         return None
 
     def _selected_gid(self) -> Optional[str]:
-        idx = self.table.currentIndex()
+        """Return the gid of the selected download, or None.
+
+        Returns None when zero or more than one row is selected, so
+        the Details Panel and per-download actions never operate on
+        an ambiguous selection.
+        """
+        if not self.table.selectionModel():
+            return None
+
+        rows = self.table.selectionModel().selectedRows()
+        if len(rows) != 1:
+            return None
+
+        idx = rows[0]
         return self.model.get_gid(idx.row()) if idx.isValid() else None
 
     def _to_int(self, value: Any) -> int:
@@ -1587,50 +1600,75 @@ class MainWindow(QMainWindow):
             self.btn_move_queue.setEnabled(False)
             return
 
-        idx = selected_indexes[0]
-        if not idx.isValid():
-            self.btn_toggle.setEnabled(False)
-            self.btn_toggle.setText("Pause")
-            self.btn_toggle.setIcon(get_icon("media-playback-pause"))
-            self.btn_move_queue.setEnabled(False)
-            return
-
         self.btn_move_queue.setEnabled(True)
 
-        gid = self.model.get_gid(idx.row())
-        if not gid:
+        # Gather statuses of all selected downloads
+        statuses = []
+        for idx in selected_indexes:
+            gid = self.model.get_gid(idx.row())
+            if not gid:
+                continue
+            status = self._all_downloads.get(gid, {}).get("status", "")
+            if status:
+                statuses.append(status)
+
+        if not statuses:
             self.btn_toggle.setEnabled(False)
             self.btn_toggle.setText("Pause")
             self.btn_toggle.setIcon(get_icon("media-playback-pause"))
             return
 
-        real_status = self._all_downloads.get(gid, {}).get("status", "")
+        total = len(statuses)
+        active_count = sum(1 for s in statuses if s in ("active", "downloading"))
+        paused_count = sum(1 for s in statuses if s == "paused")
+        error_count = sum(1 for s in statuses if s == "error")
+        waiting_count = sum(1 for s in statuses if s == "waiting")
 
-        if not real_status:
-            self.btn_toggle.setEnabled(False)
-            self.btn_toggle.setText("Pause")
-            self.btn_toggle.setIcon(get_icon("media-playback-pause"))
-            return
-
-        if real_status in ["active", "waiting", "downloading"]:
-            self.btn_toggle.setEnabled(True)
-            self.btn_toggle.setText("Pause")
-            self.btn_toggle.setIcon(get_icon("media-playback-pause"))
-        elif real_status == "paused":
-            self.btn_toggle.setEnabled(True)
-            self.btn_toggle.setText("Resume")
-            self.btn_toggle.setIcon(get_icon("media-playback-start"))
-        else:
-            self.btn_toggle.setEnabled(False)
-            self.btn_toggle.setText("Pause")
-            self.btn_toggle.setIcon(get_icon("media-playback-pause"))
-
-        q = self._current_queue()
-        if real_status == "waiting" and q and not q.paused:
+        if waiting_count == total:
             self.btn_toggle.setEnabled(False)
             self.btn_toggle.setText("Waiting")
             self.btn_toggle.setIcon(get_icon("clock"))
             return
+
+        # Single error → Retry
+        if error_count == 1 and total == 1:
+            self.btn_toggle.setEnabled(True)
+            self.btn_toggle.setText("Retry")
+            self.btn_toggle.setIcon(get_icon("view-refresh"))
+            return
+
+        # All active → Pause
+        if active_count == total:
+            self.btn_toggle.setEnabled(True)
+            self.btn_toggle.setText("Pause")
+            self.btn_toggle.setIcon(get_icon("media-playback-pause"))
+            return
+
+        # All paused → Resume
+        if paused_count == total:
+            self.btn_toggle.setEnabled(True)
+            self.btn_toggle.setText("Resume")
+            self.btn_toggle.setIcon(get_icon("media-playback-start"))
+            return
+
+        # Mixed: if any active → Pause (only active ones will be paused)
+        if active_count > 0:
+            self.btn_toggle.setEnabled(True)
+            self.btn_toggle.setText("Pause")
+            self.btn_toggle.setIcon(get_icon("media-playback-pause"))
+            return
+
+        # Mixed: if any paused (no active) → Resume (only paused ones resumed)
+        if paused_count > 0:
+            self.btn_toggle.setEnabled(True)
+            self.btn_toggle.setText("Resume")
+            self.btn_toggle.setIcon(get_icon("media-playback-start"))
+            return
+
+        # Nothing actionable (all complete/retrying/etc.)
+        self.btn_toggle.setEnabled(False)
+        self.btn_toggle.setText("Pause")
+        self.btn_toggle.setIcon(get_icon("media-playback-pause"))
 
     def _update_shutdown_button_state(self) -> None:
         q = self._current_queue()
@@ -2543,15 +2581,35 @@ class MainWindow(QMainWindow):
         if self._details_visible:
             self._update_details_panel()
 
-    def _update_details_panel(self) -> None:
-        """Update details panel with selected download info"""
-        gid = self._selected_gid()
+    def _show_details_empty(self, message: str) -> None:
+        """Show the empty label with a custom message and hide the details container."""
+        if hasattr(self, "empty_label"):
+            self.empty_label.setText(message)
+            self.empty_label.setVisible(True)
+        if hasattr(self, "details_container"):
+            self.details_container.setVisible(False)
 
+    def _update_details_panel(self) -> None:
+        """Update details panel with selected download info."""
+        if not self.table.selectionModel():
+            self._show_details_empty("Select a download to view details")
+            return
+
+        rows = self.table.selectionModel().selectedRows()
+
+        if len(rows) == 0:
+            self._show_details_empty("Select a download to view details")
+            return
+
+        if len(rows) > 1:
+            self._show_details_empty(
+                f"{len(rows)} downloads selected — select a single one for details"
+            )
+            return
+
+        gid = self.model.get_gid(rows[0].row())
         if not gid or gid not in self._all_downloads:
-            if hasattr(self, "empty_label"):
-                self.empty_label.setVisible(True)
-            if hasattr(self, "details_container"):
-                self.details_container.setVisible(False)
+            self._show_details_empty("Select a download to view details")
             return
 
         if hasattr(self, "empty_label"):
@@ -2679,7 +2737,10 @@ class MainWindow(QMainWindow):
                 self.detail_cancel_btn.setEnabled(False)
 
         if hasattr(self, "detail_open_btn"):
-            self.detail_open_btn.setEnabled(True)
+            # Only enable "Open Folder" if the download started (some
+            # bytes downloaded or file exists on disk).
+            completed = self._to_int(data.get("completedLength", 0))
+            self.detail_open_btn.setEnabled(completed > 0)
         if hasattr(self, "detail_copy_btn"):
             self.detail_copy_btn.setEnabled(True)
 
@@ -4137,69 +4198,84 @@ class MainWindow(QMainWindow):
         self._progress_dialog = None
 
     def _pause_selected(self) -> None:
-        gid = self._selected_gid()
-        if not gid:
+        """Pause every selected download that is currently active/waiting."""
+        if not self.table.selectionModel():
             return
 
-        if gid in self._all_downloads:
-            dtype = self._all_downloads[gid].get("download_type", "normal")
-            if dtype == "youtube":
-                self._pause_youtube_download(gid)
-                return
+        rows = self.table.selectionModel().selectedRows()
+        if not rows:
+            return
 
+        gids = [self.model.get_gid(r.row()) for r in rows]
+        gids = [g for g in gids if g]
+
+        youtube_gids = []
+        normal_gids = []
+
+        for gid in gids:
+            if gid not in self._all_downloads:
+                continue
+            dtype = self._all_downloads[gid].get("download_type", "normal")
+            status = self._all_downloads[gid].get("status", "")
+
+            if status not in ("active", "downloading"):
+                continue
+
+            if dtype == "youtube":
+                youtube_gids.append(gid)
+            else:
+                normal_gids.append(gid)
+
+        for gid in youtube_gids:
+            self._pause_youtube_download(gid)
+
+        for gid in normal_gids:
             self._all_downloads[gid]["status"] = "paused"
             self._all_downloads[gid]["downloadSpeed"] = 0
-            self._pending_status[gid] = (
-                "paused",
-                time.time() + 5.0,
-            )
-            self._refresh_table()
+            self._pending_status[gid] = ("paused", time.time() + 5.0)
 
-        self._worker_pause(gid)
+        if normal_gids:
+            self._worker_pause_multi(normal_gids)
+
+        self._refresh_table()
+        self._update_queue_buttons()
 
     def _resume_selected(self) -> None:
-        """Resume selected download only, don't touch queue state"""
-        gid = self._selected_gid()
-        if not gid:
+        """Resume every selected download that is currently paused/waiting."""
+        if not self.table.selectionModel():
             return
 
-        if gid in self._all_downloads:
-            download_type = self._all_downloads[gid].get("download_type", "normal")
-            real_status = self._all_downloads[gid].get("status", "")
+        rows = self.table.selectionModel().selectedRows()
+        if not rows:
+            return
 
-            if download_type == "youtube":
-                self._resume_youtube_download(gid)
-                return
+        gids = [self.model.get_gid(r.row()) for r in rows]
+        gids = [g for g in gids if g]
 
-            if real_status == "error":
-                print(f"🔄 Retrying error download: {gid}")
+        for gid in gids:
+            if gid not in self._all_downloads:
+                continue
+
+            dtype = self._all_downloads[gid].get("download_type", "normal")
+            status = self._all_downloads[gid].get("status", "")
+
+            if dtype == "youtube":
+                if status == "paused":
+                    self._resume_youtube_download(gid)
+                continue
+
+            if status == "error":
                 self._retry_single_download(gid)
-                return
+                continue
 
-            if real_status == "paused":
+            if status == "paused":
                 self._worker_resume(gid)
                 self._all_downloads[gid]["status"] = "active"
+                self._pending_status[gid] = ("active", time.time() + 5.0)
 
-                self._pending_status[gid] = (
-                    "active",
-                    time.time() + 5.0,
-                )
-                self.store.mark_dirty()
-                self._refresh_table()
-                self._update_queue_buttons()
-                return
-
-            if real_status == "waiting":
-                self._worker_resume(gid)
-                self._all_downloads[gid]["status"] = "active"
-
-                self._pending_status[gid] = (
-                    "active",
-                    time.time() + 5.0,
-                )
-                self.store.mark_dirty()
-                self._refresh_table()
-                self._update_queue_buttons()
+        self.store.mark_dirty()
+        self._refresh_table()
+        self._update_queue_buttons()
 
     def _retry_single_download(self, gid: str) -> None:
         if not gid or gid not in self._all_downloads:
@@ -4240,32 +4316,45 @@ class MainWindow(QMainWindow):
         return gid
 
     def _toggle_pause_resume(self) -> None:
-        """Toggle pause/resume for selected download"""
-        gid = self._selected_gid()
-        if not gid:
+        """Toggle pause/resume for all selected downloads.
+
+        Logic:
+        - If any is active/waiting → pause those (leave paused/error alone).
+        - Else if any is paused → resume those (retry errored ones).
+        - Else if exactly one error → retry it.
+        - Otherwise → nothing.
+        """
+        if not self.table.selectionModel():
             return
 
-        real_status = self._all_downloads.get(gid, {}).get("status", "")
-        if not real_status:
+        rows = self.table.selectionModel().selectedRows()
+        if not rows:
             return
 
-        download_type = self._all_downloads.get(gid, {}).get("download_type", "normal")
-
-        if download_type == "youtube":
-            if real_status in ["active", "waiting", "downloading"]:
-                self._pause_youtube_download(gid)
-            elif real_status == "paused":
-                self._resume_youtube_download(gid)
+        gids = [self.model.get_gid(r.row()) for r in rows]
+        gids = [g for g in gids if g]
+        if not gids:
             return
 
-        if real_status == "error":
-            self._retry_single_download(gid)
-            return
+        active_gids = []
+        paused_gids = []
+        error_gids = []
 
-        if real_status in ["active", "waiting", "downloading"]:
+        for gid in gids:
+            status = self._all_downloads.get(gid, {}).get("status", "")
+            if status in ("active", "downloading"):
+                active_gids.append(gid)
+            elif status == "paused":
+                paused_gids.append(gid)
+            elif status == "error":
+                error_gids.append(gid)
+
+        if active_gids:
             self._pause_selected()
-        elif real_status == "paused":
+        elif paused_gids:
             self._resume_selected()
+        elif len(error_gids) == 1:
+            self._retry_single_download(error_gids[0])
 
     def _open_folder(self, gid: str) -> None:
         try:
@@ -4311,8 +4400,13 @@ class MainWindow(QMainWindow):
                 QApplication.clipboard().setText(files[0]["uris"][0]["uri"])
 
     def _context_menu(self, pos: QPoint) -> None:
-        gid = self._selected_gid()
-        if not gid:
+        if not self.table.selectionModel():
+            return
+
+        rows = self.table.selectionModel().selectedRows()
+
+        # No selection: sort-only menu
+        if len(rows) == 0:
             menu = QMenu(self)
             menu.addAction(
                 "Sort by Name",
@@ -4337,6 +4431,65 @@ class MainWindow(QMainWindow):
             menu.addSeparator()
             menu.addAction("Clear Completed", self._clear_completed_downloads)
             menu.exec(self.table.viewport().mapToGlobal(pos))
+            return
+
+        # Multiple selection: bulk menu
+        if len(rows) > 1:
+            menu = QMenu(self)
+            n = len(rows)
+
+            # Gather statuses
+            statuses = []
+            for r in rows:
+                gid = self.model.get_gid(r.row())
+                if not gid:
+                    continue
+                status = self._all_downloads.get(gid, {}).get("status", "")
+                if status:
+                    statuses.append(status)
+
+            has_active = any(s in ("active", "downloading") for s in statuses)
+            has_paused = any(s == "paused" for s in statuses)
+            has_error = any(s == "error" for s in statuses)
+
+            if has_active:
+                menu.addAction(
+                    get_icon("media-playback-pause"),
+                    f"Pause {n} downloads",
+                    self._pause_selected,
+                )
+            if has_paused:
+                menu.addAction(
+                    get_icon("media-playback-start"),
+                    f"Resume {n} downloads",
+                    self._resume_selected,
+                )
+            if has_error and n == 1:
+                menu.addAction(
+                    get_icon("view-refresh"),
+                    "Retry",
+                    lambda: self._retry_single_download(
+                        self.model.get_gid(rows[0].row())
+                    ),
+                )
+
+            menu.addSeparator()
+            menu.addAction(
+                get_icon("go-next"),
+                f"Move {n} to Queue...",
+                self._move_selected_to_queue,
+            )
+            menu.addSeparator()
+            menu.addAction(
+                get_icon("edit-delete"),
+                f"Remove {n} downloads",
+                self._remove_selected,
+            )
+            menu.exec(self.table.viewport().mapToGlobal(pos))
+            return
+        # Single selection: existing per-download menu
+        gid = self.model.get_gid(rows[0].row())
+        if not gid:
             return
 
         dl_data = self._all_downloads.get(gid, {})
@@ -4364,6 +4517,12 @@ class MainWindow(QMainWindow):
                     if download_type == "youtube"
                     else self._resume_selected()
                 ),
+            )
+        elif real_status == "error":
+            menu.addAction(
+                get_icon("view-refresh"),
+                "Retry",
+                lambda: self._retry_single_download(gid),
             )
 
         menu.addSeparator()
