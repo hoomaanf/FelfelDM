@@ -747,6 +747,11 @@ class MainWindow(QMainWindow):
         refresh_action.triggered.connect(self._refresh_table)
         refresh_action.setShortcut("F5")
         view_menu.addAction(refresh_action)
+        
+        log_action = QAction(get_icon("text-x-generic"), "Show Logs", self)
+        log_action.triggered.connect(self._show_log_viewer)
+        log_action.setShortcut("Ctrl+L")
+        view_menu.addAction(log_action)
 
         help_menu = mb.addMenu("&Help")
         help_menu.addAction("About", self._show_about)
@@ -941,6 +946,33 @@ class MainWindow(QMainWindow):
             2000,
         )
 
+    def _show_log_viewer(self) -> None:
+        from ui.log_viewer import LogViewerDialog
+
+        key = "log_viewer"
+        existing = self._open_dialogs.get(key)
+        if existing is not None:
+            try:
+                if existing.isVisible():
+                    existing.raise_()
+                    existing.activateWindow()
+                    return
+            except RuntimeError:
+                self._open_dialogs.pop(key, None)
+
+        dlg = LogViewerDialog(parent=self)
+        dlg.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose, True)
+        self._open_dialogs[key] = dlg
+
+        def _cleanup(*_):
+            if self._open_dialogs.get(key) is dlg:
+                self._open_dialogs.pop(key, None)
+
+        dlg.finished.connect(_cleanup)
+        dlg.show()
+        dlg.raise_()
+        dlg.activateWindow()
+    
     def _connect_queue_worker_signals(self) -> None:
         if not self._queue_worker:
             return
@@ -2761,7 +2793,8 @@ class MainWindow(QMainWindow):
 
         QShortcut(QKeySequence("Ctrl+Tab"), self, self._next_queue)
         QShortcut(QKeySequence("Ctrl+Shift+Tab"), self, self._prev_queue)
-
+        QShortcut(QKeySequence("Ctrl+L"), self, self._show_log_viewer)
+                
         QShortcut(QKeySequence("F5"), self, self._refresh_table)
         QShortcut(QKeySequence("F1"), self, self._show_shortcuts)
 
@@ -2784,6 +2817,7 @@ class MainWindow(QMainWindow):
             ("F5", "Refresh"),
             ("F1", "Show shortcuts"),
             ("Ctrl+E", "Export Downloads"),
+            ("Ctrl+L", "Show logs")
         ]
 
         msg = "<h3>Keyboard Shortcuts</h3><br>"

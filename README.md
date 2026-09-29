@@ -67,6 +67,7 @@ bash <(curl -s https://raw.githubusercontent.com/hoomaanf/FelfelDM/main/install.
 - 🎵 **YouTube Download** — Download videos and audio from YouTube with dynamic quality selection
 - 📋 **Details Panel** — View download details (name, size, downloaded, status, path) with quick actions including Retry for failed downloads
 - 🔄 **Per-Download Retry** — A Retry button appears in the Details Panel when a download fails, re-adding it with a fresh aria2 gid
+- 📜 **Live Log Viewer** — See the current session's log in a live window (`Ctrl+L` or `View → Show Logs`), with auto-scroll, clear, and refresh
 - ⌨️ **Keyboard Shortcuts** — Full keyboard navigation for power users
 
 ### Download Rules
@@ -132,6 +133,18 @@ When you choose "Remove & Delete Files", FelfelDM shows a **confirmation dialog 
 
 This fixes a previous issue where deleting one download could accidentally remove unrelated files sharing the same folder.
 
+### 📜 Live Log Viewer
+
+FelfelDM includes a built-in log viewer for debugging without leaving the app.
+
+- **Live view** — see log output as it happens, no need to tail a file from a terminal
+- **Open from** — `View → Show Logs` or press `Ctrl+L`
+- **Auto-scroll** — follows new lines automatically (can be turned off)
+- **Clear / Refresh** — manual controls for the log window
+- **Persistent logs** — everything is also written to `~/.cache/felfelDM/logs/app.log`, with automatic rotation
+
+**Where to open:** View → Show Logs (`Ctrl+L`)
+
 ### Queue Management
 
 - 📋 **Queue Status** — Real-time status display for each queue (Running, Paused, Idle, Empty)
@@ -175,6 +188,8 @@ This fixes a previous issue where deleting one download could accidentally remov
 - 🎯 **Preview Before Download** — See file sizes and select files before adding them
 - 🏗️ **Robust Download Tracking** — UUID-based internal identifiers keep downloads stable across retries and restarts
 - 📋 **Rules Manager UI** — Card-based interface to add/edit/delete/reorder rules with live preview
+- 📜 **Built-in Log Viewer** — Open a live log window from `View → Show Logs` or press `Ctrl+L`. Useful for debugging without leaving the app.
+- 💾 **Persistent Logs** — Logs are written to `~/.cache/felfelDM/logs/app.log` with automatic rotation
 
 ### YouTube Download Features
 
@@ -338,6 +353,17 @@ The details panel provides quick access to download information and actions:
 - Press `Ctrl+D` or click the details button in the toolbar
 - The panel is **open by default** on first launch
 
+### Live Log Viewer
+
+FelfelDM includes a built-in live log viewer:
+
+- Open it from **View → Show Logs** or press **`Ctrl+L`**
+- Log lines appear as they happen, with an **Auto-scroll** option
+- Use **Live** to pause/resume the automatic refresh
+- **Clear Log File** empties the on-disk log
+- **Refresh** reloads the entire log from disk
+- Logs are also written to `~/.cache/felfelDM/logs/app.log`
+
 ### YouTube Download
 
 FelfelDM supports downloading videos and audio from YouTube with advanced features:
@@ -461,6 +487,7 @@ FelfelDM supports comprehensive keyboard shortcuts for efficient usage:
 | `Ctrl+,`         | Settings                |
 | `F5`             | Refresh                 |
 | `F1`             | Show shortcuts          |
+| `Ctrl+L`         | Show logs               |
 
 Press `F1` at any time to view all keyboard shortcuts.
 
@@ -632,6 +659,7 @@ FelfelDM/
     │   ├── download_proxy_dialog.py
     │   ├── export_dialog.py           # Export dialog
     │   ├── export_manager.py          # Export manager
+    │   ├── log_viewer.py              # Live log viewer dialog
     │   ├── main_window.py             # Main application window
     │   ├── proxy_dialog.py            # Proxy settings dialog
     │   ├── rules_dialog.py            # Rules manager dialog
@@ -642,6 +670,7 @@ FelfelDM/
     ├── utils/                         # Utilities
     │   ├── __init__.py
     │   ├── helpers.py                 # Helper functions
+    │   ├── logger.py                  # Logging setup (file + UI)
     │   └── style.py                   # Theme styles
     ├── FelfelDM-extension/            # Browser extension
     │   ├── background.js
@@ -821,6 +850,14 @@ This has been fixed in the latest version. Update FelfelDM to get the fix.
 1. This may happen if an incorrect size was cached earlier
 2. Update FelfelDM to the latest version — new sizes are fetched from the server
 3. If the issue persists, delete the cache files in `~/.config/felfelDM/` and restart
+
+### Where are the logs?
+
+FelfelDM writes logs to `~/.cache/felfelDM/logs/app.log`. You can open a live view from **View → Show Logs** or press **`Ctrl+L`** without leaving the app.
+
+The log file rotates automatically to keep it small.
+
+To send logs for a bug report, open the log window and copy the relevant lines, or attach the `app.log` file directly.
 
 ---
 

@@ -16,7 +16,8 @@ from PyQt6.QtCore import Qt, QTimer, QCoreApplication
 from PyQt6.QtNetwork import QLocalServer, QLocalSocket
 from ui.main_window import MainWindow
 from utils.style import setup_style, CustomProxyStyle
-
+from utils.logger import setup_logging
+setup_logging()
 # Global reference for cleanup
 server = None
 app = None
@@ -205,7 +206,6 @@ def main():
         if os.path.exists(path):
             app.setWindowIcon(QIcon(path))
             icon_set = True
-            print(f"✅ Icon loaded from: {path}")
             break
     if not icon_set:
         print("⚠️ No icon found! Using default.")
