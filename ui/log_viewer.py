@@ -3,20 +3,20 @@
 import os
 from pathlib import Path
 
+from PyQt6.QtCore import Qt, QTimer
+from PyQt6.QtGui import QFont, QTextCursor
 from PyQt6.QtWidgets import (
+    QCheckBox,
     QDialog,
-    QVBoxLayout,
     QHBoxLayout,
+    QLabel,
     QPlainTextEdit,
     QPushButton,
-    QCheckBox,
-    QLabel,
+    QVBoxLayout,
 )
-from PyQt6.QtCore import QTimer, Qt
-from PyQt6.QtGui import QFont, QTextCursor
 
-from utils.logger import get_log_file_path
 from utils.helpers import get_icon
+from utils.logger import get_log_file_path
 
 
 class LogViewerDialog(QDialog):

@@ -4,17 +4,36 @@ import time
 import socket
 
 from PyQt6.QtWidgets import *
-from PyQt6.QtGui import QDesktopServices, QColor
+from PyQt6.QtGui import (
+    QDesktopServices,
+    QColor,
+    QFont,
+    QPalette,
+    QPainter,
+    QBrush,
+    QPen,
+    QPolygonF,
+    QPainterPath,
+    QPixmap
+)
+import tempfile
 from PyQt6.QtCore import *
+from PyQt6.QtCore import QPointF, QRectF
+
 from utils.helpers import get_icon
+from utils.helpers import format_size
 from core.queue_model import Queue
 from datetime import datetime, time as dtime
 from core.proxy_manager import ProxyType, ProxyConfig
 from core.size_fetcher_worker import SizeFetcherWorker
-from utils.helpers import format_size
+
+# ═══════════════════════════════════════════════════════════════════
+# Base / reusable widgets
+# ═══════════════════════════════════════════════════════════════════
 
 
 class AccordionGroup(QWidget):
+    """Collapsible group with a toggle button header."""
 
     def __init__(self, title, parent=None, expanded=True):
         super().__init__(parent)
@@ -131,6 +150,112 @@ class _ClickableCheckboxWidget(QWidget):
     def set_checked(self, checked: bool):
         self._cb.setChecked(checked)
 
+def _make_stripe_pixmap(stripe_color: str, base_color: str, width: int = 16, height: int = 16) -> QPixmap:
+    pixmap = QPixmap(width, height)
+    pixmap.fill(QColor(base_color))
+
+    painter = QPainter(pixmap)
+    painter.setRenderHint(QPainter.RenderHint.Antialiasing, False)
+    painter.setPen(QPen(QColor(stripe_color), 4, Qt.PenStyle.SolidLine))
+
+    for x in range(-height, width + height, 8):
+        painter.drawLine(x, height, x + height, 0)
+
+    painter.end()
+    return pixmap
+
+
+class StripedProgressBar(QProgressBar):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._base_color = "#89b4fa"
+        self._stripe_color = "#f9e2af"
+        self._striped = False
+        self._stripe_pixmap = None
+        self._build_pixmap()
+        self.setStyleSheet(self._build_style())
+
+    def _build_pixmap(self):
+        self._stripe_pixmap = _make_stripe_pixmap(
+            self._stripe_color, self._base_color
+        )
+        self._stripe_path = os.path.join(
+            tempfile.gettempdir(), f"felfel_stripe_{id(self)}.png"
+        )
+        self._stripe_pixmap.save(self._stripe_path, "PNG")
+
+    def _build_style(self):
+        if self._striped and self._stripe_pixmap:
+            bg = f'url("{self._stripe_path}") repeat'
+        else:
+            bg = self._base_color
+
+        return f"""
+            QProgressBar {{
+                border: none;
+                border-radius: 8px;
+                background: palette(midlight);
+            }}
+            QProgressBar::chunk {{
+                border-radius: 8px;
+                background: {bg};
+            }}
+        """
+
+    def set_color(self, color: str):
+        self._base_color = color
+        self._build_pixmap()
+        self.setStyleSheet(self._build_style())
+
+    def set_striped(self, striped: bool, stripe_color: str = None):
+        self._striped = striped
+        if stripe_color:
+            self._stripe_color = stripe_color
+        self._build_pixmap()
+        self.setStyleSheet(self._build_style())
+
+    def paintEvent(self, event):
+        super().paintEvent(event)
+
+        if self.value() >= self.maximum():
+            return
+
+        rect = self.rect()
+        value_range = self.maximum() - self.minimum()
+        if value_range <= 0:
+            return
+
+        fraction = (self.value() - self.minimum()) / value_range
+        filled_width = int(rect.width() * fraction)
+        if filled_width <= 0:
+            return
+
+        radius = 8
+        cover_width = radius
+        cover_rect = QRect(
+            filled_width - cover_width,
+            0,
+            cover_width,
+            rect.height(),
+        )
+
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing, False)
+        painter.setPen(Qt.PenStyle.NoPen)
+
+        if self._striped:
+            painter.setClipRect(cover_rect)
+            painter.drawTiledPixmap(rect, self._stripe_pixmap, QPoint(0, 0))
+        else:
+            painter.setBrush(QBrush(QColor(self._base_color)))
+            painter.drawRect(cover_rect)
+
+        painter.end()
+        
+# ═══════════════════════════════════════════════════════════════════
+# Add / Quick / Single / YouTube dialogs
+# ═══════════════════════════════════════════════════════════════════
+
 
 class AddDownloadDialog(QDialog):
     """
@@ -160,19 +285,14 @@ class AddDownloadDialog(QDialog):
         self._custom_proxy = None
         self._path_user_edited = False
 
-        # Mapping url -> row index
         self._url_to_row: dict = {}
-        # Mapping url -> size (bytes) or None
         self._url_to_size: dict = {}
-        # Mapping url -> status
         self._url_to_status: dict = {}
 
-        # Debounce timer for fetching sizes
         self._fetch_timer = QTimer(self)
         self._fetch_timer.setSingleShot(True)
         self._fetch_timer.timeout.connect(self._start_fetching_sizes)
 
-        # Current size fetcher worker
         self._fetcher: "SizeFetcherWorker" = None
 
         self._build_ui()
@@ -187,14 +307,11 @@ class AddDownloadDialog(QDialog):
         main_layout.setSpacing(8)
         main_layout.setContentsMargins(16, 12, 16, 16)
 
-        # ===== Horizontal splitter: URLs (left) | Table (right) =====
         splitter = QSplitter(Qt.Orientation.Horizontal)
         splitter.setChildrenCollapsible(False)
         splitter.setHandleWidth(4)
 
-        # ─────────────────────────────────────────────────────
-        # LEFT: URLs editor
-        # ─────────────────────────────────────────────────────
+        # ── LEFT: URLs editor ──
         url_widget = QWidget()
         url_widget.setMinimumWidth(240)
         url_layout = QVBoxLayout(url_widget)
@@ -207,7 +324,7 @@ class AddDownloadDialog(QDialog):
 
         self.url_edit = QTextEdit()
         self.url_edit.setPlaceholderText(
-            "Enter URLs (one per line)...\n\n" "Tip: Paste multiple URLs at once."
+            "Enter URLs (one per line)...\n\nTip: Paste multiple URLs at once."
         )
         self.url_edit.textChanged.connect(self._on_urls_changed)
         url_layout.addWidget(self.url_edit, 1)
@@ -234,16 +351,13 @@ class AddDownloadDialog(QDialog):
         url_layout.addLayout(url_btn_row)
         url_layout.addSpacing(4)
 
-        # ─────────────────────────────────────────────────────
-        # RIGHT: Progress + Table
-        # ─────────────────────────────────────────────────────
+        # ── RIGHT: Progress + Table ──
         table_widget = QWidget()
         table_widget.setMinimumWidth(340)
         table_layout = QVBoxLayout(table_widget)
         table_layout.setContentsMargins(12, 0, 0, 0)
         table_layout.setSpacing(4)
 
-        # ── Progress bar (ALWAYS visible, 26px) ──
         self.fetch_progress = QProgressBar()
         self.fetch_progress.setRange(0, 100)
         self.fetch_progress.setValue(0)
@@ -253,7 +367,7 @@ class AddDownloadDialog(QDialog):
         self.fetch_progress.setStyleSheet("""
             QProgressBar {
                 border: 1px solid #45475a;
-                border-radius: 4px;
+                border-radius: 8px;
                 text-align: center;
                 font-size: 11px;
                 color: #1e1e2e;
@@ -267,7 +381,7 @@ class AddDownloadDialog(QDialog):
         table_layout.addWidget(self.fetch_progress)
         table_layout.addSpacing(6)
 
-        # ── Rule info banner (hidden by default) ──
+        # Rule info banner
         self.rule_banner = QFrame()
         self.rule_banner.setObjectName("rule_banner")
         self.rule_banner.setStyleSheet("""
@@ -297,7 +411,7 @@ class AddDownloadDialog(QDialog):
 
         table_layout.addWidget(self.rule_banner)
 
-        # ── Table ──
+        # Table
         self.table = QTableWidget(0, 4, self)
         self.table.setHorizontalHeaderLabels(["", "Filename", "Size", "Status"])
         self.table.verticalHeader().setVisible(False)
@@ -313,11 +427,11 @@ class AddDownloadDialog(QDialog):
         header.setSectionResizeMode(2, QHeaderView.ResizeMode.ResizeToContents)
         header.setSectionResizeMode(3, QHeaderView.ResizeMode.ResizeToContents)
 
-        table_layout.addWidget(self.table, 1)  # ← stretch
+        table_layout.addWidget(self.table, 1)
 
         table_layout.addSpacing(6)
 
-        # ── Select All / Deselect All ──
+        # Select All / Deselect All
         select_row = QHBoxLayout()
         select_row.setSpacing(8)
         select_row.setContentsMargins(0, 0, 0, 0)
@@ -337,18 +451,15 @@ class AddDownloadDialog(QDialog):
         select_row.addStretch()
         table_layout.addLayout(select_row)
 
-        # ── Add to splitter ──
         splitter.addWidget(url_widget)
         splitter.addWidget(table_widget)
-        splitter.setSizes([280, 500])  # 35% - 65%
-
-        # ── Prevent one side from collapsing ──
+        splitter.setSizes([280, 500])
         splitter.setStretchFactor(0, 0)
         splitter.setStretchFactor(1, 1)
 
-        main_layout.addWidget(splitter, 1)  # ← stretch
+        main_layout.addWidget(splitter, 1)
 
-        # ===== Total label (outside splitter, at bottom) =====
+        # Total label
         self.total_label = QLabel("")
         self.total_label.setStyleSheet(
             "color: #95a5a6; font-size: 11px; padding: 4px 8px;"
@@ -356,7 +467,7 @@ class AddDownloadDialog(QDialog):
         self.total_label.setAlignment(Qt.AlignmentFlag.AlignLeft)
         main_layout.addWidget(self.total_label)
 
-        # ===== Settings accordion =====
+        # Settings accordion
         settings_acc = AccordionGroup("Settings")
         settings_acc.set_expanded(True)
 
@@ -422,7 +533,7 @@ class AddDownloadDialog(QDialog):
 
         main_layout.addWidget(settings_acc)
 
-        # ===== Proxy accordion =====
+        # Proxy accordion
         proxy_acc = AccordionGroup("Proxy Settings")
         proxy_acc.set_expanded(False)
 
@@ -456,7 +567,42 @@ class AddDownloadDialog(QDialog):
 
         main_layout.addWidget(proxy_acc)
 
-        # ===== Info label =====
+        # Speed Limit accordion
+        speed_acc = AccordionGroup("Speed Limit")
+        speed_acc.set_expanded(False)
+
+        speed_row = QHBoxLayout()
+        speed_row.setSpacing(8)
+
+        self.per_download_speed_cb = QCheckBox("Limit speed for this download")
+        self.per_download_speed_cb.setChecked(False)
+        speed_row.addWidget(self.per_download_speed_cb)
+
+        self.per_download_speed_spin = QSpinBox()
+        self.per_download_speed_spin.setRange(0, 999999)
+        self.per_download_speed_spin.setSuffix(" KB/s")
+        self.per_download_speed_spin.setValue(1024)
+        self.per_download_speed_spin.setEnabled(False)
+        self.per_download_speed_spin.setMinimumWidth(120)
+        self.per_download_speed_cb.toggled.connect(
+            self.per_download_speed_spin.setEnabled
+        )
+        speed_row.addWidget(self.per_download_speed_spin)
+        speed_row.addStretch()
+
+        speed_acc.addLayout(speed_row)
+
+        speed_hint = QLabel(
+            "When set, this overrides the queue and global speed limits "
+            "for this download only."
+        )
+        speed_hint.setStyleSheet("color: #95a5a6; font-size: 11px;")
+        speed_hint.setWordWrap(True)
+        speed_acc.addWidget(speed_hint)
+
+        main_layout.addWidget(speed_acc)
+
+        # Info label
         self.info_label = QLabel(
             "Downloads will start immediately"
             if self._is_quick
@@ -467,7 +613,7 @@ class AddDownloadDialog(QDialog):
 
         main_layout.addSpacing(8)
 
-        # ===== Button box =====
+        # Button box
         self.btn_box = QDialogButtonBox(
             QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
         )
@@ -558,14 +704,12 @@ class AddDownloadDialog(QDialog):
         self._fetcher.start()
 
     def _update_rule_banner(self, urls):
-        """Check which URLs match a rule and show the banner."""
         if not self._main_window or not hasattr(self._main_window, "store"):
             self.rule_banner.setVisible(False)
             return
 
         rule_engine = self._main_window.store.rule_engine
 
-        # Find matches for each URL
         matches = []
         for url in urls:
             rule = rule_engine.find_match(url)
@@ -576,7 +720,6 @@ class AddDownloadDialog(QDialog):
             self.rule_banner.setVisible(False)
             return
 
-        # Build banner text
         if len(matches) == 1:
             url, rule = matches[0]
             filename = self._extract_filename(url)
@@ -597,7 +740,6 @@ class AddDownloadDialog(QDialog):
                 f"<span style='font-size: 10px; color: #a6adc8;'>{actions_str}</span>"
             )
         else:
-            # Multiple matches
             rule_names = list({rule.name for _, rule in matches})
             self.rule_banner_label.setText(
                 f"<b>{len(matches)}</b> URL(s) will match "
@@ -608,7 +750,6 @@ class AddDownloadDialog(QDialog):
         self.rule_banner.setVisible(True)
 
     def _set_progress_state(self, message: str, value: int, maximum: int):
-        """Update progress bar text and value."""
         if maximum > 0:
             self.fetch_progress.setRange(0, maximum)
             self.fetch_progress.setValue(value)
@@ -684,7 +825,6 @@ class AddDownloadDialog(QDialog):
             self._url_to_size[url] = None
             self._url_to_status[url] = "fetching"
 
-            # Checkbox (with clickable wrapper)
             cb = QCheckBox()
             cb.setChecked(True)
             cb.stateChanged.connect(self._update_total)
@@ -697,17 +837,14 @@ class AddDownloadDialog(QDialog):
             cb_widget = _ClickableCheckboxWidget(cb)
             self.table.setCellWidget(row, 0, cb_widget)
 
-            # Filename
             name = self._extract_filename(url)
             name_item = QTableWidgetItem(name)
             name_item.setToolTip(url)
             self.table.setItem(row, 1, name_item)
 
-            # Size
             size_item = QTableWidgetItem("⏳ Fetching...")
             self.table.setItem(row, 2, size_item)
 
-            # Status
             status_item = QTableWidgetItem("")
             self.table.setItem(row, 3, status_item)
 
@@ -945,12 +1082,17 @@ class AddDownloadDialog(QDialog):
         urls = self._get_selected_urls()
         proxy_mode = self.proxy_combo.currentIndex()
 
+        per_download_speed = 0
+        if self.per_download_speed_cb.isChecked():
+            per_download_speed = self.per_download_speed_spin.value()
+
         data = {
             "urls": urls,
             "path": self.path_edit.text().strip(),
             "connections": self.conn_spin.value(),
             "proxy_mode": proxy_mode,
             "custom_proxy": self._custom_proxy if proxy_mode == 1 else None,
+            "per_download_speed": per_download_speed,
         }
 
         if self._is_quick:
@@ -1647,8 +1789,6 @@ class YouTubeDownloadDialog(QDialog):
                 if resolution and resolution != "audio only":
                     label += f" - {resolution}"
                 if filesize:
-                    from utils.helpers import format_size
-
                     label += f" ({format_size(filesize)})"
                 video_formats.append((format_id, label, f))
 
@@ -1658,8 +1798,6 @@ class YouTubeDownloadDialog(QDialog):
                 if bitrate:
                     label += f" - {bitrate}kbps"
                 if filesize:
-                    from utils.helpers import format_size
-
                     label += f" ({format_size(filesize)})"
                 audio_formats.append((format_id, label, f))
 
@@ -1694,8 +1832,6 @@ class YouTubeDownloadDialog(QDialog):
 
         filesize = info.get("filesize")
         if filesize:
-            from utils.helpers import format_size
-
             self.info_layout.addRow("Size:", QLabel(format_size(filesize)))
 
         self.format_combo.setEnabled(True)
@@ -1791,6 +1927,11 @@ class YouTubeDownloadDialog(QDialog):
             "proxy_url": self._get_proxy_url(),
             "queue_name": self.queue_combo.currentData(),
         }
+
+
+# ═══════════════════════════════════════════════════════════════════
+# Settings dialogs
+# ═══════════════════════════════════════════════════════════════════
 
 
 class QueueSettingsDialog(QDialog):
@@ -1953,7 +2094,6 @@ class QueueSettingsDialog(QDialog):
         self._cached_data = None
 
     def _on_accept(self):
-
         self._cached_data = self.get_queue_data()
         self.accept()
 
@@ -2042,6 +2182,7 @@ class SettingsDialog(QDialog):
 
         tabs = QTabWidget()
 
+        # ── General ──
         general_tab = QWidget()
         general_layout = QVBoxLayout(general_tab)
         general_layout.setSpacing(10)
@@ -2123,9 +2264,18 @@ class SettingsDialog(QDialog):
             settings.get("auto_clear_completed", False)
         )
         cleanup_layout.addWidget(self.auto_clear_completed)
+        self.clipboard_monitoring = QCheckBox("Monitor clipboard for download URLs")
+        self.clipboard_monitoring.setChecked(
+            settings.get("clipboard_monitoring", False)
+        )
+        self.clipboard_monitoring.setToolTip(
+            "When enabled, FelfelDM watches the clipboard and offers to\n"
+            "add any URL you copy (http, https, ftp, magnet).\n"
+            "Disabled by default for privacy."
+        )
+        cleanup_layout.addWidget(self.clipboard_monitoring)
         general_layout.addWidget(cleanup_group)
 
-        # ─── Download Rules ───
         rules_group = QGroupBox("Download Rules")
         rules_layout = QVBoxLayout(rules_group)
 
@@ -2141,8 +2291,6 @@ class SettingsDialog(QDialog):
         rules_btn.clicked.connect(self._open_rules_dialog)
         rules_layout.addWidget(rules_btn)
         general_layout.addWidget(rules_group)
-
-        general_layout.addStretch()
 
         ssl_group = QGroupBox("SSL/TLS Settings")
         ssl_layout = QVBoxLayout(ssl_group)
@@ -2162,11 +2310,11 @@ class SettingsDialog(QDialog):
         ssl_layout.addWidget(warning_label)
 
         general_layout.addWidget(ssl_group)
-
         general_layout.addStretch()
 
         tabs.addTab(general_tab, get_icon("configure"), "General")
 
+        # ── Appearance ──
         appearance_tab = QWidget()
         appearance_layout = QVBoxLayout(appearance_tab)
         appearance_layout.setSpacing(10)
@@ -2188,6 +2336,7 @@ class SettingsDialog(QDialog):
         appearance_layout.addStretch()
         tabs.addTab(appearance_tab, get_icon("preferences-desktop-theme"), "Appearance")
 
+        # ── Speed ──
         speed_tab = QWidget()
         speed_layout = QVBoxLayout(speed_tab)
         speed_layout.setSpacing(10)
@@ -2224,6 +2373,7 @@ class SettingsDialog(QDialog):
         speed_layout.addStretch()
         tabs.addTab(speed_tab, get_icon("preferences-system-speed"), "Speed")
 
+        # ── Proxy ──
         proxy_tab = QWidget()
         proxy_layout = QVBoxLayout(proxy_tab)
         proxy_layout.setSpacing(10)
@@ -2253,6 +2403,7 @@ class SettingsDialog(QDialog):
         proxy_layout.addStretch()
         tabs.addTab(proxy_tab, get_icon("network-vpn"), "Proxy")
 
+        # ── Startup ──
         startup_tab = QWidget()
         startup_layout = QVBoxLayout(startup_tab)
         startup_layout.setSpacing(10)
@@ -2278,6 +2429,7 @@ class SettingsDialog(QDialog):
         startup_layout.addStretch()
         tabs.addTab(startup_tab, get_icon("applications-system"), "Startup")
 
+        # ── Service ──
         service_tab = QWidget()
         service_layout = QVBoxLayout(service_tab)
         service_layout.setSpacing(10)
@@ -2301,18 +2453,7 @@ class SettingsDialog(QDialog):
         service_layout.addStretch()
         tabs.addTab(service_tab, get_icon("applications-system"), "Service")
 
-        main_layout.addWidget(tabs)
-
-        btn_box = QDialogButtonBox(
-            QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
-        )
-        btn_box.accepted.connect(self.accept)
-        btn_box.rejected.connect(self.reject)
-        main_layout.addWidget(btn_box)
-
-        self._update_proxy_status()
-        self._update_service_status()
-
+        # ── Notifications ──
         notif_tab = QWidget()
         notif_layout = QVBoxLayout(notif_tab)
         notif_layout.setSpacing(10)
@@ -2355,6 +2496,18 @@ class SettingsDialog(QDialog):
         notif_layout.addStretch()
         tabs.addTab(notif_tab, get_icon("applications-multimedia"), "Notifications")
 
+        main_layout.addWidget(tabs)
+
+        btn_box = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
+        )
+        btn_box.accepted.connect(self.accept)
+        btn_box.rejected.connect(self.reject)
+        main_layout.addWidget(btn_box)
+
+        self._update_proxy_status()
+        self._update_service_status()
+
     def _open_rules_dialog(self):
         from ui.rules_dialog import RulesDialog
 
@@ -2367,20 +2520,12 @@ class SettingsDialog(QDialog):
             parent=self,
         )
         dlg.exec()
-        # Persist rules to disk
         self._main_window.store.save()
 
     def _toggle_global_speed(self, checked):
         self.global_speed_spin.setEnabled(checked)
 
-    def _toggle_sound_settings(self, checked):
-        """Enable/disable sound settings based on checkbox"""
-        self.sound_path_edit.setEnabled(checked)
-        self.sound_browse_btn.setEnabled(checked)
-        self.sound_play_btn.setEnabled(checked)
-
     def _browse_sound_file(self):
-        """Browse for a sound file"""
         file_path, _ = QFileDialog.getOpenFileName(
             self,
             "Select Sound File",
@@ -2391,7 +2536,6 @@ class SettingsDialog(QDialog):
             self.sound_path_edit.setText(file_path)
 
     def _play_test_sound(self):
-        """Play a test sound"""
         sound_path = self.sound_path_edit.text().strip()
         if not sound_path or not os.path.exists(sound_path):
             QMessageBox.warning(self, "Error", "Sound file not found!")
@@ -2406,8 +2550,6 @@ class SettingsDialog(QDialog):
             pass
 
         try:
-            import subprocess
-
             players = [
                 ["paplay", sound_path],
                 ["aplay", sound_path],
@@ -2422,7 +2564,7 @@ class SettingsDialog(QDialog):
                     return
                 except FileNotFoundError:
                     continue
-        except:
+        except Exception:
             pass
 
         QMessageBox.warning(self, "Error", "Could not play sound.")
@@ -2508,7 +2650,7 @@ class SettingsDialog(QDialog):
             else:
                 self.service_status.setText("Service is stopped")
                 self.service_status.setStyleSheet("color: #95a5a6; font-size: 11px;")
-        except:
+        except Exception:
             self.service_status.setText("Service is stopped")
             self.service_status.setStyleSheet("color: #95a5a6; font-size: 11px;")
 
@@ -2665,9 +2807,9 @@ WantedBy=default.target
 
                 time.sleep(1)
                 return True
-            except:
+            except Exception:
                 return False
-        except:
+        except Exception:
             return False
 
     def get_settings(self):
@@ -2685,6 +2827,7 @@ WantedBy=default.target
             "max_tries": self.max_tries.value(),
             "max_concurrent": self.max_concurrent.value(),
             "auto_clear_completed": self.auto_clear_completed.isChecked(),
+            "clipboard_monitoring": self.clipboard_monitoring.isChecked(),
             "theme": self.theme_combo.currentText().lower(),
             "run_as_service": self.run_as_service.isChecked(),
             "speed_limit": speed_limit,
@@ -2752,11 +2895,17 @@ WantedBy=default.target
             print(f"⚠️ Could not remove from startup: {e}")
 
 
+# ═══════════════════════════════════════════════════════════════════
+# Progress / Proxy / Shutdown / Delete dialogs
+# ═══════════════════════════════════════════════════════════════════
+
+
 class DownloadProgressDialog(QDialog):
     pause_requested = pyqtSignal(str)
     resume_requested = pyqtSignal(str)
     cancel_requested = pyqtSignal(str)
     cancel_with_delete_requested = pyqtSignal(str)
+    speed_limit_changed = pyqtSignal(str, int)
 
     def __init__(self, gid, dl_data, parent=None, main_window=None):
         super().__init__(parent)
@@ -2765,8 +2914,8 @@ class DownloadProgressDialog(QDialog):
         self._main_window = main_window
         name = dl_data.get("name", "Download")
         self.setWindowTitle(name if name else "Download Progress")
-        self.setMinimumWidth(480)
-        self.setMinimumHeight(200)
+        self.setMinimumSize(560, 380)
+        # self.resize(620, 420)
         self.setSizeGripEnabled(True)
         self.setWindowFlags(
             Qt.WindowType.Window
@@ -2784,98 +2933,331 @@ class DownloadProgressDialog(QDialog):
 
         self._is_dark = detect_system_theme()
 
+        # Status → progress bar color
+        if self._is_dark:
+            self._progress_colors = {
+                "active": "#89b4fa",
+                "downloading": "#89b4fa",
+                "waiting": "#a6adc8",
+                "paused": "#f9e2af",
+                "complete": "#4ade80",
+                "completed": "#4ade80",
+                "error": "#f38ba8",
+                "retrying": "#f9e2af",
+                "removed": "#6c7086",
+            }
+        else:
+            self._progress_colors = {
+                "active": "#1a5fb4",
+                "downloading": "#1a5fb4",
+                "waiting": "#4a4a5a",
+                "paused": "#b8870a",
+                "complete": "#22c55e",
+                "completed": "#22c55e",
+                "error": "#c01c28",
+                "retrying": "#b8870a",
+                "removed": "#6a6a7a",
+            }
+
+        self._status_texts = {
+            "active": "Downloading",
+            "downloading": "Downloading",
+            "waiting": "Waiting",
+            "paused": "Paused",
+            "complete": "Completed",
+            "completed": "Completed",
+            "error": "Failed",
+            "retrying": "Retrying…",
+            "removed": "Removed",
+        }
+
         main_layout = QVBoxLayout(self)
-        main_layout.setSpacing(4)
-        main_layout.setContentsMargins(20, 16, 20, 20)
+        main_layout.setSpacing(0)
+        main_layout.setContentsMargins(0, 0, 0, 0)
+
+        # Tabs
+        self.tabs = QTabWidget()
+        self.tabs.setDocumentMode(False)
+        self.tabs.setUsesScrollButtons(False)
+        main_layout.addWidget(self.tabs, 1)
+
+        # ── Tab 1: General ──
+        general_tab = QWidget()
+        general_layout = QVBoxLayout(general_tab)
+        general_layout.setContentsMargins(16, 14, 16, 14)
+        general_layout.setSpacing(10)
 
         self.name_lbl = QLabel(dl_data.get("name", "Unknown"))
         self.name_lbl.setWordWrap(True)
-        self.name_lbl.setStyleSheet("font-weight: bold; font-size: 14px;")
-        main_layout.addWidget(self.name_lbl)
+        f = self.name_lbl.font()
+        f.setBold(True)
+        f.setPointSize(max(f.pointSize(), 11))
+        self.name_lbl.setFont(f)
+        general_layout.addWidget(self.name_lbl)
 
-        self.progress_bar = QProgressBar()
-        self.progress_bar.setMinimum(0)
-        self.progress_bar.setMaximum(100)
-        self.progress_bar.setTextVisible(True)
-        main_layout.addWidget(self.progress_bar)
+        general_layout.addSpacing(4)
 
-        info_group = QGroupBox("Details")
-        info_group.setStyleSheet("QGroupBox { font-weight: 600; }")
-        info_layout = QGridLayout(info_group)
-        info_layout.setSpacing(6)
-        info_layout.setHorizontalSpacing(10)
+        # Details card
+        self.details_card = QFrame()
+        self.details_card.setObjectName("details_card")
+        self.details_card.setFrameShape(QFrame.Shape.NoFrame)
 
-        items = [
-            ("document-open", "Size:", "size"),
-            ("media-playback-start", "Speed:", "speed"),
-            ("alarm-clock", "ETA:", "eta"),
-            ("network-transmit", "Connections:", "connections"),
-            ("dialog-information", "Status:", "status"),
-            ("dialog-warning", "Reason:", "reason"),
-            ("view-refresh", "Retry:", "retry"),
-        ]
+        card_layout = QVBoxLayout(self.details_card)
+        card_layout.setContentsMargins(12, 8, 12, 10)
+        card_layout.setSpacing(6)
+
+        card_title = QLabel("Details")
+        f = card_title.font()
+        f.setBold(True)
+        f.setPointSize(max(f.pointSize() - 1, 9))
+        card_title.setFont(f)
+        card_layout.addWidget(card_title)
 
         self.info_labels = {}
 
-        label_color = "#a6adc8" if self._is_dark else "#4a4a5a"
-        value_color = "#cdd6f4" if self._is_dark else "#1e1e2a"
+        info_grid = QGridLayout()
+        info_grid.setSpacing(6)
+        info_grid.setHorizontalSpacing(18)
+        info_grid.setColumnStretch(1, 1)
+        info_grid.setContentsMargins(0, 4, 0, 0)
 
-        for i, (icon_name, label, key) in enumerate(items):
-            icon_lbl = QLabel()
-            icon_lbl.setPixmap(get_icon(icon_name).pixmap(16, 16))
-            info_layout.addWidget(icon_lbl, i, 0)
+        rows = [
+            ("Size:", "size"),
+            ("Downloaded:", "downloaded"),
+            ("Speed:", "speed"),
+            ("Time left:", "eta"),
+            ("Connections:", "connections"),
+            ("Proxy:", "proxy"),
+        ]
 
-            lbl = QLabel(label)
-            lbl.setStyleSheet(f"color: {label_color};")
-            info_layout.addWidget(lbl, i, 1)
+        for i, (label_text, key) in enumerate(rows):
+            lbl = QLabel(label_text)
+            lbl.setEnabled(False)
+            info_grid.addWidget(lbl, i, 0, Qt.AlignmentFlag.AlignTop)
 
-            val_lbl = QLabel("—")
-            val_lbl.setStyleSheet(f"color: {value_color}; font-weight: 500;")
-            info_layout.addWidget(val_lbl, i, 2)
-            self.info_labels[key] = val_lbl
+            if key == "speed":
+                speed_wrap = QWidget()
+                sw = QHBoxLayout(speed_wrap)
+                sw.setContentsMargins(0, 0, 0, 0)
+                sw.setSpacing(8)
 
-        main_layout.addWidget(info_group)
+                val_lbl = QLabel("—")
+                f = val_lbl.font()
+                f.setBold(True)
+                val_lbl.setFont(f)
+                sw.addWidget(val_lbl)
 
-        # Technical details (raw error text) — collapsed by default.
-        self.tech_group = QGroupBox("Technical details")
-        self.tech_group.setVisible(False)
-        tech_layout = QVBoxLayout(self.tech_group)
-        tech_layout.setContentsMargins(8, 4, 8, 4)
+                self._speed_limit_badge = QLabel("")
+                self._speed_limit_badge.setVisible(False)
+                sw.addWidget(self._speed_limit_badge)
+                sw.addStretch()
 
-        self.tech_label = QLabel("")
-        self.tech_label.setWordWrap(True)
-        self.tech_label.setStyleSheet(
-            "font-family: monospace; font-size: 11px; color: #888;"
+                info_grid.addWidget(speed_wrap, i, 1)
+                self.info_labels[key] = val_lbl
+            else:
+                val_lbl = QLabel("—")
+                f = val_lbl.font()
+                f.setBold(True)
+                val_lbl.setFont(f)
+                val_lbl.setWordWrap(True)
+                val_lbl.setTextInteractionFlags(
+                    Qt.TextInteractionFlag.TextSelectableByMouse
+                )
+                info_grid.addWidget(val_lbl, i, 1)
+                self.info_labels[key] = val_lbl
+
+        card_layout.addLayout(info_grid)
+        general_layout.addWidget(self.details_card)
+
+        # Error banner
+        self.error_banner = QFrame()
+        self.error_banner.setObjectName("error_banner")
+        self.error_banner.setFrameShape(QFrame.Shape.NoFrame)
+        self.error_banner.setVisible(False)
+        err_layout = QVBoxLayout(self.error_banner)
+        err_layout.setContentsMargins(10, 8, 10, 8)
+        err_layout.setSpacing(2)
+
+        err_header = QHBoxLayout()
+        err_header.setSpacing(6)
+        err_icon = QLabel()
+        err_icon.setPixmap(get_icon("dialog-warning").pixmap(14, 14))
+        err_header.addWidget(err_icon)
+        self.error_title_lbl = QLabel("Failed")
+        f = self.error_title_lbl.font()
+        f.setBold(True)
+        self.error_title_lbl.setFont(f)
+        err_header.addWidget(self.error_title_lbl)
+        err_header.addStretch()
+        err_layout.addLayout(err_header)
+
+        self.error_reason_lbl = QLabel("")
+        self.error_reason_lbl.setWordWrap(True)
+        err_layout.addWidget(self.error_reason_lbl)
+
+        self.error_retry_lbl = QLabel("")
+        self.error_retry_lbl.setEnabled(False)
+        f = self.error_retry_lbl.font()
+        f.setPointSize(max(f.pointSize() - 1, 9))
+        self.error_retry_lbl.setFont(f)
+        err_layout.addWidget(self.error_retry_lbl)
+
+        general_layout.addWidget(self.error_banner)
+        general_layout.addStretch()
+
+        # Progress bar (bottom)
+        general_layout.addSpacing(6)
+
+        self.progress_bar = StripedProgressBar()
+        self.progress_bar.setMinimum(0)
+        self.progress_bar.setMaximum(100)
+        self.progress_bar.setTextVisible(False)
+        self.progress_bar.setFixedHeight(16)
+        general_layout.addWidget(self.progress_bar)
+
+        progress_info = QHBoxLayout()
+        progress_info.setContentsMargins(0, 4, 0, 0)
+
+        self.percent_lbl = QLabel("0%")
+        f = self.percent_lbl.font()
+        f.setBold(True)
+        f.setPointSize(max(f.pointSize(), 11))
+        self.percent_lbl.setFont(f)
+        progress_info.addWidget(self.percent_lbl)
+
+        progress_info.addStretch()
+
+        self.size_inline_lbl = QLabel("— / —")
+        f = self.size_inline_lbl.font()
+        f.setBold(True)
+        f.setPointSize(max(f.pointSize(), 11))
+        self.size_inline_lbl.setFont(f)
+        progress_info.addWidget(self.size_inline_lbl)
+
+        general_layout.addLayout(progress_info)
+
+        self.tabs.addTab(general_tab, "General")
+
+        # ── Tab 2: Speed Limit ──
+        speed_tab = QWidget()
+        speed_tab_layout = QVBoxLayout(speed_tab)
+        speed_tab_layout.setContentsMargins(16, 14, 16, 14)
+        speed_tab_layout.setSpacing(10)
+
+        speed_title = QLabel("Per-download speed limit")
+        f = speed_title.font()
+        f.setBold(True)
+        speed_title.setFont(f)
+        speed_tab_layout.addWidget(speed_title)
+
+        speed_input_row = QHBoxLayout()
+        speed_input_row.setSpacing(8)
+        speed_input_row.addWidget(QLabel("Limit:"))
+
+        self.speed_limit_spin = QSpinBox()
+        self.speed_limit_spin.setRange(0, 999999)
+        self.speed_limit_spin.setSuffix(" KB/s")
+        self.speed_limit_spin.setMinimumWidth(140)
+        self.speed_limit_spin.setFixedHeight(30)
+        speed_input_row.addWidget(self.speed_limit_spin)
+
+        self.speed_limit_btn = QPushButton(get_icon("dialog-ok-apply"), "Apply")
+        self.speed_limit_btn.setFixedHeight(30)
+        self.speed_limit_btn.setMinimumWidth(100)
+        self.speed_limit_btn.clicked.connect(self._on_apply_speed_limit)
+        speed_input_row.addWidget(self.speed_limit_btn)
+
+        speed_input_row.addStretch()
+        speed_tab_layout.addLayout(speed_input_row)
+
+        self.speed_status_lbl = QLabel("")
+        self.speed_status_lbl.setWordWrap(True)
+        self.speed_status_lbl.setMargin(8)
+        speed_tab_layout.addWidget(self.speed_status_lbl)
+
+        speed_hint = QLabel(
+            "Set to <b>0</b> for unlimited speed. "
+            "A per-download limit overrides the queue and global limits."
         )
-        self.tech_label.setTextInteractionFlags(
-            Qt.TextInteractionFlag.TextSelectableByMouse
+        speed_hint.setWordWrap(True)
+        if self._is_dark:
+            speed_hint.setStyleSheet("color: #a6adc8;")
+        else:
+            speed_hint.setStyleSheet("color: #4a4a5a;")
+        speed_tab_layout.addWidget(speed_hint)
+
+        speed_tab_layout.addStretch()
+
+        self.tabs.addTab(speed_tab, "Speed Limit")
+
+        # ── Tab 3: Technical ──
+        tech_tab = QWidget()
+        tech_layout = QVBoxLayout(tech_tab)
+        tech_layout.setContentsMargins(14, 14, 14, 14)
+        tech_layout.setSpacing(8)
+
+        self.tech_label = QPlainTextEdit()
+        self.tech_label.setReadOnly(True)
+        self.tech_label.setLineWrapMode(QPlainTextEdit.LineWrapMode.WidgetWidth)
+        mono = QFont("Monospace")
+        mono.setStyleHint(QFont.StyleHint.TypeWriter)
+        mono.setPointSize(9)
+        self.tech_label.setFont(mono)
+        self.tech_label.setPlaceholderText(
+            "No technical details available for this download."
         )
         tech_layout.addWidget(self.tech_label)
 
-        main_layout.addWidget(self.tech_group)
+        copy_row = QHBoxLayout()
+        copy_row.addStretch()
+        self.copy_tech_btn = QPushButton(get_icon("edit-copy"), "Copy")
+        self.copy_tech_btn.setFixedHeight(28)
+        self.copy_tech_btn.setMinimumWidth(90)
+        self.copy_tech_btn.clicked.connect(self._on_copy_technical)
+        copy_row.addWidget(self.copy_tech_btn)
+        tech_layout.addLayout(copy_row)
 
-        main_layout.addSpacing(8)
+        self.tabs.addTab(tech_tab, "Technical")
 
-        btn_row = QHBoxLayout()
-        btn_row.setSpacing(10)
+        # Legacy hidden labels — keep info_labels["status"] and ["path"]
+        self._legacy_container = QWidget()
+        self._legacy_container.setVisible(False)
+        legacy_layout = QGridLayout(self._legacy_container)
+        for key in ("status", "path"):
+            lbl = QLabel("—")
+            legacy_layout.addWidget(lbl)
+            self.info_labels[key] = lbl
+        main_layout.addWidget(self._legacy_container)
+
+        # Action bar
+        action_bar = QFrame()
+        action_bar.setObjectName("action_bar")
+        action_bar.setFrameShape(QFrame.Shape.NoFrame)
+        action_layout = QHBoxLayout(action_bar)
+        action_layout.setContentsMargins(14, 10, 14, 12)
+        action_layout.setSpacing(10)
 
         self.action_btn = QPushButton()
         self.action_btn.setIcon(get_icon("media-playback-pause"))
         self.action_btn.setText("Pause")
-        self.action_btn.setMinimumWidth(100)
+        self.action_btn.setMinimumWidth(110)
+        self.action_btn.setFixedHeight(32)
         self.action_btn.clicked.connect(self._on_action_clicked)
-        btn_row.addWidget(self.action_btn)
+        action_layout.addWidget(self.action_btn)
 
-        btn_row.addStretch()
+        action_layout.addStretch()
 
         self.cancel_btn = QPushButton()
         self.cancel_btn.setIcon(get_icon("edit-delete"))
         self.cancel_btn.setText("Cancel")
         self.cancel_btn.setMinimumWidth(100)
+        self.cancel_btn.setFixedHeight(32)
         self.cancel_btn.clicked.connect(self._on_cancel_clicked)
-        btn_row.addWidget(self.cancel_btn)
+        action_layout.addWidget(self.cancel_btn)
 
-        main_layout.addLayout(btn_row)
+        main_layout.addWidget(action_bar)
+
+        self._apply_styles()
 
         if dl_data:
             files = dl_data.get("files", [])
@@ -2883,11 +3265,113 @@ class DownloadProgressDialog(QDialog):
                 self._file_path = files[0]["path"]
             self.update_data(dl_data)
 
+    def _apply_styles(self):
+        self.details_card.setStyleSheet("""
+            QFrame#details_card {
+                border: 1px solid palette(mid);
+                border-radius: 6px;
+                background: palette(alternate-base);
+            }
+        """)
+
+        self.error_banner.setStyleSheet("""
+            QFrame#error_banner {
+                border: 1px solid palette(mid);
+                border-radius: 6px;
+                background: palette(alternate-base);
+            }
+        """)
+
+        action_bar = self.findChild(QFrame, "action_bar")
+        if action_bar:
+            action_bar.setStyleSheet("""
+                QFrame#action_bar {
+                    border-top: 1px solid palette(mid);
+                }
+            """)
+
+        if self._is_dark:
+            tab_text = "#cdd6f4"
+            tab_text_dim = "#7f849c"
+            tab_text_hover = "#cdd6f4"
+            tab_accent = "#89b4fa"
+            pane_border = "#45475a"
+        else:
+            tab_text = "#1e1e2a"
+            tab_text_dim = "#6c7086"
+            tab_text_hover = "#1e1e2a"
+            tab_accent = "#1a5fb4"
+            pane_border = "#c0c0c8"
+
+        self.tabs.setStyleSheet(f"""
+            QTabWidget::pane {{
+                border: none;
+                border-top: 1px solid {pane_border};
+                background: transparent;
+                top: -1px;
+            }}
+            QTabBar {{
+                background: transparent;
+            }}
+            QTabBar::tab {{
+                padding: 7px 16px;
+                margin-right: 2px;
+                border: none;
+                background: transparent;
+                color: {tab_text_dim};
+                font-size: 12px;
+            }}
+            QTabBar::tab:hover {{
+                color: {tab_text_hover};
+            }}
+            QTabBar::tab:selected {{
+                color: {tab_text};
+                border-bottom: 2px solid {tab_accent};
+                font-weight: bold;
+            }}
+        """)
+
     def set_gid(self, new_gid: str) -> None:
         self.gid = new_gid
         self._is_complete = False
         self._status = "active"
         self.setWindowTitle("Download Progress")
+
+    def _on_apply_speed_limit(self):
+        value = self.speed_limit_spin.value()
+        self.speed_limit_changed.emit(self.gid, value)
+
+    def _update_speed_status_banner(self, current_limit: int):
+        dim_color = "#a6adc8" if self._is_dark else "#4a4a5a"
+
+        if current_limit > 0:
+            self.speed_status_lbl.setText(
+                f"⚡ <b>Current limit:</b> {current_limit} KB/s<br>"
+                f"<span style='color: {dim_color};'>"
+                "This overrides the queue and global limits for this download."
+                "</span>"
+            )
+        else:
+            self.speed_status_lbl.setText(
+                "ℹ️ <b>No per-download limit.</b><br>"
+                f"<span style='color: {dim_color};'>"
+                "Using the queue limit (or the global limit if the queue has none)."
+                "</span>"
+            )
+
+    def _update_speed_badge(self, current_limit: int):
+        if self._speed_limit_badge is None:
+            return
+        if current_limit > 0:
+            self._speed_limit_badge.setText(f"⚡ {current_limit} KB/s")
+            self._speed_limit_badge.setVisible(True)
+        else:
+            self._speed_limit_badge.setVisible(False)
+
+    def _on_copy_technical(self):
+        QApplication.clipboard().setText(self.tech_label.toPlainText())
+        self.copy_tech_btn.setText("Copied!")
+        QTimer.singleShot(1500, lambda: self.copy_tech_btn.setText("Copy"))
 
     def _on_action_clicked(self):
         if self._is_complete:
@@ -2960,124 +3444,152 @@ class DownloadProgressDialog(QDialog):
         if status == "complete" and not self._is_complete:
             self._is_complete = True
             self.setWindowTitle(f"✅ {name}" if name else "Download Completed!")
-            self.setWindowFlags(
-                Qt.WindowType.Window
-                | Qt.WindowType.WindowCloseButtonHint
-                | Qt.WindowType.WindowMinimizeButtonHint
-                | Qt.WindowType.WindowMaximizeButtonHint
-                | Qt.WindowType.WindowStaysOnTopHint
-            )
             self.show()
             self.raise_()
             self.activateWindow()
-            QTimer.singleShot(50, self.adjustSize)
 
         if name:
             self.name_lbl.setText(name)
-            self.setWindowTitle(name)
+            if not self._is_complete:
+                self.setWindowTitle(name)
 
+        # Progress bar
         if total > 0:
             pct = int((completed / total) * 100)
             self.progress_bar.setValue(min(pct, 100))
-            self.progress_bar.setFormat(f"{pct}%")
-            self.info_labels["size"].setText(
+            self.percent_lbl.setText(f"{pct}%")
+            self.size_inline_lbl.setText(
                 f"{format_size(completed)} / {format_size(total)}"
             )
         else:
             self.progress_bar.setValue(0)
-            self.progress_bar.setFormat("—")
-            self.info_labels["size"].setText(f"{format_size(completed)} / Unknown")
+            self.percent_lbl.setText("—")
+            self.size_inline_lbl.setText(f"{format_size(completed)} / Unknown")
+
+        # Progress bar style
+        chunk_color = self._progress_colors.get(status, "#888")
 
         if status == "paused":
-            self.info_labels["speed"].setText("0 B/s")
-        elif status == "complete":
-            self.info_labels["speed"].setText("Done")
-        elif status == "error":
-            self.info_labels["speed"].setText("Error")
-        else:
-            self.info_labels["speed"].setText(format_speed(speed) if speed > 0 else "—")
+            if self._is_dark:
+                stripe_color = "#ffb700"
+                base_color = "#ffd93d"
+            else:
+                stripe_color = "#e69a00"
+                base_color = "#f5b400"
 
-        if status in ["paused", "complete", "error"]:
-            self.info_labels["eta"].setText("—")
-        elif speed > 0 and total > completed:
+            self.progress_bar.set_color(base_color)
+            self.progress_bar.set_striped(True, stripe_color=stripe_color)
+        else:
+            self.progress_bar.set_color(chunk_color)
+            self.progress_bar.set_striped(False)
+
+        # Info grid
+        self.info_labels["size"].setText(format_size(total) if total > 0 else "Unknown")
+        self.info_labels["downloaded"].setText(format_size(completed))
+
+        if status == "paused":
+            speed_str = "0 B/s"
+        elif status == "complete":
+            speed_str = "Done"
+        elif status == "error":
+            speed_str = "—"
+        else:
+            speed_str = format_speed(speed) if speed > 0 else "—"
+
+        self.info_labels["speed"].setText(speed_str)
+
+        eta_str = "—"
+        if (
+            status not in ("paused", "complete", "error")
+            and speed > 0
+            and total > completed
+        ):
             eta_sec = (total - completed) // speed
             h, m, s = eta_sec // 3600, (eta_sec % 3600) // 60, eta_sec % 60
-            self.info_labels["eta"].setText(f"{h:02d}:{m:02d}:{s:02d}")
-        else:
-            self.info_labels["eta"].setText("—")
+            if h > 0:
+                eta_str = f"{h}h {m:02d}m"
+            elif m > 0:
+                eta_str = f"{m}m {s:02d}s"
+            else:
+                eta_str = f"{s}s"
+
+        self.info_labels["eta"].setText(eta_str)
 
         self.info_labels["connections"].setText(str(dl_data.get("connections", 0)))
 
-        if self._is_dark:
-            status_colors = {
-                "active": "#89b4fa",
-                "downloading": "#89b4fa",
-                "waiting": "#a6adc8",
-                "paused": "#f9e2af",
-                "complete": "#a6e3a1",
-                "completed": "#a6e3a1",
-                "error": "#f38ba8",
-                "removed": "#6c7086",
-            }
+        # Proxy
+        proxy_url = dl_data.get("proxy_url", "")
+        if proxy_url and proxy_url.strip():
+            self.info_labels["proxy"].setText(proxy_url)
         else:
-            status_colors = {
-                "active": "#1a5fb4",
-                "downloading": "#1a5fb4",
-                "waiting": "#4a4a5a",
-                "paused": "#b8870a",
-                "complete": "#26a269",
-                "completed": "#26a269",
-                "error": "#c01c28",
-                "removed": "#6a6a7a",
-            }
+            self.info_labels["proxy"].setText("—")
 
-        status_texts = {
-            "active": "Downloading",
-            "downloading": "Downloading",
-            "waiting": "Waiting",
-            "paused": "Paused",
-            "complete": "Complete",
-            "completed": "Complete",
-            "error": "Error",
-            "removed": "Removed",
-        }
-        # Reason + Retry (only meaningful when the download failed or is retrying)
+        # Error banner
         from utils.helpers import get_error_reason, get_retry_status
 
         if status in ("error", "retrying"):
-            reason_text = get_error_reason(dl_data.get("errorMessage", ""))
-            retry_text = get_retry_status(dl_data)
+            reason = get_error_reason(dl_data.get("errorMessage", ""))
+            retry = get_retry_status(dl_data)
+            self.error_reason_lbl.setText(reason)
+            self.error_retry_lbl.setText(f"Retry: {retry}")
+            self.error_banner.setVisible(True)
         else:
-            reason_text = "—"
-            retry_text = "—"
+            self.error_banner.setVisible(False)
 
-        self.info_labels["reason"].setText(reason_text)
-        if status == "error":
-            self.info_labels["reason"].setStyleSheet(
-                "color: #e74c3c; font-weight: 500;"
-            )
-        elif status == "retrying":
-            self.info_labels["reason"].setStyleSheet(
-                "color: #f39c12; font-weight: 500;"
-            )
+        # Hidden legacy labels
+        display_text = self._status_texts.get(status, status.capitalize())
+        self.info_labels["status"].setText(display_text)
+        if self._file_path:
+            self.info_labels["path"].setText(self._file_path)
         else:
-            self.info_labels["reason"].setStyleSheet("")
+            self.info_labels["path"].setText("—")
 
-        self.info_labels["retry"].setText(retry_text)
+        # Speed badge
+        current_limit = dl_data.get("speed_limit", 0)
+        self._update_speed_badge(current_limit)
 
-        # Show/hide the raw-error block
+        # Speed limit tab
+        if not self.speed_limit_spin.hasFocus():
+            if current_limit != self.speed_limit_spin.value():
+                self.speed_limit_spin.blockSignals(True)
+                self.speed_limit_spin.setValue(current_limit)
+                self.speed_limit_spin.blockSignals(False)
+
+        self._update_speed_status_banner(current_limit)
+
+        # Technical tab
+        tech_lines = []
+        tech_lines.append("Download")
+        tech_lines.append(f"  Download ID      {self.gid}")
+        tech_lines.append(f"  Status           {status}")
+        if dl_data.get("aria2_gid"):
+            tech_lines.append(f"  aria2 GID        {dl_data.get('aria2_gid')}")
+        tech_lines.append(f"  Connections      {dl_data.get('connections', 0)}")
+
+        # Proxy info
+        proxy_url = dl_data.get("proxy_url", "")
+        if proxy_url and proxy_url.strip():
+            tech_lines.append(f"  Proxy            {proxy_url}")
+
+        if self._file_path:
+            tech_lines.append("")
+            tech_lines.append("File")
+            tech_lines.append(f"  Path             {self._file_path}")
+        if total > 0:
+            tech_lines.append(f"  Size             {total} bytes")
+
         raw_error = dl_data.get("errorMessage", "").strip()
-        if status in ("error", "retrying") and raw_error:
-            self.tech_label.setText(raw_error)
-            self.tech_group.setVisible(True)
-        else:
-            self.tech_group.setVisible(False)
+        if raw_error:
+            tech_lines.append("")
+            tech_lines.append("Error")
+            tech_lines.append(f"  {raw_error}")
 
-        color = status_colors.get(status, "#6a6a7a")
-        text = status_texts.get(status, status.capitalize())
-
-        self.info_labels["status"].setText(text)
-        self.info_labels["status"].setStyleSheet(f"color: {color}; font-weight: 600;")
+        new_text = "\n".join(tech_lines)
+        if self.tech_label.toPlainText() != new_text:
+            scrollbar = self.tech_label.verticalScrollBar()
+            old_scroll = scrollbar.value()
+            self.tech_label.setPlainText(new_text)
+            scrollbar.setValue(old_scroll)
 
         self._status = status
         self._update_buttons(status)
@@ -3105,9 +3617,15 @@ class DownloadProgressDialog(QDialog):
             self.cancel_btn.setIcon(get_icon("edit-delete"))
             self.cancel_btn.setEnabled(True)
         elif status == "error":
-            self.action_btn.setIcon(get_icon("media-playback-start"))
+            self.action_btn.setIcon(get_icon("view-refresh"))
             self.action_btn.setText("Retry")
             self.action_btn.setEnabled(True)
+            self.cancel_btn.setText("Cancel")
+            self.cancel_btn.setIcon(get_icon("edit-delete"))
+            self.cancel_btn.setEnabled(True)
+        elif status == "retrying":
+            self.action_btn.setEnabled(False)
+            self.action_btn.setText("Retrying…")
             self.cancel_btn.setText("Cancel")
             self.cancel_btn.setIcon(get_icon("edit-delete"))
             self.cancel_btn.setEnabled(True)
