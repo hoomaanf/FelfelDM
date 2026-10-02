@@ -5,9 +5,13 @@ import socket
 
 from PyQt6.QtWidgets import *
 from PyQt6.QtGui import (
-    QAction, QCloseEvent, QColor, QDesktopServices,
-    QDragEnterEvent, QDragLeaveEvent, QDragMoveEvent, QDropEvent,
-    QFont, QIcon, QKeySequence, QPixmap, QShortcut,
+    QBrush,
+    QColor,
+    QDesktopServices,
+    QFont,
+    QPainter,
+    QPen,
+    QPixmap,
 )
 import tempfile
 from PyQt6.QtCore import *
@@ -143,21 +147,21 @@ class _ClickableCheckboxWidget(QWidget):
     def set_checked(self, checked: bool):
         self._cb.setChecked(checked)
 
+    
 def _make_stripe_pixmap(stripe_color: str, base_color: str, width: int = 16, height: int = 16) -> QPixmap:
-    pixmap = QPixmap(width, height)
-    pixmap.fill(QColor(base_color))
+        pixmap = QPixmap(width, height)
+        pixmap.fill(QColor(base_color))
 
-    painter = QPainter(pixmap)
-    painter.setRenderHint(QPainter.RenderHint.Antialiasing, False)
-    painter.setPen(QPen(QColor(stripe_color), 4, Qt.PenStyle.SolidLine))
+        painter = QPainter(pixmap)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing, False)
+        painter.setPen(QPen(QColor(stripe_color), 4, Qt.PenStyle.SolidLine))
 
-    for x in range(-height, width + height, 8):
-        painter.drawLine(x, height, x + height, 0)
+        for x in range(-height, width + height, 8):
+            painter.drawLine(x, height, x + height, 0)
 
-    painter.end()
-    return pixmap
-
-
+        painter.end()
+        return pixmap
+   
 class StripedProgressBar(QProgressBar):
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -167,7 +171,7 @@ class StripedProgressBar(QProgressBar):
         self._stripe_pixmap = None
         self._build_pixmap()
         self.setStyleSheet(self._build_style())
-
+        
     def _build_pixmap(self):
         self._stripe_pixmap = _make_stripe_pixmap(
             self._stripe_color, self._base_color

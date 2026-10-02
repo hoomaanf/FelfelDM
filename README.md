@@ -68,6 +68,8 @@ bash <(curl -s https://raw.githubusercontent.com/hoomaanf/FelfelDM/main/install.
 - 📋 **Details Panel** — View download details (name, size, downloaded, status, path) with quick actions including Retry for failed downloads
 - 🔄 **Per-Download Retry** — A Retry button appears in the Details Panel when a download fails, re-adding it with a fresh aria2 gid
 - 📜 **Live Log Viewer** — See the current session's log in a live window (`Ctrl+L` or `View → Show Logs`), with auto-scroll, clear, and refresh
+- 🖱️ **Open Completed Files on Double-Click** — Double-click a completed download to open the file with the system default application (`Ctrl+Double-Click` opens the details dialog)
+- 📥 **Drag & Drop** — Drag links, plain-text URLs, or `.txt` files containing URLs onto the downloads table to open the Add to Queue dialog
 - ⌨️ **Keyboard Shortcuts** — Full keyboard navigation for power users
 
 ### Download Rules
@@ -133,6 +135,25 @@ When you choose "Remove & Delete Files", FelfelDM shows a **confirmation dialog 
 
 This fixes a previous issue where deleting one download could accidentally remove unrelated files sharing the same folder.
 
+### 🖱️ Open Completed Downloads on Double-Click
+
+Double-click a **completed** download in the main table to open it directly with the system default application (video player, PDF reader, etc.).
+
+- `Ctrl+Double-Click` forces the details dialog (previous behavior)
+- Falls back to the details dialog if the file is missing, or opens the folder if the path is a directory
+- Active, paused, and errored downloads keep the previous behavior (details dialog)
+- YouTube downloads always open the YouTube progress dialog
+
+### 📥 Drag & Drop Links
+
+Drag a link, text selection, or `.txt` file containing URLs onto the **downloads table** to open the **Add to Queue** dialog pre-filled with those URLs.
+
+- Works with **Firefox**, **Chrome**, and **plain text** selections
+- `.txt` files with URL lists are parsed automatically
+- Non-URL text and non-`.txt` files are ignored
+- A dashed overlay appears over the table while a drag hovers, so it's clear the drop is accepted
+- The overlay only covers the downloads table, not the whole window
+
 ### 📜 Live Log Viewer
 
 FelfelDM includes a built-in log viewer for debugging without leaving the app.
@@ -163,10 +184,11 @@ FelfelDM includes a built-in log viewer for debugging without leaving the app.
 - 🌐 **Browser Extension** — Firefox & Chrome extension with smart connection handling
 - 🔌 **aria2 Integration** — High-performance multi-connection downloads
 - 🎨 **Modern UI** — Dark/Light theme with Papirus icons
-- ⚡ **Speed Limit** — Global and per-queue download speed limiting
+- ⚡ **Speed Limit** — Global, per-queue, and **per-download** speed limiting
   - **Global Speed Limit** — Limits the total speed of all downloads
   - **Queue Speed Limit** — Limits the total speed of a queue; the limit is split evenly across the active downloads in that queue (e.g. 100 KB/s across 3 active downloads → ~33 KB/s each)
-  - **Queue overrides Global** — When a queue has its own speed limit, it takes priority over the global one
+  - **Per-Download Speed Limit** — Limits the speed of a single download; overrides the queue and global limits
+  - **Priority** — Per-download > Queue > Global
 - 🖥️ **System Tray** — Minimize to tray with status indicator
 - 🛑 **Shutdown on Finish** — Automatically shut down the system when all downloads complete
   - Auto-unchecks when the queue becomes empty (so an empty queue never triggers shutdown)
@@ -188,6 +210,7 @@ FelfelDM includes a built-in log viewer for debugging without leaving the app.
 - 🎯 **Preview Before Download** — See file sizes and select files before adding them
 - 🏗️ **Robust Download Tracking** — UUID-based internal identifiers keep downloads stable across retries and restarts
 - 📋 **Rules Manager UI** — Card-based interface to add/edit/delete/reorder rules with live preview
+- 🎨 **Redesigned Progress Dialogs** — Tabbed layout (General / Speed Limit / Technical), striped progress bar for paused downloads, status-aware colors, error banner, speed-limit badge, and copy-to-clipboard for technical details
 - 📜 **Built-in Log Viewer** — Open a live log window from `View → Show Logs` or press `Ctrl+L`. Useful for debugging without leaving the app.
 - 💾 **Persistent Logs** — Logs are written to `~/.cache/felfelDM/logs/app.log` with automatic rotation
 
@@ -206,6 +229,7 @@ FelfelDM includes a built-in log viewer for debugging without leaving the app.
 - 📁 **Custom Output** — Choose where to save downloaded files
 - 🖥️ **Standalone Dialog** — Independent progress dialog for YouTube downloads
 - 🪟 **Multiple Dialogs** — Open multiple YouTube progress dialogs simultaneously
+- 🎨 **Redesigned Progress Dialog** — Same tabbed layout as the regular download progress dialog
 
 ---
 
@@ -316,6 +340,20 @@ FelfelDM --update
 3. Select quality and format
 4. Choose queue and save location
 5. Click Download
+
+### Opening Completed Downloads
+
+- **Double-click** a completed download to open the file with the system default application
+- **Ctrl+Double-Click** to open the details dialog instead
+- If the file was moved or deleted, FelfelDM shows a warning and falls back to the details dialog
+
+### Drag & Drop
+
+Drag links from your browser (or any text selection containing URLs) onto the downloads table to add them.
+
+- The **Add to Queue** dialog opens with the dropped URLs pre-filled
+- You can also drag a `.txt` file containing a list of URLs (one per line)
+- A dashed overlay appears over the table while you're dragging
 
 ### Preview Sizes Before Downloading
 
@@ -428,12 +466,15 @@ FelfelDM supports smart retry with configurable behavior:
 
 ### Speed Limit Settings
 
-FelfelDM supports speed limiting at two levels:
+FelfelDM supports speed limiting at three levels:
 
-| Level                  | Description                                | Where to Configure                   |
-| ---------------------- | ------------------------------------------ | ------------------------------------ |
-| **Global Speed Limit** | Limits the total speed of all downloads    | Settings → Speed                     |
-| **Queue Speed Limit**  | Limits the total speed of a specific queue | Right-click queue → Settings → Speed |
+| Level                      | Description                                | Where to Configure                                     |
+| -------------------------- | ------------------------------------------ | ------------------------------------------------------ |
+| **Global Speed Limit**     | Limits the total speed of all downloads    | Settings → Speed                                       |
+| **Queue Speed Limit**      | Limits the total speed of a specific queue | Right-click queue → Settings → Speed                   |
+| **Per-Download Speed Limit** | Limits the speed of a single download    | Progress dialog → Speed Limit tab, or Add Download dialog → Speed Limit |
+
+**Priority:** Per-download > Queue > Global
 
 **How Queue Speed Limit works:**
 
@@ -443,6 +484,13 @@ When a queue has a speed limit (e.g. 100 KB/s) and multiple downloads are active
 - Example: 100 KB/s with 3 active downloads → ~33 KB/s per download
 - When a download completes, the remaining downloads automatically get a larger share
 - Queue Speed Limit **overrides** Global Speed Limit when set
+
+**How Per-Download Speed Limit works:**
+
+- Set from the **Speed Limit** tab in the progress dialog (applies immediately)
+- Overrides both queue and global limits for that download
+- Set to `0` to fall back to the queue's limit
+- Persisted across app restarts
 
 ### Proxy Configuration
 
@@ -629,6 +677,16 @@ DeleteFilesConfirmationDialog  ← user reviews and confirms
 Files matching by name or gid only — unrelated files are never touched
 ```
 
+### Speed Limit Priority
+
+```
+Per-Download Speed Limit  (highest priority)
+        ↓ overrides
+Queue Speed Limit
+        ↓ overrides
+Global Speed Limit        (lowest priority)
+```
+
 ---
 
 ## 📁 Project Structure
@@ -666,6 +724,7 @@ FelfelDM/
     │   ├── splash.py                  # Splash screen
     │   ├── table_model.py             # Download table model
     │   ├── update_dialog.py           # Update dialog
+    │   ├── widgets.py                 # Reusable widgets (DropOverlay)
     │   └── youtube_progress.py        # YouTube progress dialog
     ├── utils/                         # Utilities
     │   ├── __init__.py
@@ -824,10 +883,19 @@ chmod +x uninstall.sh
 
 ### Speed limit not being applied
 
-1. **Queue Speed Limit overrides Global Speed Limit** — if a queue has its own limit, the global one is ignored
-2. The Queue Speed Limit is **split across active downloads** (e.g. 100 KB/s ÷ 3 active downloads = ~33 KB/s each)
-3. Restart the download after changing speed limits to ensure the new limit is applied
-4. Check the console for `⚡ [SpeedLimit]` messages
+1. **Per-Download Speed Limit overrides Queue and Global** — if a download has its own limit, the others are ignored
+2. **Queue Speed Limit overrides Global** — if a queue has its own limit, the global one is ignored
+3. The Queue Speed Limit is **split across active downloads** (e.g. 100 KB/s ÷ 3 active downloads = ~33 KB/s each)
+4. Restart the download after changing speed limits to ensure the new limit is applied
+5. Check the console for `⚡ [SpeedLimit]` messages
+
+### Per-download speed limit not working
+
+1. Open the download's progress dialog and go to the **Speed Limit** tab
+2. Set the limit and click **Apply**
+3. The badge next to the speed shows the active per-download limit
+4. Set to `0` to fall back to the queue's speed limit
+5. Check the console for `⚡ [SpeedLimit]` messages
 
 ### File size shows as unknown
 
