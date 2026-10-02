@@ -2180,11 +2180,86 @@ class MainWindow(QMainWindow):
         if not gid:
             return
 
-        download_type = self._all_downloads.get(gid, {}).get("download_type", "normal")
+        data = self._all_downloads.get(gid, {})
+        download_type = data.get("download_type", "normal")
+
+        # YouTube downloads always open the progress dialog
         if download_type == "youtube":
             self._open_youtube_progress_dialog(gid)
-        else:
+            return
+
+        status = data.get("status", "")
+
+        # Completed → open the file directly (Ctrl+Double-Click forces details)
+        if status in ("complete", "completed"):
+            if QApplication.keyboardModifiers() & Qt.KeyboardModifier.ControlModifier:
+                self._open_progress_dialog(gid)
+                return
+            if self._open_download_file(gid):
+                return
+            # If the file is missing, fall through to the details dialog
             self._open_progress_dialog(gid)
+            return
+
+        # Everything else → progress/details dialog
+        self._open_progress_dialog(gid)
+
+
+    def _open_download_file(self, download_id: str) -> bool:
+        """Try to open the downloaded file with the default application.
+
+        Returns True if the file was opened, False otherwise (caller should
+        fall back to the details dialog).
+        """
+        data = self._all_downloads.get(download_id)
+        if not data:
+            return False
+
+        file_path: Optional[str] = None
+
+        # Prefer the stored file path(s)
+        for f in data.get("files", []) or []:
+            p = f.get("path")
+            if p:
+                file_path = p
+                break
+
+        # Fallback: derive from save_path + name
+        if not file_path:
+            save_path = data.get("save_path") or data.get("real_path")
+            name = data.get("name")
+            if save_path and name:
+                candidate = os.path.join(save_path, name)
+                if os.path.exists(candidate):
+                    file_path = candidate
+
+        if not file_path:
+            return False
+
+        # If it's a directory, open the folder instead
+        if os.path.isdir(file_path):
+            QDesktopServices.openUrl(QUrl.fromLocalFile(file_path))
+            return True
+
+        if not os.path.exists(file_path):
+            # File was moved/deleted by the user — show a warning but don't crash
+            QMessageBox.warning(
+                self,
+                "File Not Found",
+                f"The downloaded file no longer exists at:\n\n{file_path}",
+            )
+            return False
+
+        opened = QDesktopServices.openUrl(QUrl.fromLocalFile(file_path))
+        if not opened:
+            QMessageBox.warning(
+                self,
+                "Cannot Open File",
+                f"Could not open the file with the default application:\n\n{file_path}",
+            )
+            return False
+
+        return True
 
     def _filter_downloads(self, text: str) -> None:
         q = self._current_queue()
