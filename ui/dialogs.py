@@ -5,16 +5,9 @@ import socket
 
 from PyQt6.QtWidgets import *
 from PyQt6.QtGui import (
-    QDesktopServices,
-    QColor,
-    QFont,
-    QPalette,
-    QPainter,
-    QBrush,
-    QPen,
-    QPolygonF,
-    QPainterPath,
-    QPixmap
+    QAction, QCloseEvent, QColor, QDesktopServices,
+    QDragEnterEvent, QDragLeaveEvent, QDragMoveEvent, QDropEvent,
+    QFont, QIcon, QKeySequence, QPixmap, QShortcut,
 )
 import tempfile
 from PyQt6.QtCore import *
@@ -2915,6 +2908,7 @@ class DownloadProgressDialog(QDialog):
         name = dl_data.get("name", "Download")
         self.setWindowTitle(name if name else "Download Progress")
         self.setMinimumSize(560, 380)
+        self.setAcceptDrops(True)
         # self.resize(620, 420)
         self.setSizeGripEnabled(True)
         self.setWindowFlags(

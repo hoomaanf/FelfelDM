@@ -29,6 +29,7 @@ from ui.youtube_progress import YouTubeProgressDialog
 from ui.export_dialog import ExportDialog
 from ui.export_manager import ExportManager
 from ui.update_dialog import UpdateDialog
+from ui.widgets import DropOverlay
 
 from utils.helpers import (
     format_size,
@@ -133,6 +134,7 @@ class MainWindow(QMainWindow):
         self.schedule_thread.start_queue.connect(self._on_schedule_start)
         self.schedule_thread.pause_queue.connect(self._on_schedule_pause)
         self.schedule_thread.start()
+        self._drop_overlay: Optional[DropOverlay] = None
 
     def _init_ui(self) -> None:
         theme_setting: str = self.store.settings.get("theme", "auto")
@@ -152,6 +154,8 @@ class MainWindow(QMainWindow):
         self.splash.update_status("Building interface...", 70)
         QApplication.processEvents()
         self._build_ui()
+        
+        self._drop_overlay = None
 
         self.splash.update_status("Building tray...", 80)
         QApplication.processEvents()
@@ -2204,6 +2208,132 @@ class MainWindow(QMainWindow):
         # Everything else → progress/details dialog
         self._open_progress_dialog(gid)
 
+    # ═══════════════════════════════════════════════════════════════
+    # Drag & Drop
+    # ═══════════════════════════════════════════════════════════════
+
+    def dragEnterEvent(self, event: QDragEnterEvent) -> None:
+        """Accept drags that carry URLs (links, text, or local files)."""
+        urls = self._extract_urls_from_mime(event.mimeData())
+        if urls:
+            event.acceptProposedAction()
+            self._set_drop_highlight(True)
+        else:
+            event.ignore()
+
+    def dragMoveEvent(self, event: QDragMoveEvent) -> None:
+        if self._extract_urls_from_mime(event.mimeData()):
+            event.acceptProposedAction()
+
+    def dragLeaveEvent(self, event: QDragLeaveEvent) -> None:
+        self._set_drop_highlight(False)
+        super().dragLeaveEvent(event)
+
+    def dropEvent(self, event: QDropEvent) -> None:
+        self._set_drop_highlight(False)
+        urls = self._extract_urls_from_mime(event.mimeData())
+        if not urls:
+            event.ignore()
+            return
+        event.acceptProposedAction()
+        self._handle_dropped_urls(urls)
+
+    def _extract_urls_from_mime(self, mime: QMimeData) -> list:
+        """Extract download URLs from a drag-and-drop payload.
+
+        Handles both text/uri-list (Firefox/Chrome link drags, file:// drops)
+        and text/plain (some browsers only provide this). Returns an ordered,
+        de-duplicated list of URLs.
+        """
+        urls = []
+
+        if mime.hasUrls():
+            for url in mime.urls():
+                s = url.toString().strip()
+                if not s:
+                    continue
+                if s.startswith("file://"):
+                    # Local file drop — keep the local path so the user can
+                    # see what they dropped, but only if it's a .txt we can
+                    # parse. Otherwise, skip it.
+                    local = url.toLocalFile()
+                    if local and local.lower().endswith(".txt"):
+                        try:
+                            with open(local, "r", encoding="utf-8") as f:
+                                for line in f:
+                                    line = line.strip()
+                                    if line and line.lower().startswith(
+                                        ("http://", "https://", "ftp://",
+                                        "ftps://", "magnet:")
+                                    ):
+                                        urls.append(line)
+                        except Exception as e:
+                            print(f"⚠️ [Drop] Could not read {local}: {e}")
+                    continue
+                urls.append(s)
+
+        if not urls and mime.hasText():
+            text = mime.text().strip()
+            for line in text.splitlines():
+                line = line.strip()
+                if not line:
+                    continue
+                if line.lower().startswith(
+                    ("http://", "https://", "ftp://", "ftps://", "magnet:")
+                ):
+                    urls.append(line)
+
+        # De-dup while preserving order
+        seen = set()
+        result = []
+        for u in urls:
+            if u not in seen:
+                seen.add(u)
+                result.append(u)
+        return result
+
+    def _handle_dropped_urls(self, urls: list) -> None:
+        """Open the Add-to-Queue dialog pre-filled with dropped URLs."""
+        if not urls:
+            return
+
+        visible_queues = [q for q in self.store.queues if q.name != "__direct__"]
+        default_idx = 0
+        current_q = self._current_queue()
+        if current_q and current_q.name != "__direct__":
+            for i, q in enumerate(visible_queues):
+                if q.name == current_q.name:
+                    default_idx = i
+                    break
+
+        dlg = AddDownloadDialog(visible_queues, default_idx, self, mode="queue")
+        dlg.url_edit.setPlainText("\n".join(urls))
+
+        self._show_singleton_dialog(
+            "add_download", dlg, on_accepted=self._process_add_download_common
+        )
+
+        self.status_label.setText(f"📥 {len(urls)} URL(s) dropped")
+
+    def resizeEvent(self, event) -> None:
+        super().resizeEvent(event)
+        if self._drop_overlay is not None and self._drop_overlay.isVisible():
+            self._drop_overlay.setGeometry(self.table.viewport().rect())
+    
+    def _set_drop_highlight(self, on: bool) -> None:
+        """Show/hide a subtle overlay over the downloads table only."""
+        if on:
+            if self._drop_overlay is None:
+                # Parent is the table's viewport, so the overlay stays
+                # exactly over the rows area (not on toolbar/sidebar/menu).
+                self._drop_overlay = DropOverlay(self.table.viewport())
+            self._drop_overlay.setGeometry(self.table.viewport().rect())
+            self._drop_overlay.show()
+            self._drop_overlay.raise_()
+            self._drop_overlay.update()
+        else:
+            if self._drop_overlay is not None:
+                self._drop_overlay.hide()
 
     def _open_download_file(self, download_id: str) -> bool:
         """Try to open the downloaded file with the default application.
