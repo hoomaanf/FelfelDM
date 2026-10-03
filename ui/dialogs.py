@@ -147,21 +147,24 @@ class _ClickableCheckboxWidget(QWidget):
     def set_checked(self, checked: bool):
         self._cb.setChecked(checked)
 
-    
-def _make_stripe_pixmap(stripe_color: str, base_color: str, width: int = 16, height: int = 16) -> QPixmap:
-        pixmap = QPixmap(width, height)
-        pixmap.fill(QColor(base_color))
 
-        painter = QPainter(pixmap)
-        painter.setRenderHint(QPainter.RenderHint.Antialiasing, False)
-        painter.setPen(QPen(QColor(stripe_color), 4, Qt.PenStyle.SolidLine))
+def _make_stripe_pixmap(
+    stripe_color: str, base_color: str, width: int = 16, height: int = 16
+) -> QPixmap:
+    pixmap = QPixmap(width, height)
+    pixmap.fill(QColor(base_color))
 
-        for x in range(-height, width + height, 8):
-            painter.drawLine(x, height, x + height, 0)
+    painter = QPainter(pixmap)
+    painter.setRenderHint(QPainter.RenderHint.Antialiasing, False)
+    painter.setPen(QPen(QColor(stripe_color), 4, Qt.PenStyle.SolidLine))
 
-        painter.end()
-        return pixmap
-   
+    for x in range(-height, width + height, 8):
+        painter.drawLine(x, height, x + height, 0)
+
+    painter.end()
+    return pixmap
+
+
 class StripedProgressBar(QProgressBar):
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -171,11 +174,9 @@ class StripedProgressBar(QProgressBar):
         self._stripe_pixmap = None
         self._build_pixmap()
         self.setStyleSheet(self._build_style())
-        
+
     def _build_pixmap(self):
-        self._stripe_pixmap = _make_stripe_pixmap(
-            self._stripe_color, self._base_color
-        )
+        self._stripe_pixmap = _make_stripe_pixmap(self._stripe_color, self._base_color)
         self._stripe_path = os.path.join(
             tempfile.gettempdir(), f"felfel_stripe_{id(self)}.png"
         )
@@ -248,7 +249,8 @@ class StripedProgressBar(QProgressBar):
             painter.drawRect(cover_rect)
 
         painter.end()
-        
+
+
 # ═══════════════════════════════════════════════════════════════════
 # Add / Quick / Single / YouTube dialogs
 # ═══════════════════════════════════════════════════════════════════
@@ -265,13 +267,11 @@ class AddDownloadDialog(QDialog):
 
     FETCH_DEBOUNCE_MS = 800
 
-    def __init__(self, queues, default_queue=0, parent=None, mode="queue"):
+    def __init__(self, queues, default_queue=0, parent=None):
         super().__init__(None)
         self._main_window = parent
-        self._mode = mode
-        self._is_quick = mode == "quick"
 
-        self.setWindowTitle("Quick Download" if self._is_quick else "Add Downloads")
+        self.setWindowTitle("Add Download")
         self.setMinimumWidth(820)
         self.setMinimumHeight(600)
         self.setSizeGripEnabled(True)
@@ -477,22 +477,22 @@ class AddDownloadDialog(QDialog):
         queue_layout.setContentsMargins(0, 0, 0, 0)
         queue_layout.setSpacing(2)
         queue_layout.addWidget(QLabel("Queue:"))
-        self.queue_cb = QComboBox()
 
-        if self._is_quick:
-            self.queue_cb.addItem("Direct Downloads", "__direct__")
-            for q in self._visible_queues:
-                self.queue_cb.addItem(q.name, q.name)
-            if self.default_queue < self.queue_cb.count():
-                self.queue_cb.setCurrentIndex(self.default_queue)
-        else:
-            for q in self._visible_queues:
-                self.queue_cb.addItem(q.name)
-            if self.default_queue < self.queue_cb.count():
-                self.queue_cb.setCurrentIndex(self.default_queue)
+        self.queue_cb = QComboBox()
+        self.queue_cb.addItem("📥 Direct Downloads", "__direct__")
+        for q in self._visible_queues:
+            self.queue_cb.addItem(q.name, q.name)
+        if 0 <= self.default_queue < self.queue_cb.count():
+            self.queue_cb.setCurrentIndex(self.default_queue)
 
         self.queue_cb.currentIndexChanged.connect(self._on_queue_selection_changed)
         queue_layout.addWidget(self.queue_cb)
+        self.queue_hint = QLabel("Downloads start immediately — no queue, no waiting.")
+        self.queue_hint.setWordWrap(True)
+        self.queue_hint.setStyleSheet(
+            "color: #95a5a6; font-size: 10px; padding: 2px 0 0 0;"
+        )
+        queue_layout.addWidget(self.queue_hint)
         row1.addWidget(queue_widget)
 
         conn_widget = QWidget()
@@ -513,11 +513,7 @@ class AddDownloadDialog(QDialog):
         row2 = QHBoxLayout()
         row2.setSpacing(6)
         row2.addWidget(QLabel("Save to:"))
-        default_path = (
-            os.path.expanduser("~/Downloads")
-            if self._is_quick
-            else self._default_path_for_index(self.default_queue)
-        )
+        default_path = self._default_path_for_index(self.default_queue)
         self.path_edit = QLineEdit(default_path)
         self.path_edit.textEdited.connect(self._on_path_manually_edited)
         row2.addWidget(self.path_edit)
@@ -599,15 +595,6 @@ class AddDownloadDialog(QDialog):
 
         main_layout.addWidget(speed_acc)
 
-        # Info label
-        self.info_label = QLabel(
-            "Downloads will start immediately"
-            if self._is_quick
-            else "Downloads will be added in Paused state"
-        )
-        self.info_label.setStyleSheet("color: #95a5a6; font-size: 11px; padding: 4px;")
-        main_layout.addWidget(self.info_label)
-
         main_layout.addSpacing(8)
 
         # Button box
@@ -618,7 +605,7 @@ class AddDownloadDialog(QDialog):
         ok_btn = self.btn_box.button(QDialogButtonBox.StandardButton.Ok)
         cancel_btn = self.btn_box.button(QDialogButtonBox.StandardButton.Cancel)
 
-        ok_btn.setText("Download" if self._is_quick else "Add to Queue")
+        ok_btn.setText("Download")
         ok_btn.setIcon(get_icon("download"))
         ok_btn.setMinimumWidth(140)
         ok_btn.setFixedHeight(34)
@@ -909,7 +896,7 @@ class AddDownloadDialog(QDialog):
         if total > 0:
             self.fetch_progress.setRange(0, total)
             self.fetch_progress.setValue(total)
-            self.fetch_progress.setFormat(f"✅ All sizes fetched ({total}/{total})")
+            self.fetch_progress.setFormat(f"All sizes fetched ({total}/{total})")
             self.fetch_progress.setStyleSheet("""
                 QProgressBar {
                     border: 1px solid #45475a;
@@ -996,20 +983,51 @@ class AddDownloadDialog(QDialog):
         self._path_user_edited = True
 
     def _on_queue_selection_changed(self, index):
-        if not self._path_user_edited:
-            if self._is_quick:
-                queue_name = self.queue_cb.currentData()
-                if queue_name == "__direct__":
-                    self.path_edit.setText(os.path.expanduser("~/Downloads"))
-                else:
-                    for q in self._visible_queues:
-                        if q.name == queue_name:
-                            self.path_edit.setText(
-                                q.save_path or os.path.expanduser("~/Downloads")
-                            )
-                            break
+        queue_name = self.queue_cb.currentData()
+
+        # Update the hint based on the selected queue
+        if hasattr(self, "queue_hint"):
+            if queue_name == "__direct__":
+                self.queue_hint.setText(
+                    "Downloads start immediately — no queue, no waiting."
+                )
+                self.queue_hint.setStyleSheet(
+                    "color: #95a5a6; font-size: 10px; padding: 2px 0 0 0;"
+                )
             else:
-                self.path_edit.setText(self._default_path_for_index(index))
+                q = next(
+                    (q for q in self._visible_queues if q.name == queue_name),
+                    None,
+                )
+                if q and q.paused:
+                    self.queue_hint.setText(
+                        f"⚠️ Queue '{q.name}' is paused — downloads will wait "
+                        f"until the queue is started."
+                    )
+                    self.queue_hint.setStyleSheet(
+                        "color: #f39c12; font-size: 10px; padding: 2px 0 0 0;"
+                    )
+                elif q:
+                    self.queue_hint.setText(
+                        f"Queue '{q.name}' is active — downloads will start "
+                        f"immediately."
+                    )
+                    self.queue_hint.setStyleSheet(
+                        "color: #95a5a6; font-size: 10px; padding: 2px 0 0 0;"
+                    )
+
+        if self._path_user_edited:
+            return
+
+        if queue_name == "__direct__":
+            self.path_edit.setText(os.path.expanduser("~/Downloads"))
+        else:
+            for q in self._visible_queues:
+                if q.name == queue_name:
+                    self.path_edit.setText(
+                        q.save_path or os.path.expanduser("~/Downloads")
+                    )
+                    break
 
     def _import_from_txt(self):
         file_path, _ = QFileDialog.getOpenFileName(
@@ -1092,12 +1110,8 @@ class AddDownloadDialog(QDialog):
             "per_download_speed": per_download_speed,
         }
 
-        if self._is_quick:
-            data["queue_name"] = self.queue_cb.currentData()
-            data["queue"] = -1
-        else:
-            data["queue"] = self.queue_cb.currentIndex()
-            data["queue_name"] = None
+        data["queue_name"] = self.queue_cb.currentData()
+        data["queue"] = -1
 
         return data
 

@@ -2,14 +2,15 @@
 """
 FelfelDM - Download Manager
 """
+
 import sys
 import signal
 import os
 import argparse
 import threading
 import time
-import subprocess  
-import shutil    
+import subprocess
+import shutil
 from PyQt6.QtWidgets import QApplication
 from PyQt6.QtGui import QIcon
 from PyQt6.QtCore import Qt, QTimer, QCoreApplication
@@ -17,7 +18,19 @@ from PyQt6.QtNetwork import QLocalServer, QLocalSocket
 from ui.main_window import MainWindow
 from utils.style import setup_style, CustomProxyStyle
 from utils.logger import setup_logging
+
 setup_logging()
+import traceback as _traceback
+
+def _global_excepthook(exc_type, exc_value, exc_tb):
+    print("\n" + "=" * 70, flush=True)
+    print("🚨 UNHANDLED PYTHON EXCEPTION", flush=True)
+    print("=" * 70, flush=True)
+    _traceback.print_exception(exc_type, exc_value, exc_tb)
+    print("=" * 70 + "\n", flush=True)
+    sys.__excepthook__(exc_type, exc_value, exc_tb)
+
+sys.excepthook = _global_excepthook
 # Global reference for cleanup
 server = None
 app = None
@@ -66,19 +79,22 @@ def signal_handler(sig, frame):
 def update_self():
     """Update FelfelDM from GitHub using install.sh"""
     print("🔄 Updating FelfelDM from GitHub...")
-    print("📥 Running: bash <(curl -s https://raw.githubusercontent.com/hoomaanf/FelfelDM/main/install.sh)")
+    print(
+        "📥 Running: bash <(curl -s https://raw.githubusercontent.com/hoomaanf/FelfelDM/main/install.sh)"
+    )
     print("")
-    
+
     try:
         result = subprocess.run(
             [
-                "bash", "-c",
-                "curl -s https://raw.githubusercontent.com/hoomaanf/FelfelDM/main/install.sh | bash"
+                "bash",
+                "-c",
+                "curl -s https://raw.githubusercontent.com/hoomaanf/FelfelDM/main/install.sh | bash",
             ],
-            capture_output=False, 
-            text=True
+            capture_output=False,
+            text=True,
         )
-        
+
         if result.returncode == 0:
             print("")
             print("✅ Update completed successfully!")
@@ -87,7 +103,7 @@ def update_self():
             print("")
             print(f"❌ Update failed with code: {result.returncode}")
             return False
-            
+
     except FileNotFoundError:
         print("❌ Error: curl or bash not found. Please install them first.")
         return False
@@ -103,7 +119,9 @@ def main():
     parser.add_argument("--add", nargs="+", help="Add URLs to download")
     parser.add_argument("--clear", action="store_true", help="Clear all data")
     parser.add_argument("--daemon", action="store_true", help="Run as daemon (no GUI)")
-    parser.add_argument("--update", action="store_true", help="Update FelfelDM from GitHub")
+    parser.add_argument(
+        "--update", action="store_true", help="Update FelfelDM from GitHub"
+    )
     args = parser.parse_args()
 
     if args.update:
@@ -115,8 +133,12 @@ def main():
             print("💡 Run: FelfelDM")
         else:
             print("=" * 50)
-            print("❌ Update failed! Please check your internet connection and try again.")
-            print("💡 Or manually run: bash <(curl -s https://raw.githubusercontent.com/hoomaanf/FelfelDM/main/install.sh)")
+            print(
+                "❌ Update failed! Please check your internet connection and try again."
+            )
+            print(
+                "💡 Or manually run: bash <(curl -s https://raw.githubusercontent.com/hoomaanf/FelfelDM/main/install.sh)"
+            )
         return
 
     if args.clear:
@@ -217,12 +239,17 @@ def main():
     win = MainWindow()
     theme = win.store.settings.get("theme", "auto")
     setup_style(app, theme)
-    win.show()
 
-    if args.add and len(args.add) > 0:
+    # Detect if this launch is triggered by the browser extension
+    is_extension_launch = bool(args.add and len(args.add) > 0)
+
+    if not is_extension_launch:
+        win.show()
+
+    if is_extension_launch:
         urls = args.add
         print(f"📥 Adding {len(urls)} URL(s)...")
-        QTimer.singleShot(1000, lambda: win._add_downloads_from_extension(urls))
+        QTimer.singleShot(1000, lambda: win._add_from_extension(urls))
 
     sys.exit(app.exec())
 

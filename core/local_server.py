@@ -118,12 +118,12 @@ class Handler(BaseHTTPRequestHandler):
 
                         QMetaObject.invokeMethod(
                             thread.main_window,
-                            "_add_downloads_from_extension",
+                            "_add_from_extension",
                             Qt.ConnectionType.QueuedConnection,
                             Q_ARG(list, urls),
                         )
                         print(
-                            f"✅ Invoked _add_downloads_from_extension with {len(urls)} URL(s)"
+                            f"✅ Invoked _add_from_extension with {len(urls)} URL(s)"
                         )
                     else:
                         print(
@@ -193,7 +193,7 @@ class LocalServer:
 
             if self.main_window:
                 self.thread.urls_received.connect(
-                    self.main_window._add_downloads_from_extension
+                    self.main_window._add_from_extension
                 )
 
             self.thread.start()

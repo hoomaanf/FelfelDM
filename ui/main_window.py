@@ -603,16 +603,10 @@ class MainWindow(QMainWindow):
 
         icon_size = QSize(20, 20)
 
-        self.btn_add = QPushButton(get_icon("download"), "Download")
+        self.btn_add = QPushButton(get_icon("download"), "Add Download")
         self.btn_add.setIconSize(icon_size)
-        self.btn_add.clicked.connect(self._quick_download)
-
-        self.btn_add_queue = QPushButton(get_icon("list-add"), "Add to Queue")
-        self.btn_add_queue.setIconSize(icon_size)
-        self.btn_add_queue.clicked.connect(self._add_download)
-        tb_lay.addWidget(self.btn_add_queue)
+        self.btn_add.clicked.connect(self._add_download)
         tb_lay.addWidget(self.btn_add)
-
         self.btn_toggle = QPushButton(get_icon("media-playback-pause"), "Pause")
         self.btn_toggle.setIconSize(icon_size)
         self.btn_toggle.clicked.connect(self._toggle_pause_resume)
@@ -712,7 +706,7 @@ class MainWindow(QMainWindow):
         mb = self.menuBar()
 
         file_menu = mb.addMenu("&File")
-        add_action = QAction(get_icon("list-add"), "Add Downloads", self)
+        add_action = QAction(get_icon("download"), "Add Download", self)
         add_action.triggered.connect(self._add_download)
         add_action.setShortcut("Ctrl+N")
         file_menu.addAction(add_action)
@@ -2293,16 +2287,8 @@ class MainWindow(QMainWindow):
         if not urls:
             return
 
-        visible_queues = [q for q in self.store.queues if q.name != "__direct__"]
-        default_idx = 0
-        current_q = self._current_queue()
-        if current_q and current_q.name != "__direct__":
-            for i, q in enumerate(visible_queues):
-                if q.name == current_q.name:
-                    default_idx = i
-                    break
-
-        dlg = AddDownloadDialog(visible_queues, default_idx, self, mode="queue")
+        all_queues = self.store.queues
+        dlg = AddDownloadDialog(all_queues, 0, self)
         dlg.url_edit.setPlainText("\n".join(urls))
 
         self._show_singleton_dialog(
@@ -2453,20 +2439,8 @@ class MainWindow(QMainWindow):
         if not d["urls"]:
             return
 
-        is_quick = dlg._is_quick
-
-        if is_quick:
-
-            queue_name = d.get("queue_name", "__direct__")
-            target_queue = self._get_or_create_queue(queue_name)
-        else:
-            visible_queues = [q for q in self.store.queues if q.name != "__direct__"]
-            queue_index = d.get("queue", -1)
-            if queue_index < 0 or queue_index >= len(visible_queues):
-                QMessageBox.warning(self, "Error", "Selected queue does not exist.")
-                return
-            target_queue = visible_queues[queue_index]
-            queue_name = target_queue.name
+        queue_name = d.get("queue_name", "__direct__")
+        target_queue = self._get_or_create_queue(queue_name)
 
         self._apply_settings_to_aria2()
 
@@ -2499,7 +2473,7 @@ class MainWindow(QMainWindow):
         added = 0
         new_gids = []
 
-        print(f"📂 [Add] Mode: {'quick' if is_quick else 'queue'}")
+        print(f"📂 [Add] Queue: {queue_name}")
         print(f"📂 [Add] Save path: {d['path']!r}")
         print(f"📂 [Add] URLs: {len(d['urls'])}")
 
@@ -2996,8 +2970,6 @@ class MainWindow(QMainWindow):
     def _setup_shortcuts(self) -> None:
         """Set up keyboard shortcuts"""
 
-        QShortcut(QKeySequence("Ctrl+U"), self, self._quick_download)
-
         QShortcut(QKeySequence("Space"), self, self._toggle_pause_resume)
         QShortcut(QKeySequence("Ctrl+P"), self, self._pause_selected)
         QShortcut(QKeySequence("Ctrl+R"), self, self._resume_selected)
@@ -3010,7 +2982,6 @@ class MainWindow(QMainWindow):
 
         QShortcut(QKeySequence("Ctrl+Tab"), self, self._next_queue)
         QShortcut(QKeySequence("Ctrl+Shift+Tab"), self, self._prev_queue)
-        QShortcut(QKeySequence("Ctrl+L"), self, self._show_log_viewer)
                 
         QShortcut(QKeySequence("F5"), self, self._refresh_table)
         QShortcut(QKeySequence("F1"), self, self._show_shortcuts)
@@ -3018,8 +2989,7 @@ class MainWindow(QMainWindow):
     def _show_shortcuts(self) -> None:
         """Show keyboard shortcuts dialog"""
         shortcuts = [
-            ("Ctrl+N", "Add Downloads"),
-            ("Ctrl+U", "Add URL"),
+            ("Ctrl+N", "Add Download"),
             ("Space", "Pause/Resume selected"),
             ("Ctrl+P", "Pause selected"),
             ("Ctrl+R", "Resume selected"),
@@ -3112,39 +3082,12 @@ class MainWindow(QMainWindow):
         self._refresh_queue_list()
         self._update_queue_buttons()
 
-    def _quick_download(self) -> None:
-        """Open the Quick Download dialog (Direct Downloads mode)."""
-        all_queues = self.store.queues
-        dlg = AddDownloadDialog(all_queues, 0, self, mode="quick")
-
-        clip = QApplication.clipboard().text().strip()
-        if clip:
-            valid_lines = [
-                line.strip()
-                for line in clip.split("\n")
-                if line.strip().startswith(("http", "magnet:", "ftp"))
-            ]
-            if valid_lines:
-                dlg.url_edit.setPlainText("\n".join(valid_lines))
-
-        self._show_singleton_dialog(
-            "quick_download", dlg, on_accepted=self._process_add_download_common
-        )
-
     def _add_download(self) -> None:
-        """Open the Add to Queue dialog."""
-        visible_queues = [q for q in self.store.queues if q.name != "__direct__"]
+        """Open the unified Add Download dialog."""
+        all_queues = self.store.queues
+        dlg = AddDownloadDialog(all_queues, 0, self)
 
-        current_idx = 0
-        current_q = self._current_queue()
-        if current_q and current_q.name != "__direct__":
-            for i, q in enumerate(visible_queues):
-                if q.name == current_q.name:
-                    current_idx = i
-                    break
-
-        dlg = AddDownloadDialog(visible_queues, current_idx, self, mode="queue")
-
+        # Pre-fill from the live clipboard
         clip = QApplication.clipboard().text().strip()
         if clip:
             valid_lines = [
@@ -3159,6 +3102,10 @@ class MainWindow(QMainWindow):
             "add_download", dlg, on_accepted=self._process_add_download_common
         )
 
+        self._show_singleton_dialog(
+            "add_download", dlg, on_accepted=self._process_add_download_common
+        )
+        
     def _remove_selected(self) -> None:
         selected = self.table.selectionModel().selectedRows()
         if not selected:
@@ -5789,37 +5736,22 @@ class MainWindow(QMainWindow):
                     )
 
     @pyqtSlot(list)
-    def _add_downloads_from_extension(self, urls: List[str]) -> None:
+    def _add_from_extension(self, urls: List[str]) -> None:
+        """Add URLs coming from the browser extension.
+
+        Opens the same Add Download dialog as the toolbar button,
+        pre-filled with the incoming URLs.
+        """
         if not urls:
             return
 
-        if len(urls) == 1:
-            self._add_single_url_from_extension(urls[0])
-        else:
-            self._add_multiple_urls_from_extension(urls)
-
-    def _add_single_url_from_extension(self, url: str) -> None:
         all_queues = self.store.queues
-        dlg = AddDownloadDialog(all_queues, 0, self, mode="quick")
-        dlg.url_edit.setPlainText(url)
-
-        self._show_singleton_dialog(
-            "quick_download", dlg, on_accepted=self._process_add_download_common
-        )
-
-    def _add_multiple_urls_from_extension(self, urls: List[str]) -> None:
-        visible_queues = [q for q in self.store.queues if q.name != "__direct__"]
-        default_idx = next(
-            (i for i, q in enumerate(visible_queues) if q.name == "Default"), 0
-        )
-
-        dlg = AddDownloadDialog(visible_queues, default_idx, self, mode="queue")
+        dlg = AddDownloadDialog(all_queues, 0, self)
         dlg.url_edit.setPlainText("\n".join(urls))
 
         self._show_singleton_dialog(
             "add_download", dlg, on_accepted=self._process_add_download_common
         )
-
     def _is_retriable_error(self, error_msg: str) -> bool:
         if not error_msg:
             return True
