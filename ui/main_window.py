@@ -150,7 +150,7 @@ class MainWindow(QMainWindow):
         self.splash.update_status("Building interface...", 70)
         QApplication.processEvents()
         self._build_ui()
-        
+
         self._drop_overlay = None
 
         self.splash.update_status("Building tray...", 80)
@@ -562,17 +562,20 @@ class MainWindow(QMainWindow):
         self.table.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
 
         header = self.table.horizontalHeader()
-        header.setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
-        header.setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)
-        header.setSectionResizeMode(2, QHeaderView.ResizeMode.Fixed)
-        header.setSectionResizeMode(3, QHeaderView.ResizeMode.ResizeToContents)
-        header.setSectionResizeMode(4, QHeaderView.ResizeMode.ResizeToContents)
-        header.setSectionResizeMode(5, QHeaderView.ResizeMode.Interactive)
+        header.setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)  # Name
+        header.setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)  # Size
+        header.setSectionResizeMode(2, QHeaderView.ResizeMode.Fixed)  # Progress
+        header.setSectionResizeMode(3, QHeaderView.ResizeMode.ResizeToContents)  # Speed
+        header.setSectionResizeMode(4, QHeaderView.ResizeMode.ResizeToContents)  # Conns
+        header.setSectionResizeMode(5, QHeaderView.ResizeMode.ResizeToContents)  # ETA
+        header.setSectionResizeMode(6, QHeaderView.ResizeMode.Interactive)  # Status
+        header.setSectionResizeMode(7, QHeaderView.ResizeMode.ResizeToContents)
 
-        self.table.setColumnWidth(2, 180)
-        self.table.setColumnWidth(3, 110)
-        self.table.setColumnWidth(4, 100)
-        self.table.setColumnWidth(5, 150)
+        self.table.setColumnWidth(2, 180)  # Progress
+        self.table.setColumnWidth(3, 110)  # Speed
+        self.table.setColumnWidth(4, 60)  # Conns
+        self.table.setColumnWidth(5, 100)  # ETA
+        self.table.setColumnWidth(6, 150)  # Status
 
         self.table.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self.table.customContextMenuRequested.connect(self._context_menu)
@@ -744,7 +747,7 @@ class MainWindow(QMainWindow):
         refresh_action.triggered.connect(self._refresh_table)
         refresh_action.setShortcut("F5")
         view_menu.addAction(refresh_action)
-        
+
         log_action = QAction(get_icon("text-x-generic"), "Show Logs", self)
         log_action.triggered.connect(self._show_log_viewer)
         log_action.setShortcut("Ctrl+L")
@@ -969,7 +972,7 @@ class MainWindow(QMainWindow):
         dlg.show()
         dlg.raise_()
         dlg.activateWindow()
-    
+
     def _connect_queue_worker_signals(self) -> None:
         if not self._queue_worker:
             return
@@ -1241,6 +1244,7 @@ class MainWindow(QMainWindow):
                     "errorMessage": info.get("errorMessage", ""),
                     "matched_rule": info.get("matched_rule"),
                     "rule_speed_limit": info.get("rule_speed_limit", 0),
+                    "connections": info.get("connections", 0),
                 }
                 self._all_downloads[download_id] = row.copy()
 
@@ -2101,6 +2105,7 @@ class MainWindow(QMainWindow):
                             "category": dl.get("category", "📁 Other"),
                             "error_count": self._to_int(dl.get("error_count", 0)),
                             "errorMessage": dl.get("errorMessage", ""),
+                            "connections": self._to_int(dl.get("connections", 0)),
                         }
                     )
 
@@ -2253,8 +2258,13 @@ class MainWindow(QMainWindow):
                                 for line in f:
                                     line = line.strip()
                                     if line and line.lower().startswith(
-                                        ("http://", "https://", "ftp://",
-                                        "ftps://", "magnet:")
+                                        (
+                                            "http://",
+                                            "https://",
+                                            "ftp://",
+                                            "ftps://",
+                                            "magnet:",
+                                        )
                                     ):
                                         urls.append(line)
                         except Exception as e:
@@ -2283,25 +2293,104 @@ class MainWindow(QMainWindow):
         return result
 
     def _handle_dropped_urls(self, urls: list) -> None:
-        """Open the Add-to-Queue dialog pre-filled with dropped URLs."""
+        """Open the Add Download dialog pre-filled with dropped URLs.
+
+        Works the same way as the extension handler: if the dialog is
+        already open, the URLs are appended to it.
+        """
         if not urls:
             return
 
+        self._open_or_update_add_dialog(urls)
+        self.status_label.setText(f"📥 {len(urls)} URL(s) dropped")
+
+    def _open_or_update_add_dialog(self, urls: List[str] = None) -> None:
+        key = "add_download"
+        existing = self._open_dialogs.get(key)
+
+        if existing is not None:
+            try:
+                if existing.isVisible():
+                    if urls:
+                        current = existing.url_edit.toPlainText().strip()
+                        existing_set = set(
+                            line.strip() for line in current.split("\n") if line.strip()
+                        )
+                        fresh = [u for u in urls if u not in existing_set]
+                        if fresh:
+                            combined = (
+                                f"{current}\n" + "\n".join(fresh)
+                                if current
+                                else "\n".join(fresh)
+                            )
+                            existing.url_edit.setPlainText(combined)
+
+                    # Defer the raise until after the layout pass triggered
+                    # by setPlainText → textChanged → resize has finished.
+                    QTimer.singleShot(0, lambda w=existing: self._force_raise_dialog(w))
+                    return
+            except RuntimeError:
+                self._open_dialogs.pop(key, None)
+
         all_queues = self.store.queues
         dlg = AddDownloadDialog(all_queues, 0, self)
-        dlg.url_edit.setPlainText("\n".join(urls))
+
+        if urls:
+            dlg.url_edit.setPlainText("\n".join(urls))
+        else:
+            clip = QApplication.clipboard().text().strip()
+            if clip:
+                valid_lines = [
+                    line.strip()
+                    for line in clip.split("\n")
+                    if line.strip().startswith(("http", "magnet:", "ftp"))
+                ]
+                if valid_lines:
+                    dlg.url_edit.setPlainText("\n".join(valid_lines))
 
         self._show_singleton_dialog(
-            "add_download", dlg, on_accepted=self._process_add_download_common
+            key, dlg, on_accepted=self._process_add_download_common
         )
 
-        self.status_label.setText(f"📥 {len(urls)} URL(s) dropped")
+    def _force_raise_dialog(self, dlg) -> None:
+        """Bring a dialog to the front, even if minimized or unfocused.
+
+        On KDE/Wayland, raise_()/activateWindow() alone don't reliably
+        bring a dialog to the front when another window has focus. Adding
+        WindowStaysOnTopHint temporarily forces the WM to surface it, then
+        we restore the original flags.
+        """
+        try:
+            # Remember the original flags
+            original_flags = dlg.windowFlags()
+
+            # Force the dialog on top of everything (works around
+            # focus-stealing-prevention on KDE/Wayland)
+            dlg.setWindowFlags(original_flags | Qt.WindowType.WindowStaysOnTopHint)
+            dlg.show()
+            dlg.raise_()
+            dlg.activateWindow()
+
+            # Restore the original flags after a short delay so the dialog
+            # doesn't stay pinned above every other window forever.
+            def _restore():
+                try:
+                    dlg.setWindowFlags(original_flags)
+                    dlg.show()
+                    dlg.raise_()
+                    dlg.activateWindow()
+                except RuntimeError:
+                    pass
+
+            QTimer.singleShot(300, _restore)
+        except RuntimeError:
+            pass
 
     def resizeEvent(self, event) -> None:
         super().resizeEvent(event)
         if self._drop_overlay is not None and self._drop_overlay.isVisible():
             self._drop_overlay.setGeometry(self.table.viewport().rect())
-    
+
     def _set_drop_highlight(self, on: bool) -> None:
         """Show/hide a subtle overlay over the downloads table only."""
         if on:
@@ -2610,7 +2699,9 @@ class MainWindow(QMainWindow):
             per_download_speed = self._to_int(d.get("per_download_speed", 0))
             if per_download_speed > 0:
                 self._all_downloads[download_id]["speed_limit"] = per_download_speed
-                url_queue.downloads_info[download_id]["speed_limit"] = per_download_speed
+                url_queue.downloads_info[download_id][
+                    "speed_limit"
+                ] = per_download_speed
                 self._worker_set_speed_limit(download_id, per_download_speed)
             else:
                 # Fall back to queue speed limit
@@ -2620,7 +2711,7 @@ class MainWindow(QMainWindow):
 
             new_gids.append(download_id)
             added += 1
-            
+
         self.store.save()
         self._queue_list_dirty = True
         self._refresh_queue_list()
@@ -2982,7 +3073,7 @@ class MainWindow(QMainWindow):
 
         QShortcut(QKeySequence("Ctrl+Tab"), self, self._next_queue)
         QShortcut(QKeySequence("Ctrl+Shift+Tab"), self, self._prev_queue)
-                
+
         QShortcut(QKeySequence("F5"), self, self._refresh_table)
         QShortcut(QKeySequence("F1"), self, self._show_shortcuts)
 
@@ -3004,7 +3095,7 @@ class MainWindow(QMainWindow):
             ("F5", "Refresh"),
             ("F1", "Show shortcuts"),
             ("Ctrl+E", "Export Downloads"),
-            ("Ctrl+L", "Show logs")
+            ("Ctrl+L", "Show logs"),
         ]
 
         msg = "<h3>Keyboard Shortcuts</h3><br>"
@@ -3083,29 +3174,9 @@ class MainWindow(QMainWindow):
         self._update_queue_buttons()
 
     def _add_download(self) -> None:
-        """Open the unified Add Download dialog."""
-        all_queues = self.store.queues
-        dlg = AddDownloadDialog(all_queues, 0, self)
+        """Open the unified Add Download dialog (toolbar / Ctrl+N / Ctrl+U)."""
+        self._open_or_update_add_dialog()
 
-        # Pre-fill from the live clipboard
-        clip = QApplication.clipboard().text().strip()
-        if clip:
-            valid_lines = [
-                line.strip()
-                for line in clip.split("\n")
-                if line.strip().startswith(("http", "magnet:", "ftp"))
-            ]
-            if valid_lines:
-                dlg.url_edit.setPlainText("\n".join(valid_lines))
-
-        self._show_singleton_dialog(
-            "add_download", dlg, on_accepted=self._process_add_download_common
-        )
-
-        self._show_singleton_dialog(
-            "add_download", dlg, on_accepted=self._process_add_download_common
-        )
-        
     def _remove_selected(self) -> None:
         selected = self.table.selectionModel().selectedRows()
         if not selected:
@@ -4101,12 +4172,8 @@ class MainWindow(QMainWindow):
         if aria2_gid:
             limit_str = f"{speed_kb}K" if speed_kb > 0 else "0"
             try:
-                self.aria2.change_option(
-                    aria2_gid, {"max-download-limit": limit_str}
-                )
-                print(
-                    f"⚡ [SpeedLimit] {download_id[:12]} → {limit_str}"
-                )
+                self.aria2.change_option(aria2_gid, {"max-download-limit": limit_str})
+                print(f"⚡ [SpeedLimit] {download_id[:12]} → {limit_str}")
             except Exception as e:
                 print(f"⚠️ [SpeedLimit] Failed to set per-download limit: {e}")
 
@@ -4117,7 +4184,7 @@ class MainWindow(QMainWindow):
 
         self.store.mark_dirty()
         self._refresh_table()
-    
+
     def _apply_proxy_to_aria2(self) -> None:
         proxy = self.proxy_manager.get_proxy_for_queue(None)
         if proxy and proxy.enabled and proxy.is_valid():
@@ -5739,19 +5806,14 @@ class MainWindow(QMainWindow):
     def _add_from_extension(self, urls: List[str]) -> None:
         """Add URLs coming from the browser extension.
 
-        Opens the same Add Download dialog as the toolbar button,
-        pre-filled with the incoming URLs.
+        If the Add Download dialog is already open, the URLs are merged
+        into the existing editor; otherwise a new dialog is opened
+        pre-filled with them.
         """
         if not urls:
             return
+        self._open_or_update_add_dialog(urls)
 
-        all_queues = self.store.queues
-        dlg = AddDownloadDialog(all_queues, 0, self)
-        dlg.url_edit.setPlainText("\n".join(urls))
-
-        self._show_singleton_dialog(
-            "add_download", dlg, on_accepted=self._process_add_download_common
-        )
     def _is_retriable_error(self, error_msg: str) -> bool:
         if not error_msg:
             return True

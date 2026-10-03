@@ -260,9 +260,14 @@ class AddDownloadDialog(QDialog):
     """
     Unified dialog for adding downloads.
 
-    Modes:
-        "queue": choose a queue, downloads are added in the queue's paused state
-        "quick": Direct Downloads (or chosen queue), downloads start immediately
+    Tabs:
+        Basic   — URLs, file list, rule banner, queue, save path
+        Options — connections, per-download speed limit, proxy
+
+    The OK/Cancel buttons live outside the tabs so they are reachable
+    from any tab. The file table is shown only when there is more than
+    one URL (or once a fetch has started), keeping the single-URL flow
+    minimal.
     """
 
     FETCH_DEBOUNCE_MS = 800
@@ -272,8 +277,7 @@ class AddDownloadDialog(QDialog):
         self._main_window = parent
 
         self.setWindowTitle("Add Download")
-        self.setMinimumWidth(820)
-        self.setMinimumHeight(600)
+        self.setMinimumWidth(560)
         self.setSizeGripEnabled(True)
 
         self.queues = queues
@@ -296,89 +300,114 @@ class AddDownloadDialog(QDialog):
         self._setup_tab_order()
 
     # ─────────────────────────────────────────────────────────────
+    # Small helpers
+    # ─────────────────────────────────────────────────────────────
+
+    def _make_separator(self) -> QFrame:
+        line = QFrame()
+        line.setFrameShape(QFrame.Shape.HLine)
+        line.setFrameShadow(QFrame.Shadow.Sunken)
+        line.setStyleSheet("background-color: palette(mid); max-height: 1px;")
+        return line
+
+    # ─────────────────────────────────────────────────────────────
     # UI construction
     # ─────────────────────────────────────────────────────────────
 
     def _build_ui(self):
         main_layout = QVBoxLayout(self)
-        main_layout.setSpacing(8)
-        main_layout.setContentsMargins(16, 12, 16, 16)
+        main_layout.setSpacing(10)
+        main_layout.setContentsMargins(16, 12, 16, 12)
 
-        splitter = QSplitter(Qt.Orientation.Horizontal)
-        splitter.setChildrenCollapsible(False)
-        splitter.setHandleWidth(4)
+        # ═══════════════════════════════════════════════════════════
+        # Tabs
+        # ═══════════════════════════════════════════════════════════
+        self.tabs = QTabWidget()
+        self.tabs.setDocumentMode(False)
+        self.tabs.setStyleSheet("""
+            QTabWidget::pane {
+                border: none;
+                border-top: 1px solid palette(mid);
+                top: -1px;
+            }
+            QTabBar {
+                background: transparent;
+            }
+            QTabBar::tab {
+                background: transparent;
+                padding: 6px 14px;
+                margin-right: 2px;
+                border: none;
+                border-bottom: 2px solid transparent;
+            }
+            QTabBar::tab:selected {
+                border-bottom: 2px solid #89b4fa;
+            }
+        """)
+        main_layout.addWidget(self.tabs, 1)
 
-        # ── LEFT: URLs editor ──
-        url_widget = QWidget()
-        url_widget.setMinimumWidth(240)
-        url_layout = QVBoxLayout(url_widget)
-        url_layout.setContentsMargins(0, 0, 12, 0)
-        url_layout.setSpacing(4)
+        # ─────────────────────────────────────────────────────────
+        # TAB 1: Basic
+        # ─────────────────────────────────────────────────────────
+        basic_tab = QWidget()
+        basic_layout = QVBoxLayout(basic_tab)
+        basic_layout.setSpacing(8)
+        basic_layout.setContentsMargins(4, 10, 4, 4)
 
+        # URLs label + editor
         url_label = QLabel("URLs")
         url_label.setStyleSheet("font-weight: 600; font-size: 12px;")
-        url_layout.addWidget(url_label)
+        basic_layout.addWidget(url_label)
 
         self.url_edit = QTextEdit()
         self.url_edit.setPlaceholderText(
             "Enter URLs (one per line)...\n\nTip: Paste multiple URLs at once."
         )
+        self.url_edit.setMinimumHeight(70)
+        self.url_edit.setMaximumHeight(110)
         self.url_edit.textChanged.connect(self._on_urls_changed)
-        url_layout.addWidget(self.url_edit, 1)
+        basic_layout.addWidget(self.url_edit)
 
+        # Import + Fetch buttons
         url_btn_row = QHBoxLayout()
-        url_btn_row.setSpacing(8)
-        url_btn_row.setContentsMargins(0, 0, 0, 0)
+        url_btn_row.setSpacing(6)
 
-        self.import_btn = QPushButton(get_icon("document-open"), "")
-        self.import_btn.setToolTip("Import from file")
-        self.import_btn.setFixedHeight(30)
-        self.import_btn.setMinimumWidth(36)
+        self.import_btn = QPushButton(get_icon("document-open"), " Import")
+        self.import_btn.setToolTip("Import URLs from a text file")
+        self.import_btn.setFixedHeight(28)
         self.import_btn.clicked.connect(self._import_from_txt)
         url_btn_row.addWidget(self.import_btn)
 
-        self.fetch_btn = QPushButton(get_icon("view-refresh"), " Fetch")
+        self.fetch_btn = QPushButton(get_icon("view-refresh"), " Fetch sizes")
         self.fetch_btn.setToolTip("Fetch file sizes for all URLs")
-        self.fetch_btn.setFixedHeight(30)
-        self.fetch_btn.setMinimumWidth(100)
+        self.fetch_btn.setFixedHeight(28)
         self.fetch_btn.clicked.connect(self._start_fetching_sizes)
         url_btn_row.addWidget(self.fetch_btn)
-
-        url_btn_row.addStretch()
-        url_layout.addLayout(url_btn_row)
-        url_layout.addSpacing(4)
-
-        # ── RIGHT: Progress + Table ──
-        table_widget = QWidget()
-        table_widget.setMinimumWidth(340)
-        table_layout = QVBoxLayout(table_widget)
-        table_layout.setContentsMargins(12, 0, 0, 0)
-        table_layout.setSpacing(4)
-
-        self.fetch_progress = QProgressBar()
-        self.fetch_progress.setRange(0, 100)
-        self.fetch_progress.setValue(0)
-        self.fetch_progress.setTextVisible(True)
-        self.fetch_progress.setFormat("Ready")
-        self.fetch_progress.setFixedHeight(26)
-        self.fetch_progress.setStyleSheet("""
-            QProgressBar {
-                border: 1px solid #45475a;
-                border-radius: 8px;
-                text-align: center;
-                font-size: 11px;
-                color: #1e1e2e;
-                background-color: #e0e0e0;
-            }
-            QProgressBar::chunk {
+        
+        # Fetch status chip
+        self.fetch_chip = QLabel("")
+        self.fetch_chip.setStyleSheet("""
+            QLabel {
                 background-color: #89b4fa;
-                border-radius: 3px;
+                color: #1e1e2e;
+                border-radius: 9px;
+                padding: 1px 10px;
+                font-size: 10px;
+                font-weight: 600;
             }
         """)
-        table_layout.addWidget(self.fetch_progress)
-        table_layout.addSpacing(6)
+        self.fetch_chip.setFixedHeight(18)
+        self.fetch_chip.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.fetch_chip.setVisible(False)
+        
+        
+        url_btn_row.addWidget(self.fetch_chip)
 
-        # Rule info banner
+        url_btn_row.addStretch()
+        basic_layout.addLayout(url_btn_row)
+
+
+        # Rule banner (only shown when a rule matches a URL)
         self.rule_banner = QFrame()
         self.rule_banner.setObjectName("rule_banner")
         self.rule_banner.setStyleSheet("""
@@ -386,7 +415,7 @@ class AddDownloadDialog(QDialog):
                 background-color: rgba(137, 180, 250, 0.15);
                 border: 1px solid #89b4fa;
                 border-radius: 4px;
-                padding: 6px;
+                padding: 4px;
             }
         """)
         self.rule_banner.setVisible(False)
@@ -396,7 +425,7 @@ class AddDownloadDialog(QDialog):
         banner_layout.setSpacing(8)
 
         self.rule_banner_icon = QLabel("🎯")
-        self.rule_banner_icon.setStyleSheet("font-size: 16px;")
+        self.rule_banner_icon.setStyleSheet("font-size: 14px;")
         banner_layout.addWidget(self.rule_banner_icon)
 
         self.rule_banner_label = QLabel("")
@@ -406,77 +435,64 @@ class AddDownloadDialog(QDialog):
         )
         banner_layout.addWidget(self.rule_banner_label, 1)
 
-        table_layout.addWidget(self.rule_banner)
+        basic_layout.addWidget(self.rule_banner)
 
-        # Table
+        # Files table (only shown when more than one URL)
+        self.files_container = QWidget()
+        files_layout = QVBoxLayout(self.files_container)
+        files_layout.setContentsMargins(0, 0, 0, 0)
+        files_layout.setSpacing(4)
+
         self.table = QTableWidget(0, 4, self)
         self.table.setHorizontalHeaderLabels(["", "Filename", "Size", "Status"])
         self.table.verticalHeader().setVisible(False)
         self.table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         self.table.setSelectionMode(QAbstractItemView.SelectionMode.NoSelection)
         self.table.setAlternatingRowColors(True)
-        self.table.verticalHeader().setDefaultSectionSize(32)
+        self.table.verticalHeader().setDefaultSectionSize(28)
+        self.table.setMinimumHeight(120)
+        self.table.setMaximumHeight(180)
 
         header = self.table.horizontalHeader()
         header.setSectionResizeMode(0, QHeaderView.ResizeMode.Fixed)
-        self.table.setColumnWidth(0, 44)
+        self.table.setColumnWidth(0, 36)
         header.setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
         header.setSectionResizeMode(2, QHeaderView.ResizeMode.ResizeToContents)
         header.setSectionResizeMode(3, QHeaderView.ResizeMode.ResizeToContents)
 
-        table_layout.addWidget(self.table, 1)
+        files_layout.addWidget(self.table)
 
-        table_layout.addSpacing(6)
-
-        # Select All / Deselect All
         select_row = QHBoxLayout()
-        select_row.setSpacing(8)
-        select_row.setContentsMargins(0, 0, 0, 0)
+        select_row.setSpacing(6)
 
         self.select_all_btn = QPushButton("Select All")
         self.select_all_btn.setFixedHeight(28)
-        self.select_all_btn.setMinimumWidth(90)
         self.select_all_btn.clicked.connect(lambda: self._set_all_checked(True))
         select_row.addWidget(self.select_all_btn)
 
         self.deselect_all_btn = QPushButton("Deselect All")
         self.deselect_all_btn.setFixedHeight(28)
-        self.deselect_all_btn.setMinimumWidth(100)
         self.deselect_all_btn.clicked.connect(lambda: self._set_all_checked(False))
         select_row.addWidget(self.deselect_all_btn)
 
         select_row.addStretch()
-        table_layout.addLayout(select_row)
+        files_layout.addLayout(select_row)
 
-        splitter.addWidget(url_widget)
-        splitter.addWidget(table_widget)
-        splitter.setSizes([280, 500])
-        splitter.setStretchFactor(0, 0)
-        splitter.setStretchFactor(1, 1)
-
-        main_layout.addWidget(splitter, 1)
+        self.files_container.setVisible(False)
+        basic_layout.addWidget(self.files_container)
 
         # Total label
         self.total_label = QLabel("")
-        self.total_label.setStyleSheet(
-            "color: #95a5a6; font-size: 11px; padding: 4px 8px;"
-        )
-        self.total_label.setAlignment(Qt.AlignmentFlag.AlignLeft)
-        main_layout.addWidget(self.total_label)
+        self.total_label.setStyleSheet("color: #95a5a6; font-size: 11px;")
+        basic_layout.addWidget(self.total_label)
 
-        # Settings accordion
-        settings_acc = AccordionGroup("Settings")
-        settings_acc.set_expanded(True)
+        # Queue row
+        queue_row = QHBoxLayout()
+        queue_row.setSpacing(8)
 
-        row1 = QHBoxLayout()
-        row1.setSpacing(12)
-
-        queue_widget = QWidget()
-        queue_widget.setMinimumWidth(180)
-        queue_layout = QVBoxLayout(queue_widget)
-        queue_layout.setContentsMargins(0, 0, 0, 0)
-        queue_layout.setSpacing(2)
-        queue_layout.addWidget(QLabel("Queue:"))
+        queue_label = QLabel("Queue:")
+        queue_label.setFixedWidth(60)
+        queue_row.addWidget(queue_label)
 
         self.queue_cb = QComboBox()
         self.queue_cb.addItem("📥 Direct Downloads", "__direct__")
@@ -484,58 +500,128 @@ class AddDownloadDialog(QDialog):
             self.queue_cb.addItem(q.name, q.name)
         if 0 <= self.default_queue < self.queue_cb.count():
             self.queue_cb.setCurrentIndex(self.default_queue)
-
         self.queue_cb.currentIndexChanged.connect(self._on_queue_selection_changed)
-        queue_layout.addWidget(self.queue_cb)
+        queue_row.addWidget(self.queue_cb, 1)
+
+        basic_layout.addLayout(queue_row)
+
         self.queue_hint = QLabel("Downloads start immediately — no queue, no waiting.")
         self.queue_hint.setWordWrap(True)
         self.queue_hint.setStyleSheet(
-            "color: #95a5a6; font-size: 10px; padding: 2px 0 0 0;"
+            "color: #95a5a6; font-size: 10px; padding-left: 68px;"
         )
-        queue_layout.addWidget(self.queue_hint)
-        row1.addWidget(queue_widget)
+        basic_layout.addWidget(self.queue_hint)
+        
+        self.queue_help_label = QLabel("")
+        self.queue_help_label.setWordWrap(True)
+        self.queue_help_label.setStyleSheet(
+            "color: #f39c12; font-size: 10px; padding-left: 68px;"
+        )
+        self.queue_help_label.setVisible(False)
+        basic_layout.addWidget(self.queue_help_label)
 
-        conn_widget = QWidget()
-        conn_widget.setMinimumWidth(120)
-        conn_layout = QVBoxLayout(conn_widget)
-        conn_layout.setContentsMargins(0, 0, 0, 0)
-        conn_layout.setSpacing(2)
-        conn_layout.addWidget(QLabel("Connections:"))
-        self.conn_spin = QSpinBox()
-        self.conn_spin.setRange(1, 16)
-        self.conn_spin.setValue(8)
-        conn_layout.addWidget(self.conn_spin)
-        row1.addWidget(conn_widget)
+        # Save-to row
+        save_row = QHBoxLayout()
+        save_row.setSpacing(6)
 
-        row1.addStretch()
-        settings_acc.addLayout(row1)
+        save_label = QLabel("Save to:")
+        save_label.setFixedWidth(60)
+        save_row.addWidget(save_label)
 
-        row2 = QHBoxLayout()
-        row2.setSpacing(6)
-        row2.addWidget(QLabel("Save to:"))
         default_path = self._default_path_for_index(self.default_queue)
         self.path_edit = QLineEdit(default_path)
         self.path_edit.textEdited.connect(self._on_path_manually_edited)
-        row2.addWidget(self.path_edit)
+        save_row.addWidget(self.path_edit, 1)
+
         self.browse_btn = QPushButton()
         self.browse_btn.setIcon(get_icon("folder-open"))
         self.browse_btn.setFixedSize(28, 28)
         self.browse_btn.clicked.connect(self._browse)
-        row2.addWidget(self.browse_btn)
-        settings_acc.addLayout(row2)
+        save_row.addWidget(self.browse_btn)
 
-        main_layout.addWidget(settings_acc)
+        basic_layout.addLayout(save_row)
+        basic_layout.addStretch()
 
-        # Proxy accordion
-        proxy_acc = AccordionGroup("Proxy Settings")
-        proxy_acc.set_expanded(False)
+        self.tabs.addTab(basic_tab, "Basic")
+
+        # ─────────────────────────────────────────────────────────
+        # TAB 2: Options
+        # ─────────────────────────────────────────────────────────
+        options_tab = QWidget()
+        options_layout = QVBoxLayout(options_tab)
+        options_layout.setSpacing(10)
+        options_layout.setContentsMargins(4, 10, 4, 4)
+
+        # Connections
+        conn_row = QHBoxLayout()
+        conn_row.setSpacing(8)
+
+        conn_label = QLabel("Connections:")
+        conn_label.setFixedWidth(100)
+        conn_row.addWidget(conn_label)
+
+        self.conn_spin = QSpinBox()
+        self.conn_spin.setRange(1, 16)
+        self.conn_spin.setValue(8)
+        self.conn_spin.setFixedWidth(80)
+        conn_row.addWidget(self.conn_spin)
+        conn_row.addStretch()
+
+        options_layout.addLayout(conn_row)
+
+        options_layout.addWidget(self._make_separator())
+
+        # Speed limit
+        speed_title = QLabel("Speed Limit")
+        f = speed_title.font()
+        f.setBold(True)
+        speed_title.setFont(f)
+        options_layout.addWidget(speed_title)
+
+        speed_row = QHBoxLayout()
+        speed_row.setSpacing(8)
+
+        self.per_download_speed_cb = QCheckBox("Limit speed for this download")
+        self.per_download_speed_cb.setChecked(False)
+        speed_row.addWidget(self.per_download_speed_cb)
+
+        self.per_download_speed_spin = QSpinBox()
+        self.per_download_speed_spin.setRange(0, 999999)
+        self.per_download_speed_spin.setSuffix(" KB/s")
+        self.per_download_speed_spin.setValue(1024)
+        self.per_download_speed_spin.setEnabled(False)
+        self.per_download_speed_spin.setFixedWidth(130)
+        self.per_download_speed_cb.toggled.connect(
+            self.per_download_speed_spin.setEnabled
+        )
+        speed_row.addWidget(self.per_download_speed_spin)
+        speed_row.addStretch()
+
+        options_layout.addLayout(speed_row)
+
+        speed_hint = QLabel(
+            "When set, this overrides the queue and global speed limits "
+            "for this download only."
+        )
+        speed_hint.setStyleSheet("color: #95a5a6; font-size: 10px;")
+        speed_hint.setWordWrap(True)
+        options_layout.addWidget(speed_hint)
+
+        options_layout.addWidget(self._make_separator())
+
+        # Proxy
+        proxy_title = QLabel("Proxy")
+        f = proxy_title.font()
+        f.setBold(True)
+        proxy_title.setFont(f)
+        options_layout.addWidget(proxy_title)
 
         self.proxy_combo = QComboBox()
         self.proxy_combo.addItems(
             ["Use Global/Queue Proxy", "Custom Proxy", "No Proxy"]
         )
         self.proxy_combo.currentIndexChanged.connect(self._on_proxy_mode_changed)
-        proxy_acc.addWidget(self.proxy_combo)
+        options_layout.addWidget(self.proxy_combo)
 
         proxy_btn_row = QHBoxLayout()
         proxy_btn_row.setSpacing(6)
@@ -551,53 +637,22 @@ class AddDownloadDialog(QDialog):
         proxy_btn_row.addWidget(self.proxy_clear_btn)
 
         proxy_btn_row.addStretch()
-        proxy_acc.addLayout(proxy_btn_row)
+        options_layout.addLayout(proxy_btn_row)
 
         self.proxy_status_label = QLabel("")
         self.proxy_status_label.setWordWrap(True)
         self.proxy_status_label.setStyleSheet("font-size: 11px; padding: 2px;")
-        proxy_acc.addWidget(self.proxy_status_label)
+        options_layout.addWidget(self.proxy_status_label)
 
-        main_layout.addWidget(proxy_acc)
+        options_layout.addStretch()
 
-        # Speed Limit accordion
-        speed_acc = AccordionGroup("Speed Limit")
-        speed_acc.set_expanded(False)
+        self.tabs.addTab(options_tab, "Options")
 
-        speed_row = QHBoxLayout()
-        speed_row.setSpacing(8)
+        # ═══════════════════════════════════════════════════════════
+        # Buttons (outside the tabs, always visible)
+        # ═══════════════════════════════════════════════════════════
+        main_layout.addSpacing(4)
 
-        self.per_download_speed_cb = QCheckBox("Limit speed for this download")
-        self.per_download_speed_cb.setChecked(False)
-        speed_row.addWidget(self.per_download_speed_cb)
-
-        self.per_download_speed_spin = QSpinBox()
-        self.per_download_speed_spin.setRange(0, 999999)
-        self.per_download_speed_spin.setSuffix(" KB/s")
-        self.per_download_speed_spin.setValue(1024)
-        self.per_download_speed_spin.setEnabled(False)
-        self.per_download_speed_spin.setMinimumWidth(120)
-        self.per_download_speed_cb.toggled.connect(
-            self.per_download_speed_spin.setEnabled
-        )
-        speed_row.addWidget(self.per_download_speed_spin)
-        speed_row.addStretch()
-
-        speed_acc.addLayout(speed_row)
-
-        speed_hint = QLabel(
-            "When set, this overrides the queue and global speed limits "
-            "for this download only."
-        )
-        speed_hint.setStyleSheet("color: #95a5a6; font-size: 11px;")
-        speed_hint.setWordWrap(True)
-        speed_acc.addWidget(speed_hint)
-
-        main_layout.addWidget(speed_acc)
-
-        main_layout.addSpacing(8)
-
-        # Button box
         self.btn_box = QDialogButtonBox(
             QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
         )
@@ -623,21 +678,62 @@ class AddDownloadDialog(QDialog):
         self.setTabOrder(self.url_edit, self.import_btn)
         self.setTabOrder(self.import_btn, self.fetch_btn)
         self.setTabOrder(self.fetch_btn, self.table)
-        if self.queue_cb is not None:
-            self.setTabOrder(self.table, self.queue_cb)
-            self.setTabOrder(self.queue_cb, self.conn_spin)
-        else:
-            self.setTabOrder(self.table, self.conn_spin)
-        self.setTabOrder(self.conn_spin, self.path_edit)
+        self.setTabOrder(self.table, self.queue_cb)
+        self.setTabOrder(self.queue_cb, self.path_edit)
         self.setTabOrder(self.path_edit, self.browse_btn)
+        self.setTabOrder(self.browse_btn, self.conn_spin)
+        self.setTabOrder(self.conn_spin, self.per_download_speed_cb)
+        self.setTabOrder(self.per_download_speed_cb, self.per_download_speed_spin)
+        self.setTabOrder(self.per_download_speed_spin, self.proxy_combo)
+        self.setTabOrder(self.proxy_combo, self.proxy_config_btn)
+        self.setTabOrder(self.proxy_config_btn, self.proxy_clear_btn)
+        self.setTabOrder(self.proxy_clear_btn, self.btn_box)
 
     # ─────────────────────────────────────────────────────────────
     # URL handling
     # ─────────────────────────────────────────────────────────────
 
     def _on_urls_changed(self):
-        self._fetch_timer.start(self.FETCH_DEBOUNCE_MS)
+        urls = self._get_urls()
+        show_table = len(urls) > 1
 
+        self.files_container.setVisible(show_table)
+
+        # Direct Downloads is only valid for a single URL. For a batch,
+        # grey it out so the user sees it exists but can't select it,
+        # and move the selection to the first real queue if needed.
+        model = self.queue_cb.model()
+        direct_item = model.item(0) if hasattr(model, "item") else None
+        if direct_item is not None:
+            allow_direct = not show_table
+            direct_item.setEnabled(allow_direct)
+
+            if allow_direct:
+                direct_item.setToolTip("")
+            else:
+                direct_item.setToolTip(
+                    "Direct Downloads is only available for a single URL.\n"
+                    "For batch downloads, choose a queue."
+                )
+
+            if not allow_direct and self.queue_cb.currentData() == "__direct__":
+                for i in range(1, self.queue_cb.count()):
+                    other = model.item(i) if hasattr(model, "item") else None
+                    if other is None or other.isEnabled():
+                        self.queue_cb.setCurrentIndex(i)
+                        break
+
+        # Show the "why is Direct greyed out" hint for multi-URL batches
+        if show_table:
+            self.queue_help_label.setText(
+                "💡 Multiple URLs — Direct Downloads is disabled. "
+                "Pick a queue to batch these downloads."
+            )
+            self.queue_help_label.setVisible(True)
+        else:
+            self.queue_help_label.setVisible(False)
+
+        self._fetch_timer.start(self.FETCH_DEBOUNCE_MS)
     def _get_urls(self):
         raw = self.url_edit.toPlainText()
         urls = []
@@ -660,7 +756,7 @@ class AddDownloadDialog(QDialog):
         urls = self._get_urls()
         if not urls:
             self._clear_table()
-            self._set_progress_state("Ready", 0, 0)
+            self._hide_fetch_chip()
             return
 
         self._cancel_fetcher()
@@ -672,11 +768,10 @@ class AddDownloadDialog(QDialog):
         self._populate_table(urls)
         self._update_rule_banner(urls)
 
-        self._set_progress_state(
-            f"Fetching sizes... (0/{len(urls)})",
-            0,
-            len(urls),
-        )
+        show_table = len(urls) > 1
+        self.files_container.setVisible(show_table)
+
+        self._show_fetch_chip(f"🔄  0/{len(urls)}", "#89b4fa")
 
         proxy = self._get_proxy_dict_for_fetch()
 
@@ -686,6 +781,27 @@ class AddDownloadDialog(QDialog):
         self._fetcher.progress.connect(self._on_fetch_progress)
         self._fetcher.all_done.connect(self._on_fetch_done)
         self._fetcher.start()
+        
+    def _show_fetch_chip(self, text: str, color: str) -> None:
+        """Show the fetch status chip with the given text and background."""
+        self.fetch_chip.setText(text)
+        self.fetch_chip.setStyleSheet(f"""
+            QLabel {{
+                background-color: {color};
+                color: #1e1e2e;
+                border-radius: 9px;
+                padding: 1px 10px;
+                font-size: 10px;
+                font-weight: 600;
+            }}
+        """)
+        self.fetch_chip.setVisible(True)
+
+    def _hide_fetch_chip(self) -> None:
+        self.fetch_chip.setVisible(False)
+        
+    def _on_fetch_progress(self, done, total):
+        self._show_fetch_chip(f"Fetching {done}/{total}", "#89b4fa")
 
     def _update_rule_banner(self, urls):
         if not self._main_window or not hasattr(self._main_window, "store"):
@@ -732,15 +848,6 @@ class AddDownloadDialog(QDialog):
             )
 
         self.rule_banner.setVisible(True)
-
-    def _set_progress_state(self, message: str, value: int, maximum: int):
-        if maximum > 0:
-            self.fetch_progress.setRange(0, maximum)
-            self.fetch_progress.setValue(value)
-        else:
-            self.fetch_progress.setRange(0, 100)
-            self.fetch_progress.setValue(0)
-        self.fetch_progress.setFormat(message)
 
     def _cancel_fetcher(self):
         if self._fetcher is None:
@@ -796,6 +903,7 @@ class AddDownloadDialog(QDialog):
         self._url_to_size = {}
         self._url_to_status = {}
         self.btn_box.button(QDialogButtonBox.StandardButton.Ok).setEnabled(False)
+        self._hide_fetch_chip()
         self._update_total()
 
     def _populate_table(self, urls):
@@ -814,8 +922,8 @@ class AddDownloadDialog(QDialog):
             cb.stateChanged.connect(self._update_total)
             cb.setStyleSheet("""
                 QCheckBox::indicator {
-                    width: 20px;
-                    height: 20px;
+                    width: 18px;
+                    height: 18px;
                 }
             """)
             cb_widget = _ClickableCheckboxWidget(cb)
@@ -859,7 +967,7 @@ class AddDownloadDialog(QDialog):
         status_item.setForeground(QColor("#27ae60"))
 
         self._update_total()
-
+    
     def _on_fetch_failed(self, url, error):
         row = self._url_to_row.get(url)
         if row is None:
@@ -878,11 +986,6 @@ class AddDownloadDialog(QDialog):
 
         self._update_total()
 
-    def _on_fetch_progress(self, done, total):
-        self.fetch_progress.setRange(0, total)
-        self.fetch_progress.setValue(done)
-        self.fetch_progress.setFormat(f"Fetching sizes... ({done}/{total})")
-
     def _on_fetch_done(self):
         fetcher = self._fetcher
         self._fetcher = None
@@ -894,29 +997,14 @@ class AddDownloadDialog(QDialog):
 
         total = self.table.rowCount()
         if total > 0:
-            self.fetch_progress.setRange(0, total)
-            self.fetch_progress.setValue(total)
-            self.fetch_progress.setFormat(f"All sizes fetched ({total}/{total})")
-            self.fetch_progress.setStyleSheet("""
-                QProgressBar {
-                    border: 1px solid #45475a;
-                    border-radius: 4px;
-                    text-align: center;
-                    font-size: 11px;
-                    color: #1e1e2e;
-                    background-color: #e0e0e0;
-                }
-                QProgressBar::chunk {
-                    background-color: #a6e3a1;
-                    border-radius: 3px;
-                }
-            """)
+            self._show_fetch_chip(f"Done", "#a6e3a1")
         else:
-            self.fetch_progress.setRange(0, 100)
-            self.fetch_progress.setValue(0)
-            self.fetch_progress.setFormat("Ready")
+            self._hide_fetch_chip()
 
         self._update_total()
+
+        # Hide the chip shortly after so it doesn't stay there forever
+        QTimer.singleShot(1800, self._hide_fetch_chip)
 
     def _set_all_checked(self, checked: bool):
         for row in range(self.table.rowCount()):
@@ -926,6 +1014,13 @@ class AddDownloadDialog(QDialog):
         self._update_total()
 
     def _get_selected_urls(self):
+        urls = self._get_urls()
+
+        # For a single URL, the table is hidden; the URL itself is the
+        # selection.
+        if len(urls) <= 1:
+            return urls
+
         selected = []
         for url, row in self._url_to_row.items():
             w = self.table.cellWidget(row, 0)
@@ -985,14 +1080,13 @@ class AddDownloadDialog(QDialog):
     def _on_queue_selection_changed(self, index):
         queue_name = self.queue_cb.currentData()
 
-        # Update the hint based on the selected queue
         if hasattr(self, "queue_hint"):
             if queue_name == "__direct__":
                 self.queue_hint.setText(
                     "Downloads start immediately — no queue, no waiting."
                 )
                 self.queue_hint.setStyleSheet(
-                    "color: #95a5a6; font-size: 10px; padding: 2px 0 0 0;"
+                    "color: #95a5a6; font-size: 10px; padding-left: 68px;"
                 )
             else:
                 q = next(
@@ -1005,7 +1099,7 @@ class AddDownloadDialog(QDialog):
                         f"until the queue is started."
                     )
                     self.queue_hint.setStyleSheet(
-                        "color: #f39c12; font-size: 10px; padding: 2px 0 0 0;"
+                        "color: #f39c12; font-size: 10px; padding-left: 68px;"
                     )
                 elif q:
                     self.queue_hint.setText(
@@ -1013,7 +1107,7 @@ class AddDownloadDialog(QDialog):
                         f"immediately."
                     )
                     self.queue_hint.setStyleSheet(
-                        "color: #95a5a6; font-size: 10px; padding: 2px 0 0 0;"
+                        "color: #95a5a6; font-size: 10px; padding-left: 68px;"
                     )
 
         if self._path_user_edited:
@@ -1118,6 +1212,7 @@ class AddDownloadDialog(QDialog):
     def closeEvent(self, event):
         self._cancel_fetcher()
         event.accept()
+
 
 class YouTubeDownloadDialog(QDialog):
     youtube_download_requested = pyqtSignal(dict)
