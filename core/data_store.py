@@ -321,7 +321,6 @@ class DataStore:
             "sound_enabled": True,
             "sound_path": "",
             "disable_ssl_verify": False,
-            "clipboard_monitoring": False,
         }
 
     @staticmethod

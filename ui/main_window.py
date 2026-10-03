@@ -74,7 +74,6 @@ class MainWindow(QMainWindow):
         self._init_backend()
         self._init_services()
         self._setup_shortcuts()
-        self._setup_clipboard_monitor()
         self._startup_complete = True
 
         if self.store.settings.get("start_minimized", False):
@@ -96,9 +95,6 @@ class MainWindow(QMainWindow):
         self._schedule_timer: Optional[QTimer] = None
         self._cleared_gids: Set[str] = set()
         self._pending_pause: Set[str] = set()
-        self._last_clipboard_text: str = ""
-        self._pending_clipboard_url: Optional[str] = None
-        self._clipboard_signal_connected: bool = False
         self._shutdown_dialog_shown: bool = False
         self._progress_dialogs: Dict[str, DownloadProgressDialog] = {}
         self._youtube_dialogs: Dict[str, "YouTubeProgressDialog"] = {}
@@ -3019,94 +3015,6 @@ class MainWindow(QMainWindow):
         QShortcut(QKeySequence("F5"), self, self._refresh_table)
         QShortcut(QKeySequence("F1"), self, self._show_shortcuts)
 
-    def _setup_clipboard_monitor(self) -> None:
-        """Connect to the clipboard if the user has enabled monitoring."""
-        if not self.store.settings.get("clipboard_monitoring", False):
-            return
-
-        clipboard = QApplication.clipboard()
-        if clipboard is None:
-            return
-
-        # Avoid double-connecting if settings are re-applied at runtime
-        if not self._clipboard_signal_connected:
-            clipboard.dataChanged.connect(self._on_clipboard_changed)
-            self._clipboard_signal_connected = True
-
-        # Seed with the current clipboard content so we don't fire on
-        # something that was copied before the app started.
-        self._last_clipboard_text = clipboard.text().strip()
-
-    def _teardown_clipboard_monitor(self) -> None:
-        """Disconnect from the clipboard when monitoring is disabled."""
-        if not self._clipboard_signal_connected:
-            return
-        clipboard = QApplication.clipboard()
-        if clipboard is not None:
-            try:
-                clipboard.dataChanged.disconnect(self._on_clipboard_changed)
-            except (TypeError, RuntimeError):
-                pass
-        self._clipboard_signal_connected = False
-        self._pending_clipboard_url = None
-
-    def _on_clipboard_changed(self) -> None:
-        """Called whenever the clipboard content changes."""
-        clipboard = QApplication.clipboard()
-        if clipboard is None:
-            return
-
-        text = clipboard.text().strip()
-        if not text:
-            return
-
-        # Ignore if it's the same as before (some platforms fire
-        # dataChanged multiple times for one copy).
-        if text == self._last_clipboard_text:
-            return
-        self._last_clipboard_text = text
-
-        if not self._looks_like_download_url(text):
-            return
-
-        # Store it for later, and notify the user via tray.
-        self._pending_clipboard_url = text
-        self.status_label.setText("📋 URL copied — ready to add")
-        self.tray.showMessage(
-            "🌶️ FelfelDM — URL Detected",
-            f"{text[:80]}{'…' if len(text) > 80 else ''}\n\n"
-            f"Click the Download button to add it.",
-            QSystemTrayIcon.MessageIcon.Information,
-            4000,
-        )
-
-    def _looks_like_download_url(self, text: str) -> bool:
-        """Return True if `text` looks like a URL we can download."""
-        if not text:
-            return False
-
-        # Single line only
-        if "\n" in text or "\r" in text:
-            return False
-
-        # Reasonable length
-        if len(text) > 2048:
-            return False
-
-        # Must start with a supported scheme
-        lowered = text.lower()
-        if not lowered.startswith(
-            ("http://", "https://", "ftp://", "ftps://", "magnet:")
-        ):
-            return False
-
-        # Don't re-catch URLs we ourselves put on the clipboard
-        # (e.g. "Copy URL" action).
-        if self._pending_clipboard_url == text:
-            return False
-
-        return True
-    
     def _show_shortcuts(self) -> None:
         """Show keyboard shortcuts dialog"""
         shortcuts = [
@@ -3209,21 +3117,15 @@ class MainWindow(QMainWindow):
         all_queues = self.store.queues
         dlg = AddDownloadDialog(all_queues, 0, self, mode="quick")
 
-        # Prefer the URL we captured via clipboard monitoring, if any.
-        if self._pending_clipboard_url:
-            dlg.url_edit.setPlainText(self._pending_clipboard_url)
-            self._pending_clipboard_url = None
-            self.status_label.setText("Ready")
-        else:
-            clip = QApplication.clipboard().text().strip()
-            if clip:
-                valid_lines = [
-                    line.strip()
-                    for line in clip.split("\n")
-                    if line.strip().startswith(("http", "magnet:", "ftp"))
-                ]
-                if valid_lines:
-                    dlg.url_edit.setPlainText("\n".join(valid_lines))
+        clip = QApplication.clipboard().text().strip()
+        if clip:
+            valid_lines = [
+                line.strip()
+                for line in clip.split("\n")
+                if line.strip().startswith(("http", "magnet:", "ftp"))
+            ]
+            if valid_lines:
+                dlg.url_edit.setPlainText("\n".join(valid_lines))
 
         self._show_singleton_dialog(
             "quick_download", dlg, on_accepted=self._process_add_download_common
@@ -4064,12 +3966,6 @@ class MainWindow(QMainWindow):
 
         theme = self.store.settings.get("theme", "auto")
         setup_style(QApplication.instance(), theme)
-        
-                # Apply clipboard monitoring setting change immediately
-        if self.store.settings.get("clipboard_monitoring", False):
-            self._setup_clipboard_monitor()
-        else:
-            self._teardown_clipboard_monitor()
 
         new_ssl = self.store.settings.get("disable_ssl_verify", False)
         new_port = self.store.settings.get("aria2_port", 6800)

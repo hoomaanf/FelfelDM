@@ -2261,16 +2261,6 @@ class SettingsDialog(QDialog):
             settings.get("auto_clear_completed", False)
         )
         cleanup_layout.addWidget(self.auto_clear_completed)
-        self.clipboard_monitoring = QCheckBox("Monitor clipboard for download URLs")
-        self.clipboard_monitoring.setChecked(
-            settings.get("clipboard_monitoring", False)
-        )
-        self.clipboard_monitoring.setToolTip(
-            "When enabled, FelfelDM watches the clipboard and offers to\n"
-            "add any URL you copy (http, https, ftp, magnet).\n"
-            "Disabled by default for privacy."
-        )
-        cleanup_layout.addWidget(self.clipboard_monitoring)
         general_layout.addWidget(cleanup_group)
 
         rules_group = QGroupBox("Download Rules")
@@ -2824,7 +2814,6 @@ WantedBy=default.target
             "max_tries": self.max_tries.value(),
             "max_concurrent": self.max_concurrent.value(),
             "auto_clear_completed": self.auto_clear_completed.isChecked(),
-            "clipboard_monitoring": self.clipboard_monitoring.isChecked(),
             "theme": self.theme_combo.currentText().lower(),
             "run_as_service": self.run_as_service.isChecked(),
             "speed_limit": speed_limit,
