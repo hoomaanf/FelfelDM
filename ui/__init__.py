@@ -3,7 +3,6 @@
 from .main_window import MainWindow
 from .dialogs import (
     AddDownloadDialog,
-    SingleDownloadDialog,
     QueueSettingsDialog,
     SettingsDialog
 )
