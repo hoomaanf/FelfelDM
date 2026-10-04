@@ -4293,8 +4293,16 @@ class MainWindow(QMainWindow):
             3000,
         )
 
+        # Issue the actual poweroff request BEFORE tearing the app down.
+        # quit_app() ends with sys.exit(0), which kills this process
+        # immediately — any code placed after that call never runs, which
+        # was the bug: the app quit cleanly but the machine never powered
+        # off because that call came first.
+        self._request_system_poweroff()
+
         self.quit_app()
 
+    def _request_system_poweroff(self) -> None:
         try:
             from PyQt6.QtDBus import QDBusInterface, QDBusConnection
 
