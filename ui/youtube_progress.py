@@ -17,21 +17,15 @@ from PyQt6.QtWidgets import (
     QApplication,
 )
 from PyQt6.QtCore import Qt, QUrl, QTimer, pyqtSignal, QRect
-from PyQt6.QtGui import (
-    QDesktopServices,
-    QColor,
-    QFont,
-    QPainter,
-    QBrush,
-    QPixmap,
-    QPen
-)
+from PyQt6.QtGui import QDesktopServices, QColor, QFont, QPainter, QBrush, QPixmap, QPen
 from core.youtube_worker import YouTubeWorker
 from utils.helpers import format_size, get_icon
 import tempfile
 
 
-def _make_stripe_pixmap(stripe_color: str, base_color: str, width: int = 16, height: int = 16) -> QPixmap:
+def _make_stripe_pixmap(
+    stripe_color: str, base_color: str, width: int = 16, height: int = 16
+) -> QPixmap:
     pixmap = QPixmap(width, height)
     pixmap.fill(QColor(base_color))
 
@@ -57,9 +51,7 @@ class StripedProgressBar(QProgressBar):
         self.setStyleSheet(self._build_style())
 
     def _build_pixmap(self):
-        self._stripe_pixmap = _make_stripe_pixmap(
-            self._stripe_color, self._base_color
-        )
+        self._stripe_pixmap = _make_stripe_pixmap(self._stripe_color, self._base_color)
         self._stripe_path = os.path.join(
             tempfile.gettempdir(), f"felfel_stripe_{id(self)}.png"
         )
@@ -132,7 +124,7 @@ class StripedProgressBar(QProgressBar):
             painter.drawRect(cover_rect)
 
         painter.end()
- 
+
 
 class YouTubeProgressDialog(QDialog):
     pause_requested = pyqtSignal(str)
@@ -166,8 +158,7 @@ class YouTubeProgressDialog(QDialog):
                 title = parent._all_downloads[download_id].get("name", title)
 
         self.setWindowTitle(title if title else "YouTube Download")
-        self.setMinimumSize(560, 380)
-        self.resize(620, 420)
+        self.setMinimumWidth(560)
         self.setSizeGripEnabled(True)
 
         self.setWindowFlags(
@@ -284,8 +275,11 @@ class YouTubeProgressDialog(QDialog):
 
         info_grid = QGridLayout()
         info_grid.setSpacing(6)
-        info_grid.setHorizontalSpacing(18)
-        info_grid.setColumnStretch(1, 1)
+        info_grid.setHorizontalSpacing(8)
+        info_grid.setColumnStretch(1, 3)
+        info_grid.setColumnStretch(2, 0)
+        info_grid.setColumnStretch(4, 2)
+        info_grid.setColumnMinimumWidth(2, 20)
         info_grid.setContentsMargins(0, 4, 0, 0)
 
         rows = [
@@ -297,16 +291,20 @@ class YouTubeProgressDialog(QDialog):
 
         self.info_labels = {}
         for i, (label_text, key) in enumerate(rows):
+            # 2 rows × 2 columns
+            row = i % 2
+            col_base = (i // 2) * 3
+
             lbl = QLabel(label_text)
             lbl.setEnabled(False)
-            info_grid.addWidget(lbl, i, 0, Qt.AlignmentFlag.AlignTop)
+            info_grid.addWidget(lbl, row, col_base, Qt.AlignmentFlag.AlignTop)
 
             val_lbl = QLabel("—")
             f = val_lbl.font()
             f.setBold(True)
             val_lbl.setFont(f)
             val_lbl.setWordWrap(True)
-            info_grid.addWidget(val_lbl, i, 1)
+            info_grid.addWidget(val_lbl, row, col_base + 1)
             self.info_labels[key] = val_lbl
 
         card_layout.addLayout(info_grid)
@@ -373,8 +371,11 @@ class YouTubeProgressDialog(QDialog):
 
             v_grid = QGridLayout()
             v_grid.setSpacing(6)
-            v_grid.setHorizontalSpacing(18)
-            v_grid.setColumnStretch(1, 1)
+            v_grid.setHorizontalSpacing(8)
+            v_grid.setColumnStretch(1, 3)
+            v_grid.setColumnStretch(2, 0)
+            v_grid.setColumnStretch(4, 2)
+            v_grid.setColumnMinimumWidth(2, 20)
             v_grid.setContentsMargins(0, 4, 0, 0)
 
             video_rows = []
@@ -411,10 +412,40 @@ class YouTubeProgressDialog(QDialog):
             if self.proxy_url:
                 video_rows.append(("Proxy:", self.proxy_url))
 
-            for i, (label_text, value) in enumerate(video_rows):
+            # Two-column layout: Title spans the whole first row (it's long),
+            # the rest are paired up.
+            # ── Row 0: Title (full width) ──
+            if video_rows and video_rows[0][0] == "Title:":
+                title_label = QLabel(video_rows[0][0])
+                title_label.setEnabled(False)
+                v_grid.addWidget(title_label, 0, 0, Qt.AlignmentFlag.AlignTop)
+
+                title_val = QLabel(str(video_rows[0][1]))
+                f = title_val.font()
+                f.setBold(True)
+                title_val.setFont(f)
+                title_val.setWordWrap(True)
+                title_val.setTextInteractionFlags(
+                    Qt.TextInteractionFlag.TextSelectableByMouse
+                )
+                v_grid.addWidget(title_val, 0, 1, 1, 4)
+                remaining = video_rows[1:]
+            else:
+                remaining = video_rows
+
+            # ── Remaining rows: two per line ──
+            half = (len(remaining) + 1) // 2
+            for i, (label_text, value) in enumerate(remaining):
+                if i < half:
+                    row = i + 1
+                    col_base = 0
+                else:
+                    row = (i - half) + 1
+                    col_base = 3
+
                 lbl = QLabel(label_text)
                 lbl.setEnabled(False)
-                v_grid.addWidget(lbl, i, 0, Qt.AlignmentFlag.AlignTop)
+                v_grid.addWidget(lbl, row, col_base, Qt.AlignmentFlag.AlignTop)
 
                 val_lbl = QLabel(str(value))
                 f = val_lbl.font()
@@ -424,7 +455,7 @@ class YouTubeProgressDialog(QDialog):
                 val_lbl.setTextInteractionFlags(
                     Qt.TextInteractionFlag.TextSelectableByMouse
                 )
-                v_grid.addWidget(val_lbl, i, 1)
+                v_grid.addWidget(val_lbl, row, col_base + 1)
 
             vc_layout.addLayout(v_grid)
             video_layout.addWidget(video_card)
@@ -660,7 +691,7 @@ class YouTubeProgressDialog(QDialog):
         self.tech_label.setPlainText(new_text)
 
         scrollbar.setValue(old_scroll)
-        
+
     def _on_copy_technical(self):
         QApplication.clipboard().setText(self.tech_label.toPlainText())
         self.copy_tech_btn.setText("Copied!")

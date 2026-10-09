@@ -562,21 +562,31 @@ class MainWindow(QMainWindow):
         self.table.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
 
         header = self.table.horizontalHeader()
-        header.setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)  # Name
-        header.setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)  # Size
-        header.setSectionResizeMode(2, QHeaderView.ResizeMode.Fixed)  # Progress
-        header.setSectionResizeMode(3, QHeaderView.ResizeMode.ResizeToContents)  # Speed
-        header.setSectionResizeMode(4, QHeaderView.ResizeMode.ResizeToContents)  # Conns
-        header.setSectionResizeMode(5, QHeaderView.ResizeMode.ResizeToContents)  # ETA
-        header.setSectionResizeMode(6, QHeaderView.ResizeMode.Interactive)  # Status
-        header.setSectionResizeMode(7, QHeaderView.ResizeMode.ResizeToContents)
+        header.setStretchLastSection(False)
 
+        header.setSectionResizeMode(0, QHeaderView.ResizeMode.Interactive)  # Name
+        header.setSectionResizeMode(1, QHeaderView.ResizeMode.Interactive)  # Size
+        header.setSectionResizeMode(2, QHeaderView.ResizeMode.Interactive)  # Progress
+        header.setSectionResizeMode(3, QHeaderView.ResizeMode.Interactive)  # Speed
+        header.setSectionResizeMode(4, QHeaderView.ResizeMode.Interactive)  # Conns
+        header.setSectionResizeMode(5, QHeaderView.ResizeMode.Interactive)  # ETA
+        header.setSectionResizeMode(6, QHeaderView.ResizeMode.Interactive)  # Status
+        header.setSectionResizeMode(7, QHeaderView.ResizeMode.Interactive)  # Category
+
+        # Default widths (user can resize freely afterwards)
+        self.table.setColumnWidth(0, 260)  # Name
+        self.table.setColumnWidth(1, 90)  # Size
         self.table.setColumnWidth(2, 180)  # Progress
         self.table.setColumnWidth(3, 110)  # Speed
         self.table.setColumnWidth(4, 60)  # Conns
         self.table.setColumnWidth(5, 100)  # ETA
         self.table.setColumnWidth(6, 150)  # Status
-
+        self.table.setColumnWidth(7, 120)  # Category
+        
+        # Right-click on the header to reset column widths
+        header.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        header.customContextMenuRequested.connect(self._header_context_menu)
+        
         self.table.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self.table.customContextMenuRequested.connect(self._context_menu)
         self.table.setSortingEnabled(True)
@@ -946,6 +956,71 @@ class MainWindow(QMainWindow):
             2000,
         )
 
+    def _header_context_menu(self, pos) -> None:
+        """Context menu shown when right-clicking the table header."""
+        menu = QMenu(self)
+
+        menu.addAction(
+            get_icon("view-refresh"),
+            "Fit Column Widths",
+            self._fit_column_widths,
+        )
+
+        menu.addSeparator()
+
+        header = self.table.horizontalHeader()
+        col = header.logicalIndexAt(pos)
+        if col >= 0:
+            menu.addAction(
+                f"Fit '{self.model.COLS[col]}' to Contents",
+                lambda c=col: self.table.resizeColumnToContents(c),
+            )
+
+        menu.exec(header.mapToGlobal(pos))
+
+
+    def _fit_column_widths(self) -> None:
+        """fit all download table columns to fit the viewport exactly.
+
+        Widths are distributed proportionally so the total never exceeds
+        the viewport — no horizontal scrollbar appears.
+        """
+        header = self.table.horizontalHeader()
+        available = self.table.viewport().width()
+        if available <= 0:
+            return
+
+        # Column proportions (sum = 1.00)
+        ratios = {
+            0: 0.28,   # Name
+            1: 0.09,   # Size
+            2: 0.16,   # Progress
+            3: 0.11,   # Speed
+            4: 0.06,   # Conns
+            5: 0.10,   # ETA
+            6: 0.12,   # Status
+            7: 0.08,   # Category
+        }
+
+        # Resize interactively so the user can still adjust them later
+        for col in ratios:
+            header.setSectionResizeMode(col, QHeaderView.ResizeMode.Interactive)
+
+        # Compute and apply widths. Rounding errors are absorbed by the
+        # last column so the total exactly matches the viewport width.
+        total = sum(ratios.values())
+        assigned = 0
+        cols = sorted(ratios.keys())
+
+        for i, col in enumerate(cols):
+            if i == len(cols) - 1:
+                width = available - assigned
+            else:
+                width = int(available * (ratios[col] / total))
+                assigned += width
+
+            self.table.setColumnWidth(col, max(40, width))
+    
     def _show_log_viewer(self) -> None:
         from ui.log_viewer import LogViewerDialog
 

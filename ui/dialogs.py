@@ -383,7 +383,7 @@ class AddDownloadDialog(QDialog):
         self.fetch_btn.setFixedHeight(28)
         self.fetch_btn.clicked.connect(self._start_fetching_sizes)
         url_btn_row.addWidget(self.fetch_btn)
-        
+
         # Fetch status chip
         self.fetch_chip = QLabel("")
         self.fetch_chip.setStyleSheet("""
@@ -399,13 +399,11 @@ class AddDownloadDialog(QDialog):
         self.fetch_chip.setFixedHeight(18)
         self.fetch_chip.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.fetch_chip.setVisible(False)
-        
-        
+
         url_btn_row.addWidget(self.fetch_chip)
 
         url_btn_row.addStretch()
         basic_layout.addLayout(url_btn_row)
-
 
         # Rule banner (only shown when a rule matches a URL)
         self.rule_banner = QFrame()
@@ -511,7 +509,7 @@ class AddDownloadDialog(QDialog):
             "color: #95a5a6; font-size: 10px; padding-left: 68px;"
         )
         basic_layout.addWidget(self.queue_hint)
-        
+
         self.queue_help_label = QLabel("")
         self.queue_help_label.setWordWrap(True)
         self.queue_help_label.setStyleSheet(
@@ -734,6 +732,7 @@ class AddDownloadDialog(QDialog):
             self.queue_help_label.setVisible(False)
 
         self._fetch_timer.start(self.FETCH_DEBOUNCE_MS)
+
     def _get_urls(self):
         raw = self.url_edit.toPlainText()
         urls = []
@@ -781,7 +780,7 @@ class AddDownloadDialog(QDialog):
         self._fetcher.progress.connect(self._on_fetch_progress)
         self._fetcher.all_done.connect(self._on_fetch_done)
         self._fetcher.start()
-        
+
     def _show_fetch_chip(self, text: str, color: str) -> None:
         """Show the fetch status chip with the given text and background."""
         self.fetch_chip.setText(text)
@@ -799,7 +798,7 @@ class AddDownloadDialog(QDialog):
 
     def _hide_fetch_chip(self) -> None:
         self.fetch_chip.setVisible(False)
-        
+
     def _on_fetch_progress(self, done, total):
         self._show_fetch_chip(f"Fetching {done}/{total}", "#89b4fa")
 
@@ -967,7 +966,7 @@ class AddDownloadDialog(QDialog):
         status_item.setForeground(QColor("#27ae60"))
 
         self._update_total()
-    
+
     def _on_fetch_failed(self, url, error):
         row = self._url_to_row.get(url)
         if row is None:
@@ -2638,9 +2637,8 @@ class DownloadProgressDialog(QDialog):
         self._main_window = main_window
         name = dl_data.get("name", "Download")
         self.setWindowTitle(name if name else "Download Progress")
-        self.setMinimumSize(560, 380)
+        self.setMinimumWidth(560)
         self.setAcceptDrops(True)
-        # self.resize(620, 420)
         self.setSizeGripEnabled(True)
         self.setWindowFlags(
             Qt.WindowType.Window
@@ -2742,8 +2740,11 @@ class DownloadProgressDialog(QDialog):
 
         info_grid = QGridLayout()
         info_grid.setSpacing(6)
-        info_grid.setHorizontalSpacing(18)
-        info_grid.setColumnStretch(1, 1)
+        info_grid.setHorizontalSpacing(8)
+        info_grid.setColumnStretch(1, 3)
+        info_grid.setColumnStretch(2, 0)
+        info_grid.setColumnStretch(4, 2)
+        info_grid.setColumnMinimumWidth(2, 20)
         info_grid.setContentsMargins(0, 4, 0, 0)
 
         rows = [
@@ -2756,9 +2757,12 @@ class DownloadProgressDialog(QDialog):
         ]
 
         for i, (label_text, key) in enumerate(rows):
+            row = i % 3
+            col_base = (i // 3) * 3
+
             lbl = QLabel(label_text)
             lbl.setEnabled(False)
-            info_grid.addWidget(lbl, i, 0, Qt.AlignmentFlag.AlignTop)
+            info_grid.addWidget(lbl, row, col_base, Qt.AlignmentFlag.AlignTop)
 
             if key == "speed":
                 speed_wrap = QWidget()
@@ -2777,7 +2781,7 @@ class DownloadProgressDialog(QDialog):
                 sw.addWidget(self._speed_limit_badge)
                 sw.addStretch()
 
-                info_grid.addWidget(speed_wrap, i, 1)
+                info_grid.addWidget(speed_wrap, row, col_base + 1)
                 self.info_labels[key] = val_lbl
             else:
                 val_lbl = QLabel("—")
@@ -2788,7 +2792,7 @@ class DownloadProgressDialog(QDialog):
                 val_lbl.setTextInteractionFlags(
                     Qt.TextInteractionFlag.TextSelectableByMouse
                 )
-                info_grid.addWidget(val_lbl, i, 1)
+                info_grid.addWidget(val_lbl, row, col_base + 1)
                 self.info_labels[key] = val_lbl
 
         card_layout.addLayout(info_grid)
@@ -2989,6 +2993,8 @@ class DownloadProgressDialog(QDialog):
             if files and files[0].get("path"):
                 self._file_path = files[0]["path"]
             self.update_data(dl_data)
+            
+        self.adjustSize()
 
     def _apply_styles(self):
         self.details_card.setStyleSheet("""
