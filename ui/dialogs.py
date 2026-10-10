@@ -240,17 +240,19 @@ class StripedProgressBar(QProgressBar):
         )
 
         painter = QPainter(self)
-        painter.setRenderHint(QPainter.RenderHint.Antialiasing, True) 
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
         painter.setPen(Qt.PenStyle.NoPen)
 
         if self._striped:
-            
+
             path = QPainterPath()
-            path.addRoundedRect(QRectF(0, 0, filled_width, rect.height()), radius, radius)
+            path.addRoundedRect(
+                QRectF(0, 0, filled_width, rect.height()), radius, radius
+            )
             painter.setClipPath(path)
             painter.drawTiledPixmap(rect, self._stripe_pixmap, QPoint(0, 0))
         else:
-            
+
             painter.setBrush(QBrush(QColor(self._base_color)))
             painter.drawRoundedRect(
                 QRectF(0, 0, filled_width, rect.height()), radius, radius
@@ -303,6 +305,16 @@ class AddDownloadDialog(QDialog):
         self._fetch_timer.timeout.connect(self._start_fetching_sizes)
 
         self._fetcher: "SizeFetcherWorker" = None
+
+        # ⚠️ QThreads that were cancelled but are still finishing their
+        # in-flight request. We keep a reference so Python's GC doesn't
+        # collect them while the C++ thread is still alive (which would
+        # make Qt abort with "QThread: Destroyed while thread is still
+        # running"). A periodic QTimer polls each one and removes it
+        # once isRunning() is False. This is what lets us avoid
+        # terminate() and deleteLater() on a live thread — both of
+        # which crash openssl / Qt.
+        self._orphan_fetchers: list = []
 
         self._build_ui()
         self._setup_tab_order()
@@ -500,7 +512,7 @@ class AddDownloadDialog(QDialog):
 
         self.queue_cb = QComboBox()
         self.queue_cb.addItem("📥 Direct Downloads", "__direct__")
-        
+
         for q in self._visible_queues:
             self.queue_cb.addItem(q.name, q.name)
         if 0 <= self.default_queue < self.queue_cb.count():
@@ -764,6 +776,7 @@ class AddDownloadDialog(QDialog):
         if not urls:
             self._clear_table()
             self._hide_fetch_chip()
+            self.fetch_btn.setEnabled(True)  
             return
 
         self._cancel_fetcher()
@@ -779,9 +792,13 @@ class AddDownloadDialog(QDialog):
         self.files_container.setVisible(show_table)
 
         self._show_fetch_chip(f"🔄  0/{len(urls)}", "#89b4fa")
-
+        
+        self.fetch_btn.setEnabled(False)      
+        self.fetch_btn.setText("Fetching…") 
+        
         proxy = self._get_proxy_dict_for_fetch()
-
+        
+        self.fetch_btn.setEnabled(False)
         self._fetcher = SizeFetcherWorker(urls, proxy=proxy)
         self._fetcher.size_fetched.connect(self._on_size_fetched)
         self._fetcher.fetch_failed.connect(self._on_fetch_failed)
@@ -857,6 +874,23 @@ class AddDownloadDialog(QDialog):
         self.rule_banner.setVisible(True)
 
     def _cancel_fetcher(self):
+        """Cancel the current size fetcher without blocking the UI.
+
+        The previous implementation called QThread.wait() on the UI
+        thread (freezing the dialog for up to 5s) and, worse, fell back
+        to QThread.terminate() when the wait timed out. terminate() on
+        a QThread that is inside requests/ssl corrupts openssl's state
+        and segfaults the process a few seconds later.
+
+        New behavior:
+          - Disconnect the worker's signals so late emissions can't
+            reach the dialog after we've forgotten about it.
+          - Ask it to cancel cooperatively.
+          - Move it to self._orphan_fetchers so Python doesn't GC it
+            while the QThread is still running.
+          - A periodic QTimer checks isRunning() and only then calls
+            deleteLater(). No terminate(), no wait(), no UI freeze.
+        """
         if self._fetcher is None:
             return
 
@@ -865,24 +899,41 @@ class AddDownloadDialog(QDialog):
 
         try:
             fetcher.cancel()
-            try:
-                fetcher.size_fetched.disconnect()
-                fetcher.fetch_failed.disconnect()
-                fetcher.progress.disconnect()
-                fetcher.all_done.disconnect()
-            except (TypeError, RuntimeError):
-                pass
-
-            if not fetcher.wait(2000):
-                fetcher.terminate()
-                fetcher.wait(500)
-
-            fetcher.deleteLater()
-        except RuntimeError:
+        except Exception:
             pass
 
+        try:
+            fetcher.size_fetched.disconnect()
+            fetcher.fetch_failed.disconnect()
+            fetcher.progress.disconnect()
+            fetcher.all_done.disconnect()
+        except (TypeError, RuntimeError):
+            pass
+
+        # Keep a strong reference and clean up once the thread is really done.
+        self._orphan_fetchers.append(fetcher)
+
+        def _cleanup(f=fetcher):
+            try:
+                if f.isRunning():
+                    # Still busy — check again in 300ms.
+                    QTimer.singleShot(300, lambda: _cleanup(f))
+                    return
+                # Thread has exited; it's now safe to hand it to Qt for deletion.
+                f.deleteLater()
+                if f in self._orphan_fetchers:
+                    self._orphan_fetchers.remove(f)
+            except RuntimeError:
+                # Underlying C++ object already gone — drop our reference.
+                if f in self._orphan_fetchers:
+                    self._orphan_fetchers.remove(f)
+
+        QTimer.singleShot(300, _cleanup)
+
     def _get_proxy_dict_for_fetch(self):
-        proxy_mode = self.proxy_combo.currentIndex() if hasattr(self, "proxy_combo") else 0
+        proxy_mode = (
+            self.proxy_combo.currentIndex() if hasattr(self, "proxy_combo") else 0
+        )
         try:
             if proxy_mode == 0 and self._main_window is not None:
                 if hasattr(self._main_window, "proxy_manager"):
@@ -997,22 +1048,56 @@ class AddDownloadDialog(QDialog):
         self._update_total()
 
     def _on_fetch_done(self):
+        """Called by the worker when all URLs have been processed.
+
+        The worker has emitted all_done, but the underlying QThread may
+        still be in the process of returning from run(). We must NOT
+        call deleteLater() while the QThread is technically still alive,
+        or Qt will abort with "QThread: Destroyed while thread is still
+        running". Instead, orphan it and let the periodic poll remove it
+        once done.
+        """
         fetcher = self._fetcher
         self._fetcher = None
+
         if fetcher is not None:
+            # Clear any queued signals from this fetcher so a late
+            # all_done / progress can't fire into a cleared table.
             try:
-                fetcher.deleteLater()
-            except RuntimeError:
+                fetcher.size_fetched.disconnect()
+                fetcher.fetch_failed.disconnect()
+                fetcher.progress.disconnect()
+                fetcher.all_done.disconnect()
+            except (TypeError, RuntimeError):
                 pass
+
+            self._orphan_fetchers.append(fetcher)
+
+            def _cleanup(f=fetcher):
+                try:
+                    if f.isRunning():
+                        QTimer.singleShot(300, lambda: _cleanup(f))
+                        return
+                    f.deleteLater()
+                    if f in self._orphan_fetchers:
+                        self._orphan_fetchers.remove(f)
+                except RuntimeError:
+                    if f in self._orphan_fetchers:
+                        self._orphan_fetchers.remove(f)
+
+            QTimer.singleShot(300, _cleanup)
 
         total = self.table.rowCount()
         if total > 0:
-            self._show_fetch_chip(f"Done", "#a6e3a1")
+            self._show_fetch_chip("Done", "#a6e3a1")
         else:
             self._hide_fetch_chip()
 
         self._update_total()
-
+        self.fetch_btn.setEnabled(True)
+        self.fetch_btn.setIcon(get_icon("view-refresh"))
+        self.fetch_btn.setText(" Fetch sizes")
+        
         # Hide the chip shortly after so it doesn't stay there forever
         QTimer.singleShot(1800, self._hide_fetch_chip)
 
@@ -1220,6 +1305,13 @@ class AddDownloadDialog(QDialog):
         return data
 
     def closeEvent(self, event):
+        """Close the dialog without blocking or crashing.
+
+        _cancel_fetcher is now non-blocking and never calls terminate(),
+        so this returns immediately even if the size fetcher is still
+        mid-request. Any in-flight QThreads are orphaned and cleaned up
+        by the periodic QTimer inside _cancel_fetcher.
+        """
         self._cancel_fetcher()
         event.accept()
 
@@ -2649,7 +2741,7 @@ class DownloadProgressDialog(QDialog):
         self._main_window = main_window
         name = dl_data.get("name", "Download")
         self.setWindowTitle(name if name else "Download Progress")
-        self.setMinimumWidth(560)
+        self.setMinimumWidth(580)
         self.setAcceptDrops(True)
         self.setSizeGripEnabled(True)
         self.setWindowFlags(
@@ -3005,7 +3097,7 @@ class DownloadProgressDialog(QDialog):
             if files and files[0].get("path"):
                 self._file_path = files[0]["path"]
             self.update_data(dl_data)
-            
+
         self.adjustSize()
 
     def _apply_styles(self):
