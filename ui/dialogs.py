@@ -882,19 +882,22 @@ class AddDownloadDialog(QDialog):
             pass
 
     def _get_proxy_dict_for_fetch(self):
-        proxy_mode = (
-            self.proxy_combo.currentIndex() if hasattr(self, "proxy_combo") else 0
-        )
+        proxy_mode = self.proxy_combo.currentIndex() if hasattr(self, "proxy_combo") else 0
         try:
             if proxy_mode == 0 and self._main_window is not None:
                 if hasattr(self._main_window, "proxy_manager"):
-                    p = self._main_window.proxy_manager.get_proxy_for_queue(None)
+                    qname = self.queue_cb.currentData()
+                    if qname == "__direct__":
+                        qname = None
+                    p = self._main_window.proxy_manager.get_effective_proxy_config(
+                        queue_name=qname
+                    )
                     if p and p.is_valid() and p.enabled:
-                        url = p._build_proxy_url()
+                        url = p.to_requests_proxy_url()
                         return {"http": url, "https": url}
             elif proxy_mode == 1 and self._custom_proxy is not None:
                 if self._custom_proxy.is_valid():
-                    url = self._custom_proxy._build_proxy_url()
+                    url = self._custom_proxy.to_requests_proxy_url()
                     return {"http": url, "https": url}
         except Exception as e:
             print(f"⚠️ [AddDownloadDialog] Could not build proxy dict: {e}")

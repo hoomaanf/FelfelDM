@@ -42,10 +42,11 @@ class BackendWorker(QThread):
     youtube_finished = pyqtSignal(str, bool, str)
     youtube_size_fetched = pyqtSignal(str, int)
 
-    def __init__(self, aria2, store: DataStore):
+    def __init__(self, aria2, store: DataStore, proxy_manager=None):
         super().__init__()
         self.aria2 = aria2
         self.store = store
+        self.proxy_manager = proxy_manager
         self.running = True
 
         self._fetching_sizes: Set[str] = set()
@@ -363,20 +364,42 @@ class BackendWorker(QThread):
         """
         Queue a size-fetch task to the parallel executor.
         The actual work is done in _fetch_size_worker (runs in a thread pool).
+
+        Resolves the owning download_id + queue_name so the worker can pick
+        the correct proxy (download > queue > global) when fetching the size.
         """
         if gid in self._fetched_sizes:
             print(f"⏭️ [Worker] Size already fetched for {gid}, skipping")
             return
-            # Skip recently-failed gids to avoid spamming the fetcher every poll.
+
+        # Skip recently-failed gids to avoid spamming the fetcher every poll.
         failed_at = self._failed_sizes.get(gid)
         if failed_at is not None:
             if time.time() - failed_at < 300.0:  # 5 minutes
                 return
             del self._failed_sizes[gid]
 
+        # Resolve the download_id and queue_name that own this gid.
+        # This is what lets us pick the correct proxy for the fetch.
+        download_id = None
+        queue_name = None
         for q in self.store.queues:
-            if gid in q.downloads_info:
-                existing_size = q.downloads_info[gid].get("totalLength", 0)
+            for dl_id, info in q.downloads_info.items():
+                if dl_id == gid or info.get("aria2_gid") == gid:
+                    download_id = dl_id
+                    queue_name = q.name
+                    break
+            if download_id:
+                break
+
+        # If we already know the size in storage, don't re-fetch.
+        if download_id and queue_name:
+            for q in self.store.queues:
+                if q.name != queue_name:
+                    continue
+                existing_size = q.downloads_info.get(download_id, {}).get(
+                    "totalLength", 0
+                )
                 if existing_size > 0:
                     self._fetched_sizes.add(gid)
                     print(
@@ -385,34 +408,65 @@ class BackendWorker(QThread):
                     )
                     from utils.helpers import get_category_from_filename
 
-                    filename = q.downloads_info[gid].get("name", "")
+                    filename = q.downloads_info[download_id].get("name", "")
                     if not filename:
                         filename = url.split("/")[-1].split("?")[0]
                     category = get_category_from_filename(filename)
                     self.size_fetched.emit(gid, existing_size, category)
                     self._fetching_sizes.discard(gid)
                     return
+                break
 
         if gid in self.youtube_gids or gid in self._fetched_sizes:
             return
 
         try:
-            self._size_executor.submit(self._fetch_size_worker, gid, url)
+            self._size_executor.submit(
+                self._fetch_size_worker,
+                gid,
+                url,
+                download_id,
+                queue_name,
+            )
         except RuntimeError as e:
             print(f"⚠️ [Worker] Size executor is shut down: {e}")
 
-    def _fetch_size_worker(self, gid: str, url: str):
+    def _fetch_size_worker(
+        self,
+        gid: str,
+        url: str,
+        download_id: str = None,
+        queue_name: str = None,
+    ):
         """
         Runs in a thread pool. Fetches the size for one URL using
         FileSizeFetcher (HEAD -> RANGE -> STREAM -> yt-dlp).
+
+        Uses the effective proxy for this download (download > queue > global)
+        so that size fetching works on servers only reachable via proxy.
         """
         try:
             from core.file_size_fetcher import FileSizeFetcher
             from utils.helpers import get_category_from_filename
 
-            print(f"📏 [Worker] Fetching size for {gid}: {url}")
+            # Resolve proxy for this fetch.
+            proxy_dict = None
+            if self.proxy_manager is not None:
+                try:
+                    proxy_dict = self.proxy_manager.get_effective_proxy_dict(
+                        download_id=download_id,
+                        queue_name=queue_name,
+                    )
+                except Exception as e:
+                    print(f"⚠️ [Worker] Could not resolve proxy for {gid}: {e}")
+                    proxy_dict = None
 
-            fetcher = FileSizeFetcher(timeout=30)
+            print(
+                f"📏 [Worker] Fetching size for {gid}: {url} "
+                f"(proxy={'yes' if proxy_dict else 'no'})"
+            )
+
+            fetcher = FileSizeFetcher(timeout=30, proxy=proxy_dict)
             try:
                 size = fetcher.get_size(url)
             finally:
@@ -428,6 +482,9 @@ class BackendWorker(QThread):
 
                 filename = None
                 for q in self.store.queues:
+                    if download_id and download_id in q.downloads_info:
+                        filename = q.downloads_info[download_id].get("name", "")
+                        break
                     if gid in q.downloads_info:
                         filename = q.downloads_info[gid].get("name", "")
                         break

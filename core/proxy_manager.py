@@ -1,5 +1,6 @@
 import re
 from typing import Optional, Dict, Any
+from urllib.parse import urlparse
 from enum import Enum
 
 
@@ -8,6 +9,7 @@ class ProxyType(Enum):
     HTTPS = "https"
     SOCKS4 = "socks4"
     SOCKS5 = "socks5"
+
 
 
 class ProxyConfig:
@@ -50,6 +52,14 @@ class ProxyConfig:
             auth = f"{self.username}:{self.password}@"
 
         return f"{self.type.value}://{auth}{self.host}:{self.port}"
+    
+    def to_requests_proxy_url(self) -> str:
+        """Same as _build_proxy_url, but converts socks5:// → socks5h://
+        so requests (via PySocks) resolves DNS through the proxy."""
+        url = self._build_proxy_url()
+        if url.startswith("socks5://"):
+            url = "socks5h://" + url[len("socks5://"):]
+        return url
 
     def to_dict(self) -> dict:
         return {
@@ -92,6 +102,36 @@ class ProxyConfig:
             return "Not Configured"
         auth = "🔒 " if self.username else ""
         return f"{auth}{self.type.value.upper()}://{self.host}:{self.port}"
+        
+def _proxy_config_from_url(url: str) -> Optional[ProxyConfig]:
+        """Parse a proxy URL like 'http://user:pass@host:port' into a ProxyConfig."""
+        if not url:
+            return None
+        try:
+            p = urlparse(url)
+            if not p.hostname:
+                return None
+            type_map = {
+                "http": ProxyType.HTTP,
+                "https": ProxyType.HTTPS,
+                "socks4": ProxyType.SOCKS4,
+                "socks5": ProxyType.SOCKS5,
+                "socks5h": ProxyType.SOCKS5,
+            }
+            ptype = type_map.get((p.scheme or "http").lower())
+            if ptype is None:
+                return None
+            return ProxyConfig(
+                proxy_type=ptype,
+                host=p.hostname,
+                port=p.port or 8080,
+                username=p.username,
+                password=p.password,
+                enabled=True,
+                name="Download proxy",
+            )
+        except Exception:
+            return None
 
 
 class ProxyManager:
@@ -195,13 +235,24 @@ class ProxyManager:
 
     def get_proxy_for_download(self, download_id: str) -> Optional[ProxyConfig]:
         if hasattr(self.data_store, "download_proxies"):
-            download_proxies = self.data_store.download_proxies
-            if download_id in download_proxies:
-                config_data = download_proxies[download_id]
-                if config_data and config_data.get("enabled", False):
-                    return ProxyConfig.from_dict(config_data)
-        return None
+            config_data = self.data_store.download_proxies.get(download_id)
+            if config_data and config_data.get("enabled", False):
+                return ProxyConfig.from_dict(config_data)
 
+        for q in self.data_store.queues:
+            info = q.downloads_info.get(download_id)
+            if not info:
+                continue
+            proxy_url = info.get("proxy_url")
+            if proxy_url:
+                cfg = _proxy_config_from_url(proxy_url)
+                if cfg and cfg.enabled and cfg.is_valid():
+                    return cfg
+            break
+
+        return None
+    
+  
     def set_download_proxy(self, download_id: str, config: Optional[ProxyConfig]):
         if not hasattr(self.data_store, "download_proxies"):
             self.data_store.download_proxies = {}
@@ -212,3 +263,31 @@ class ProxyManager:
             del self.data_store.download_proxies[download_id]
 
         self.data_store.save()
+
+    def get_effective_proxy_config(
+        self, download_id: str = None, queue_name: str = None
+    ) -> Optional[ProxyConfig]:
+        """Resolve the effective proxy: download > queue > global."""
+        if download_id:
+            cfg = self.get_proxy_for_download(download_id)
+            if cfg and cfg.enabled and cfg.is_valid():
+                return cfg
+        if queue_name and queue_name != "__direct__":
+            cfg = self.get_proxy_for_queue(queue_name)
+            if cfg:
+                return cfg
+        if self.global_proxy and self.global_proxy.enabled and self.global_proxy.is_valid():
+            return self.global_proxy
+        return None
+
+    def get_effective_proxy_dict(
+        self, download_id: str = None, queue_name: str = None
+    ) -> Optional[Dict[str, str]]:
+        """Same as above, but returns {'http': url, 'https': url} for requests/FileSizeFetcher."""
+        cfg = self.get_effective_proxy_config(download_id, queue_name)
+        if not cfg:
+            return None
+        url = cfg.to_requests_proxy_url()
+        if not url:
+            return None
+        return {"http": url, "https": url}

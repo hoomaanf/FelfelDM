@@ -848,7 +848,7 @@ class MainWindow(QMainWindow):
     def _start_backend(self) -> None:
         print("🚀 Starting BackendWorker...")
 
-        self.worker = BackendWorker(self.aria2, self.store)
+        self.worker = BackendWorker(self.aria2, self.store, proxy_manager=self.proxy_manager)
 
         self.worker.stats_updated.connect(self._on_stats_received)
         self.worker.aria2_error.connect(self._on_aria2_error)
