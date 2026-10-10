@@ -10,6 +10,7 @@ from PyQt6.QtGui import (
     QDesktopServices,
     QFont,
     QPainter,
+    QPainterPath,
     QPen,
     QPixmap,
 )
@@ -238,15 +239,21 @@ class StripedProgressBar(QProgressBar):
         )
 
         painter = QPainter(self)
-        painter.setRenderHint(QPainter.RenderHint.Antialiasing, False)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing, True) 
         painter.setPen(Qt.PenStyle.NoPen)
 
         if self._striped:
-            painter.setClipRect(cover_rect)
+            
+            path = QPainterPath()
+            path.addRoundedRect(QRectF(0, 0, filled_width, rect.height()), radius, radius)
+            painter.setClipPath(path)
             painter.drawTiledPixmap(rect, self._stripe_pixmap, QPoint(0, 0))
         else:
+            
             painter.setBrush(QBrush(QColor(self._base_color)))
-            painter.drawRect(cover_rect)
+            painter.drawRoundedRect(
+                QRectF(0, 0, filled_width, rect.height()), radius, radius
+            )
 
         painter.end()
 

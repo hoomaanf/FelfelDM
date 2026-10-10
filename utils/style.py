@@ -1,8 +1,9 @@
 import os
 import subprocess
 from PyQt6.QtWidgets import QApplication, QProxyStyle, QStyle, QStyleFactory
-from PyQt6.QtCore import Qt, QPoint
-from PyQt6.QtGui import QPalette, QColor, QBrush, QIcon
+from PyQt6.QtCore import Qt, QPoint, QObject, QEvent
+from PyQt6.QtGui import QPalette, QColor, QBrush, QIcon, QBitmap, QPainter
+from PyQt6.QtWidgets import QWidget
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -96,8 +97,51 @@ def theme_color(name: str) -> QColor:
     return QColor(tokens[name])
 
 
+class _PopupShaper(QObject):
+    """Clips combo-box popups to a rounded shape.
+
+    Qt's popup container can't be styled, so on desktops without a compositor
+    (where a translucent window shows up as a black/square box) we shape the
+    window itself with a rounded mask.
+    """
+
+    RADIUS = 10
+
+    def eventFilter(self, obj, event):
+        if event.type() in (QEvent.Type.Show, QEvent.Type.Resize) and isinstance(obj, QWidget):
+            w, h = obj.width(), obj.height()
+            if w > 0 and h > 0:
+                mask = QBitmap(w, h)
+                mask.fill(Qt.GlobalColor.color0)
+                painter = QPainter(mask)
+                painter.setPen(Qt.PenStyle.NoPen)
+                painter.setBrush(Qt.GlobalColor.color1)
+                painter.drawRoundedRect(0, 0, w, h, self.RADIUS, self.RADIUS)
+                painter.end()
+                obj.setMask(mask)
+        return False
+
+
 class CustomProxyStyle(QProxyStyle):
     """Custom style for SpinBox arrows (follows the active palette)."""
+
+    def __init__(self, *args):
+        super().__init__(*args)
+        self._popup_shaper = _PopupShaper(self)
+
+    def polish(self, obj):
+        if isinstance(obj, QPalette):
+            return super().polish(obj)
+        super().polish(obj)
+        if hasattr(obj, "inherits") and obj.inherits("QComboBoxPrivateContainer"):
+            # Transparent, shadow-less popup window + rounded mask (see _PopupShaper)
+            obj.setWindowFlags(
+                Qt.WindowType.Popup
+                | Qt.WindowType.FramelessWindowHint
+                | Qt.WindowType.NoDropShadowWindowHint
+            )
+            obj.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
+            obj.installEventFilter(self._popup_shaper)
 
     def _draw_spin_arrow(self, option, painter, widget, up: bool):
         pal = widget.palette() if widget is not None else QApplication.palette()
@@ -593,15 +637,62 @@ QDoubleSpinBox:disabled, QTimeEdit:disabled, QDateEdit:disabled, QComboBox:disab
     background-color: @surface2@;
     color: @faint@;
 }
+/* Drop-down list. Qt's popup container can't be styled, so: use the classic
+   drop-down mode (no margin strips around the list); the container window is
+   made transparent and masked to a rounded shape in CustomProxyStyle.polish. */
+QComboBox { combobox-popup: 0; }
+QComboBox::drop-down {
+    subcontrol-origin: padding;
+    subcontrol-position: center right;
+    width: 28px;
+    border: none;
+    background: transparent;
+}
+QAbstractSpinBox { padding-right: 28px; }
+QAbstractSpinBox::up-button {
+    subcontrol-origin: border;
+    subcontrol-position: top right;
+    width: 22px;
+    margin: 3px 3px 0 0;
+    border: none;
+    border-top-right-radius: 6px;
+    background: transparent;
+}
+QAbstractSpinBox::down-button {
+    subcontrol-origin: border;
+    subcontrol-position: bottom right;
+    width: 22px;
+    margin: 0 3px 3px 0;
+    border: none;
+    border-bottom-right-radius: 6px;
+    background: transparent;
+}
+QAbstractSpinBox::up-button:hover, QAbstractSpinBox::down-button:hover { background-color: @hover_strong@; }
+QAbstractSpinBox::up-button:pressed, QAbstractSpinBox::down-button:pressed { background-color: @accent_soft@; }
+QAbstractSpinBox::up-arrow { image: url(@arrow_up@); width: 10px; height: 10px; }
+QAbstractSpinBox::down-arrow { image: url(@arrow_down@); width: 10px; height: 10px; }
+QAbstractSpinBox::up-arrow:disabled, QAbstractSpinBox::up-arrow:off { image: url(@arrow_up_disabled@); }
+QAbstractSpinBox::down-arrow:disabled, QAbstractSpinBox::down-arrow:off { image: url(@arrow_down_disabled@); }
+QComboBox::down-arrow { image: url(@arrow_down@); width: 12px; height: 12px; }
+QComboBox::down-arrow:disabled { image: url(@arrow_down_disabled@); }
 QComboBox QAbstractItemView {
     background-color: @surface@;
     color: @text@;
     border: 1px solid @border_strong@;
-    border-radius: 8px;
+    border-radius: 10px;
     padding: 4px;
     outline: 0;
     selection-background-color: @accent_soft@;
     selection-color: @accent_text@;
+}
+QComboBox QAbstractItemView::item {
+    padding: 6px 10px;
+    border-radius: 6px;
+    min-height: 22px;
+}
+QComboBox QAbstractItemView::item:selected {
+    background-color: @accent_soft@;
+    color: @accent_text@;
 }
 
 /* ===== Progress bar ===== */
@@ -728,8 +819,46 @@ QLabel[role="value"] { font-size: 12px; }
 """
 
 
+def _make_arrow_icons(tokens: dict) -> dict:
+    """Paint the combo-box chevrons once per theme (QSS needs image files)."""
+    import tempfile
+    from PyQt6.QtGui import QPixmap, QPainter, QPen
+    from PyQt6.QtCore import QPointF
+
+    out_dir = os.path.join(tempfile.gettempdir(), "felfeldm-ui")
+    os.makedirs(out_dir, exist_ok=True)
+    result = {}
+    for key, color in (("arrow_down", tokens["muted"]),
+                       ("arrow_down_disabled", tokens["faint"]),
+                       ("arrow_up", tokens["muted"]),
+                       ("arrow_up_disabled", tokens["faint"])):
+        up = key.startswith("arrow_up")
+        for scale, suffix in ((1, ""), (2, "@2x")):
+            size = 12 * scale
+            pm = QPixmap(size, size)
+            pm.fill(Qt.GlobalColor.transparent)
+            painter = QPainter(pm)
+            painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+            pen = QPen(QColor(color), 1.6 * scale)
+            pen.setCapStyle(Qt.PenCapStyle.RoundCap)
+            pen.setJoinStyle(Qt.PenJoinStyle.RoundJoin)
+            painter.setPen(pen)
+            y_far, y_near = (7.5, 4.0) if up else (4.5, 8.0)
+            painter.drawPolyline([
+                QPointF(2.5 * scale, y_far * scale),
+                QPointF(6 * scale, y_near * scale),
+                QPointF(9.5 * scale, y_far * scale),
+            ])
+            painter.end()
+            name = f"{key}_{color.lstrip('#')}{suffix}.png"
+            pm.save(os.path.join(out_dir, name))
+        result[key] = os.path.join(out_dir, f"{key}_{color.lstrip('#')}.png").replace("\\", "/")
+    return result
+
+
 def build_stylesheet(tokens: dict) -> str:
     qss = QSS_TEMPLATE
+    tokens = {**tokens, **_make_arrow_icons(tokens)}
     # longest keys first so e.g. @accent_soft@ is never clobbered by @accent@
     for key in sorted(tokens, key=len, reverse=True):
         qss = qss.replace(f"@{key}@", tokens[key])
