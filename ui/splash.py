@@ -125,12 +125,13 @@ class SplashScreen(QSplashScreen):
             QProgressBar {{
                 border: none;
                 background-color: {'#3d4045' if is_dark else '#d0d0d5'};
-                border-radius: 2px;
-                height: 3px;
+                border-radius: 7px;
+                    min-height: 18px;
+
             }}
             QProgressBar::chunk {{
                 background-color: #3daee9;
-                border-radius: 2px;
+                border-radius: 7px;
             }}
         """)
         self.progress.setRange(0, 100)
