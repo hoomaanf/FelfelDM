@@ -745,7 +745,7 @@ class MainWindow(QMainWindow):
         self.progress_bar = QProgressBar()
         self.progress_bar.setMaximum(100)
         self.progress_bar.setValue(0)
-        self.progress_bar.setFixedWidth(220)
+        
     
         self.statusBar().setSizeGripEnabled(False)
         self.statusBar().addPermanentWidget(self.progress_bar)
