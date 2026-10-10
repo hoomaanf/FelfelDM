@@ -374,13 +374,11 @@ class AddDownloadDialog(QDialog):
 
         self.import_btn = QPushButton(get_icon("document-open"), " Import")
         self.import_btn.setToolTip("Import URLs from a text file")
-        self.import_btn.setFixedHeight(28)
         self.import_btn.clicked.connect(self._import_from_txt)
         url_btn_row.addWidget(self.import_btn)
 
         self.fetch_btn = QPushButton(get_icon("view-refresh"), " Fetch sizes")
         self.fetch_btn.setToolTip("Fetch file sizes for all URLs")
-        self.fetch_btn.setFixedHeight(28)
         self.fetch_btn.clicked.connect(self._start_fetching_sizes)
         url_btn_row.addWidget(self.fetch_btn)
 
@@ -494,6 +492,7 @@ class AddDownloadDialog(QDialog):
 
         self.queue_cb = QComboBox()
         self.queue_cb.addItem("📥 Direct Downloads", "__direct__")
+        
         for q in self._visible_queues:
             self.queue_cb.addItem(q.name, q.name)
         if 0 <= self.default_queue < self.queue_cb.count():

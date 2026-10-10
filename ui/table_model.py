@@ -1,5 +1,6 @@
 from PyQt6.QtCore import QAbstractTableModel, QModelIndex, Qt
 from PyQt6.QtGui import QColor
+from utils.style import theme_color
 from utils.helpers import (
     format_size,
     format_speed,
@@ -48,6 +49,10 @@ class DownloadTableModel(QAbstractTableModel):
         return len(self.COLS)
 
     def headerData(self, s, o, r=Qt.ItemDataRole.DisplayRole):
+        if r == Qt.ItemDataRole.TextAlignmentRole and o == Qt.Orientation.Horizontal:
+            if s == self.COL_NAME:
+                return int(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+            return int(Qt.AlignmentFlag.AlignCenter)
         if r == Qt.ItemDataRole.DisplayRole and o == Qt.Orientation.Horizontal:
             return self.COLS[s]
         return None
@@ -313,31 +318,31 @@ class DownloadTableModel(QAbstractTableModel):
     def _foreground_status(self, row, download_type, status):
         if download_type == "youtube":
             yt_colors = {
-                "completed": "#27ae60",
-                "error": "#e74c3c",
-                "downloading": "#9b59b6",
-                "paused": "#f39c12",
-                "pending": "#3498db",
-                "cancelled": "#95a5a6",
+                "completed": "success_text",
+                "error": "danger",
+                "downloading": "purple",
+                "paused": "warning",
+                "pending": "accent_text",
+                "cancelled": "muted",
             }
             if status in yt_colors:
-                return QColor(yt_colors[status])
+                return theme_color(yt_colors[status])
 
         colors = {
-            "complete": "#27ae60",
-            "completed": "#27ae60",
-            "error": "#e74c3c",
-            "active": "#3daee9",
-            "downloading": "#3daee9",
-            "paused": "#f39c12",
-            "stopped": "#f39c12",
-            "waiting": "#95a5a6",
-            "pending": "#95a5a6",
-            "retrying": "#f39c12",
-            "cancelled": "#95a5a6",
+            "complete": "success_text",
+            "completed": "success_text",
+            "error": "danger",
+            "active": "accent_text",
+            "downloading": "accent_text",
+            "paused": "warning",
+            "stopped": "warning",
+            "waiting": "muted",
+            "pending": "muted",
+            "retrying": "warning",
+            "cancelled": "muted",
         }
         if status in colors:
-            return QColor(colors[status])
+            return theme_color(colors[status])
         return None
 
     # ─────────────────────────────────────────────────────────────

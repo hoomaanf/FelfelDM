@@ -1,7 +1,7 @@
 # ui/widgets.py
 
 from PyQt6.QtWidgets import QWidget
-from PyQt6.QtCore import Qt
+from PyQt6.QtCore import Qt, QRectF
 from PyQt6.QtGui import QPainter, QPen, QColor
 
 
@@ -28,24 +28,32 @@ class DropOverlay(QWidget):
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
 
-        # Tinted background
-        painter.fillRect(self.rect(), QColor(61, 174, 233, 40))
+        accent = QColor("#3b82f6")
 
-        # Dashed border
-        pen = QPen(QColor("#3daee9"), 2, Qt.PenStyle.DashLine)
+        # Soft tint over the whole window
+        painter.fillRect(self.rect(), QColor(accent.red(), accent.green(), accent.blue(), 26))
+
+        # Dashed rounded drop zone
+        pen = QPen(accent, 2, Qt.PenStyle.CustomDashLine)
+        pen.setDashPattern([6, 5])
         painter.setPen(pen)
-        rect = self.rect().adjusted(4, 4, -4, -4)
-        painter.drawRoundedRect(rect, 8, 8)
+        painter.setBrush(Qt.BrushStyle.NoBrush)
+        zone = QRectF(self.rect()).adjusted(12, 12, -12, -12)
+        painter.drawRoundedRect(zone, 16, 16)
 
-        # Centered message
-        painter.setPen(QColor("#3daee9"))
+        # Centered pill with the message
         font = self.font()
-        font.setPointSize(16)
+        font.setPointSize(13)
         font.setBold(True)
         painter.setFont(font)
-        painter.drawText(
-            self.rect(),
-            Qt.AlignmentFlag.AlignCenter,
-            self._message,
-        )
+        fm = painter.fontMetrics()
+        w = fm.horizontalAdvance(self._message) + 56
+        h = fm.height() + 28
+        pill = QRectF(0, 0, w, h)
+        pill.moveCenter(QRectF(self.rect()).center())
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(accent)
+        painter.drawRoundedRect(pill, h / 2, h / 2)
+        painter.setPen(QColor("#ffffff"))
+        painter.drawText(pill, Qt.AlignmentFlag.AlignCenter, self._message)
         painter.end()

@@ -425,14 +425,14 @@ class MainWindow(QMainWindow):
         splitter = QSplitter(Qt.Orientation.Horizontal)
         splitter.setObjectName("splitter")
         splitter.setChildrenCollapsible(False)
-        splitter.setHandleWidth(4)
+        splitter.setHandleWidth(1)
 
         sidebar = self._build_sidebar()
         main_area = self._build_main_area()
 
         splitter.addWidget(sidebar)
         splitter.addWidget(main_area)
-        splitter.setSizes([210, 840])
+        splitter.setSizes([230, 840])
 
         root.addWidget(splitter)
 
@@ -444,24 +444,22 @@ class MainWindow(QMainWindow):
     def _build_sidebar(self) -> QWidget:
         sidebar = QWidget()
         sidebar.setObjectName("sidebar")
-        sidebar.setMinimumWidth(200)
+        sidebar.setMinimumWidth(210)
         sidebar.setMaximumWidth(350)
         sb_lay = QVBoxLayout(sidebar)
-        sb_lay.setContentsMargins(10, 12, 10, 12)
+        sb_lay.setContentsMargins(12, 14, 12, 12)
         sb_lay.setSpacing(8)
 
-        header_lay = QHBoxLayout()
-        header_lay.addStretch()
-        sb_lay.addLayout(header_lay)
-
-        sb_lay.addWidget(QLabel("<b>Queues</b>"))
-        sb_lay.addSpacing(4)
+        queues_title = QLabel("Queues")
+        queues_title.setObjectName("section_title")
+        sb_lay.addWidget(queues_title)
 
         self.queue_list = QListWidget()
         self.queue_list.currentRowChanged.connect(self._on_queue_changed)
         sb_lay.addWidget(self.queue_list)
 
         btn_layout = QHBoxLayout()
+        btn_layout.setSpacing(6)
         self.start_queue_btn = QPushButton(get_icon("media-playback-start"), "Start")
         self.start_queue_btn.setObjectName("start_btn")
         self.start_queue_btn.clicked.connect(self._start_current_queue)
@@ -474,7 +472,7 @@ class MainWindow(QMainWindow):
         sb_lay.addLayout(btn_layout)
 
         move_layout = QHBoxLayout()
-        move_layout.setSpacing(4)
+        move_layout.setSpacing(6)
 
         self.move_up_btn = QPushButton()
         self.move_up_btn.setIcon(get_icon("go-up"))
@@ -499,16 +497,23 @@ class MainWindow(QMainWindow):
         sb_lay.addLayout(move_layout)
 
         mgmt_lay = QVBoxLayout()
-        mgmt_lay.setSpacing(4)
-        mgmt_lay.addWidget(
-            QPushButton(get_icon("list-add"), "New Queue", clicked=self._add_queue)
+        mgmt_lay.setSpacing(6)
+        new_queue_btn = QPushButton(
+            get_icon("list-add"), "New Queue", clicked=self._add_queue
         )
-        mgmt_lay.addWidget(
+        new_queue_btn.setProperty("variant", "primary")
+        mgmt_lay.addWidget(new_queue_btn)
+        mgmt_row = QHBoxLayout()
+        mgmt_row.setSpacing(6)
+        mgmt_row.addWidget(
             QPushButton(get_icon("configure"), "Settings", clicked=self._edit_queue)
         )
-        mgmt_lay.addWidget(
-            QPushButton(get_icon("list-remove"), "Delete", clicked=self._delete_queue)
+        delete_queue_btn = QPushButton(
+            get_icon("list-remove"), "Delete", clicked=self._delete_queue
         )
+        delete_queue_btn.setProperty("variant", "danger")
+        mgmt_row.addWidget(delete_queue_btn)
+        mgmt_lay.addLayout(mgmt_row)
         sb_lay.addLayout(mgmt_lay)
 
         sb_lay.addSpacing(12)
@@ -551,7 +556,14 @@ class MainWindow(QMainWindow):
         self.table.doubleClicked.connect(self._on_table_double_click)
         self.table.setTextElideMode(Qt.TextElideMode.ElideRight)
         self.table.setWordWrap(False)
-        self.table.setAlternatingRowColors(True)
+        self.table.setAlternatingRowColors(False)
+        self.table.setShowGrid(False)
+        self.table.setFrameShape(QFrame.Shape.NoFrame)
+        self.table.verticalHeader().setVisible(False)
+        self.table.verticalHeader().setDefaultSectionSize(44)
+        self.table.verticalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Fixed)
+        self.table.setHorizontalScrollMode(QAbstractItemView.ScrollMode.ScrollPerPixel)
+        self.table.setVerticalScrollMode(QAbstractItemView.ScrollMode.ScrollPerPixel)
 
         self.model = DownloadTableModel()
         self.progress_delegate = ProgressDelegate(self)
@@ -563,6 +575,7 @@ class MainWindow(QMainWindow):
 
         header = self.table.horizontalHeader()
         header.setStretchLastSection(False)
+        header.setHighlightSections(False)
 
         header.setSectionResizeMode(0, QHeaderView.ResizeMode.Interactive)  # Name
         header.setSectionResizeMode(1, QHeaderView.ResizeMode.Interactive)  # Size
@@ -575,23 +588,42 @@ class MainWindow(QMainWindow):
 
         # Default widths (user can resize freely afterwards)
         self.table.setColumnWidth(0, 260)  # Name
-        self.table.setColumnWidth(1, 90)  # Size
-        self.table.setColumnWidth(2, 180)  # Progress
+        self.table.setColumnWidth(1, 104)  # Size
+        self.table.setColumnWidth(2, 190)  # Progress
         self.table.setColumnWidth(3, 110)  # Speed
-        self.table.setColumnWidth(4, 60)  # Conns
+        self.table.setColumnWidth(4, 72)  # Conns
         self.table.setColumnWidth(5, 100)  # ETA
-        self.table.setColumnWidth(6, 150)  # Status
+        self.table.setColumnWidth(6, 170)  # Status
         self.table.setColumnWidth(7, 120)  # Category
-        
+
         # Right-click on the header to reset column widths
         header.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         header.customContextMenuRequested.connect(self._header_context_menu)
-        
+
         self.table.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self.table.customContextMenuRequested.connect(self._context_menu)
         self.table.setSortingEnabled(True)
         self.table.sortByColumn(0, Qt.SortOrder.AscendingOrder)
-        ma_lay.addWidget(self.table)
+
+        # Table + friendly empty-state message stacked on top of each other
+        table_holder = QWidget()
+        table_stack = QStackedLayout(table_holder)
+        table_stack.setContentsMargins(0, 0, 0, 0)
+        table_stack.setStackingMode(QStackedLayout.StackingMode.StackAll)
+        table_stack.addWidget(self.table)
+        self.empty_state = QLabel()
+        self.empty_state.setObjectName("empty_state")
+        self.empty_state.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.empty_state.setWordWrap(True)
+        self.empty_state.setAttribute(
+            Qt.WidgetAttribute.WA_TransparentForMouseEvents, True
+        )
+        table_stack.addWidget(self.empty_state)
+        ma_lay.addWidget(table_holder, 1)
+        self.model.modelReset.connect(self._refresh_empty_state)
+        self.model.rowsInserted.connect(self._refresh_empty_state)
+        self.model.rowsRemoved.connect(self._refresh_empty_state)
+        self._refresh_empty_state()
 
         if self.table.selectionModel():
             self.table.selectionModel().selectionChanged.connect(
@@ -611,15 +643,25 @@ class MainWindow(QMainWindow):
         toolbar = QWidget()
         toolbar.setObjectName("toolbar")
         tb_lay = QHBoxLayout(toolbar)
-        tb_lay.setContentsMargins(8, 4, 8, 4)
-        tb_lay.setSpacing(4)
+        tb_lay.setContentsMargins(12, 10, 12, 10)
+        tb_lay.setSpacing(6)
 
         icon_size = QSize(20, 20)
 
+        def divider():
+            line = QFrame()
+            line.setObjectName("toolbar_divider")
+            line.setFixedHeight(22)
+            return line
+
         self.btn_add = QPushButton(get_icon("download"), "Add Download")
+        self.btn_add.setProperty("variant", "primary")
         self.btn_add.setIconSize(icon_size)
         self.btn_add.clicked.connect(self._add_download)
         tb_lay.addWidget(self.btn_add)
+        tb_lay.addSpacing(4)
+        tb_lay.addWidget(divider())
+        tb_lay.addSpacing(4)
         self.btn_toggle = QPushButton(get_icon("media-playback-pause"), "Pause")
         self.btn_toggle.setIconSize(icon_size)
         self.btn_toggle.clicked.connect(self._toggle_pause_resume)
@@ -634,6 +676,7 @@ class MainWindow(QMainWindow):
 
         self.btn_remove = QPushButton(get_icon("edit-delete"), "Remove")
         self.btn_remove.setIconSize(icon_size)
+        self.btn_remove.setProperty("variant", "ghost-danger")
         self.btn_remove.clicked.connect(self._remove_selected)
         tb_lay.addWidget(self.btn_remove)
 
@@ -643,6 +686,9 @@ class MainWindow(QMainWindow):
         self.btn_clear_completed.setIconSize(icon_size)
         self.btn_clear_completed.clicked.connect(self._clear_completed_downloads)
         tb_lay.addWidget(self.btn_clear_completed)
+        tb_lay.addSpacing(4)
+        tb_lay.addWidget(divider())
+        tb_lay.addSpacing(4)
 
         self.btn_youtube = QPushButton(get_icon("applications-multimedia"), " YouTube")
         self.btn_youtube.setIconSize(icon_size)
@@ -652,22 +698,27 @@ class MainWindow(QMainWindow):
 
         tb_lay.addStretch()
 
+        self.search_box = QLineEdit()
+        self.search_box.setPlaceholderText("Search downloads…")
+        self.search_box.setClearButtonEnabled(True)
+        self.search_box.setMinimumWidth(200)
+        self.search_box.setMaximumWidth(280)
+        self.search_box.setFixedHeight(34)
+        self.search_box.textChanged.connect(self._filter_downloads)
+        self.search_box.textChanged.connect(self._refresh_empty_state)
+        tb_lay.addWidget(self.search_box)
+
         self.btn_show_details = QPushButton(get_icon("view-list-details"), "")
+        self.btn_show_details.setProperty("iconOnly", True)
         self.btn_show_details.setIconSize(icon_size)
         self.btn_show_details.setToolTip("Toggle details panel (Ctrl+D)")
         self.btn_show_details.setCheckable(True)
         self.btn_show_details.toggled.connect(self._toggle_details_panel)
         tb_lay.addWidget(self.btn_show_details)
 
-        tb_lay.addStretch()
-
-        self.search_box = QLineEdit()
-        self.search_box.setPlaceholderText("Search...")
-        self.search_box.setMaximumWidth(180)
-        self.search_box.textChanged.connect(self._filter_downloads)
-        tb_lay.addWidget(self.search_box)
-
         self.btn_settings = QPushButton(get_icon("configure"), "")
+        self.btn_settings.setProperty("iconOnly", True)
+        self.btn_settings.setToolTip("Settings (Ctrl+,)")
         self.btn_settings.setIconSize(icon_size)
         self.btn_settings.clicked.connect(self._open_settings)
         tb_lay.addWidget(self.btn_settings)
@@ -684,13 +735,7 @@ class MainWindow(QMainWindow):
         self.speed_icon_label.setPixmap(get_icon("go-down").pixmap(16, 16))
 
         self.speed_status_label = QLabel("0 B/s")
-        self.speed_status_label.setStyleSheet("""
-            QLabel {
-                font-weight: bold;
-                color: #3daee9;
-                min-width: 80px;
-            }
-        """)
+        self.speed_status_label.setObjectName("speed_label")
 
         speed_layout.addWidget(self.speed_icon_label)
         speed_layout.addWidget(self.speed_status_label)
@@ -699,9 +744,9 @@ class MainWindow(QMainWindow):
         self.progress_bar = QProgressBar()
         self.progress_bar.setMaximum(100)
         self.progress_bar.setValue(0)
-        self.progress_bar.setSizePolicy(
-            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed
-        )
+        self.progress_bar.setFixedWidth(220)
+    
+        self.statusBar().setSizeGripEnabled(False)
         self.statusBar().addPermanentWidget(self.progress_bar)
         self.progress_bar.setTextVisible(True)
 
@@ -709,6 +754,7 @@ class MainWindow(QMainWindow):
         self.statusBar().addPermanentWidget(self.status_label)
 
         self.shutdown_cb = QCheckBox("Shutdown on Finish")
+        self.shutdown_cb.setStyleSheet("margin:0 8px;")
         self.shutdown_cb.setChecked(
             self.store.settings.get("shutdown_after_finish", False)
         )
@@ -978,7 +1024,6 @@ class MainWindow(QMainWindow):
 
         menu.exec(header.mapToGlobal(pos))
 
-
     def _fit_column_widths(self) -> None:
         """fit all download table columns to fit the viewport exactly.
 
@@ -992,14 +1037,14 @@ class MainWindow(QMainWindow):
 
         # Column proportions (sum = 1.00)
         ratios = {
-            0: 0.28,   # Name
-            1: 0.09,   # Size
-            2: 0.16,   # Progress
-            3: 0.11,   # Speed
-            4: 0.06,   # Conns
-            5: 0.10,   # ETA
-            6: 0.12,   # Status
-            7: 0.08,   # Category
+            0: 0.28,  # Name
+            1: 0.09,  # Size
+            2: 0.16,  # Progress
+            3: 0.11,  # Speed
+            4: 0.06,  # Conns
+            5: 0.10,  # ETA
+            6: 0.12,  # Status
+            7: 0.08,  # Category
         }
 
         # Resize interactively so the user can still adjust them later
@@ -1020,7 +1065,7 @@ class MainWindow(QMainWindow):
                 assigned += width
 
             self.table.setColumnWidth(col, max(40, width))
-    
+
     def _show_log_viewer(self) -> None:
         from ui.log_viewer import LogViewerDialog
 
@@ -2838,13 +2883,8 @@ class MainWindow(QMainWindow):
         panel = QWidget()
         panel.setObjectName("details_panel")
         panel.setMinimumHeight(100)
-        panel.setMaximumHeight(170)
-        panel.setStyleSheet("""
-            #details_panel {
-                background: palette(alternate-base);
-                border-top: 1px solid palette(mid);
-            }
-        """)
+        panel.setMaximumHeight(180)
+        panel.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
 
         lay = QHBoxLayout(panel)
         lay.setContentsMargins(16, 10, 16, 10)
@@ -2852,12 +2892,7 @@ class MainWindow(QMainWindow):
 
         self.empty_label = QLabel("Select a download to view details")
         self.empty_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.empty_label.setStyleSheet("""
-            font-size: 16px;
-            color: #888;
-            font-weight: 500;
-            background: transparent;
-        """)
+        self.empty_label.setObjectName("details_empty")
         self.empty_label.setVisible(True)
         lay.addWidget(self.empty_label)
 
@@ -2897,12 +2932,12 @@ class MainWindow(QMainWindow):
             )
 
             label = QLabel(label_text)
-            label.setStyleSheet("font-weight: bold; color: #888; font-size: 12px;")
+            label.setProperty("role", "muted")
             info_lay.addWidget(label, row, 1)
 
             value = QLabel("—")
             value.setObjectName(f"detail_{key}")
-            value.setStyleSheet("font-size: 12px;")
+            value.setProperty("role", "value")
             value.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
             info_lay.addWidget(value, row, 2)
             self.detail_labels[key] = value
@@ -2910,8 +2945,8 @@ class MainWindow(QMainWindow):
         details_lay.addWidget(info_widget, stretch=3)
 
         action_widget = QWidget()
-        action_lay = QVBoxLayout(action_widget)
-        action_lay.setSpacing(4)
+        action_lay = QGridLayout(action_widget)
+        action_lay.setSpacing(6)
         action_lay.setContentsMargins(0, 0, 0, 0)
 
         self.detail_pause_btn = QPushButton(get_icon("media-playback-pause"), "Pause")
@@ -2919,14 +2954,15 @@ class MainWindow(QMainWindow):
         self.detail_pause_btn.setMinimumWidth(110)
         self.detail_pause_btn.setFixedHeight(34)
         self.detail_pause_btn.setEnabled(False)
-        action_lay.addWidget(self.detail_pause_btn)
+        action_lay.addWidget(self.detail_pause_btn, 0, 0)
 
         self.detail_cancel_btn = QPushButton(get_icon("edit-delete"), "Cancel")
         self.detail_cancel_btn.clicked.connect(self._remove_selected)
+        self.detail_cancel_btn.setProperty("variant", "danger")
         self.detail_cancel_btn.setMinimumWidth(110)
         self.detail_cancel_btn.setFixedHeight(34)
         self.detail_cancel_btn.setEnabled(False)
-        action_lay.addWidget(self.detail_cancel_btn)
+        action_lay.addWidget(self.detail_cancel_btn, 0, 1)
 
         self.detail_open_btn = QPushButton(get_icon("folder"), "Open Folder")
         self.detail_open_btn.clicked.connect(
@@ -2935,7 +2971,7 @@ class MainWindow(QMainWindow):
         self.detail_open_btn.setMinimumWidth(110)
         self.detail_open_btn.setFixedHeight(34)
         self.detail_open_btn.setEnabled(False)
-        action_lay.addWidget(self.detail_open_btn)
+        action_lay.addWidget(self.detail_open_btn, 1, 0)
 
         self.detail_copy_btn = QPushButton(get_icon("edit-copy"), "Copy URL")
         self.detail_copy_btn.clicked.connect(
@@ -2944,14 +2980,32 @@ class MainWindow(QMainWindow):
         self.detail_copy_btn.setMinimumWidth(110)
         self.detail_copy_btn.setFixedHeight(34)
         self.detail_copy_btn.setEnabled(False)
-        action_lay.addWidget(self.detail_copy_btn)
+        action_lay.addWidget(self.detail_copy_btn, 1, 1)
 
-        action_lay.addStretch()
+        action_lay.setRowStretch(2, 1)
         details_lay.addWidget(action_widget, stretch=1)
 
         lay.addWidget(self.details_container)
 
         return panel
+
+    def _refresh_empty_state(self, *args) -> None:
+        """Show a hint over the table while it has no rows."""
+        label = getattr(self, "empty_state", None)
+        if label is None:
+            return
+        if self.model.rowCount() > 0:
+            label.setVisible(False)
+            return
+        query = self.search_box.text().strip() if hasattr(self, "search_box") else ""
+        if query:
+            label.setText(f"No downloads match “{query}”")
+        else:
+            label.setText(
+                "No downloads here yet\n\n"
+                "Press Ctrl+N to add one, or drop a link onto this window"
+            )
+        label.setVisible(True)
 
     def _toggle_details_panel(self, checked: bool = False) -> None:
         """Toggle details panel visibility"""
