@@ -3,7 +3,8 @@ import subprocess
 from PyQt6.QtWidgets import QApplication, QProxyStyle, QStyle, QStyleFactory
 from PyQt6.QtCore import Qt, QPoint, QObject, QEvent
 from PyQt6.QtGui import QPalette, QColor, QBrush, QIcon, QBitmap, QPainter
-from PyQt6.QtWidgets import QWidget
+from PyQt6.QtWidgets import QWidget, QDialog, QPushButton
+from PyQt6.QtCore import QTimer
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -83,6 +84,85 @@ LIGHT = {
 }
 
 
+def tint_icon(icon: QIcon, color: QColor, disabled_color: QColor = None) -> QIcon:
+    """Return a copy of ``icon`` painted in a single colour.
+
+    ``disabled_color`` is used for the disabled state (otherwise Qt would
+    generate it from ``color``, which can end up invisible on light buttons).
+    """
+    def paint(c):
+        pm = icon.pixmap(64, 64)
+        if pm.isNull():
+            return None
+        painter = QPainter(pm)
+        painter.setCompositionMode(QPainter.CompositionMode.CompositionMode_SourceIn)
+        painter.fillRect(pm.rect(), c)
+        painter.end()
+        return pm
+
+    normal = paint(color)
+    if normal is None:
+        return icon
+    result = QIcon()
+    result.addPixmap(normal, QIcon.Mode.Normal)
+    result.addPixmap(normal, QIcon.Mode.Active)
+    if disabled_color is not None:
+        result.addPixmap(paint(disabled_color), QIcon.Mode.Disabled)
+    return result
+
+
+def make_primary(button):
+    """Style a QPushButton as a primary (blue) button.
+
+    Besides the stylesheet variant, its icon is painted in the same colour as
+    the button text (and the muted colour when disabled), so it stays readable
+    in both light and dark themes.
+    """
+    button.setProperty("variant", "primary")
+    icon = button.icon()
+    # State lives in Qt properties (not Python attributes): the Python wrapper of
+    # a C++-created button (e.g. QDialogButtonBox's OK) can be recreated at any time.
+    if not icon.isNull() and button.property("fdmPkey") != str(icon.cacheKey()):
+        button.setIcon(
+            tint_icon(icon, theme_color("on_accent"), theme_color("faint"))
+        )
+        button.setProperty("fdmPkey", str(button.icon().cacheKey()))
+    return button
+
+
+def sync_default_button_icon(button):
+    """Dialog default buttons are blue (``:default``): keep their icon in the
+    text colour while they are the default, and restore it when they stop
+    being the default (the default follows focus inside a dialog)."""
+    if button.property("variant") == "primary":
+        return  # handled by make_primary
+    icon = button.icon()
+    if icon.isNull():
+        return
+    tinted_key = button.property("fdmDkey")  # str of the tinted icon's key, or None
+    if tinted_key and icon.cacheKey() == int(tinted_key):
+        original = button.property("fdmDorig")
+    else:
+        original = icon
+        button.setProperty("fdmDorig", icon)
+        button.setProperty("fdmDkey", None)
+        tinted_key = None
+    if button.isDefault():
+        if not tinted_key:
+            button.setIcon(
+                tint_icon(original, theme_color("on_accent"), theme_color("faint"))
+            )
+            button.setProperty("fdmDkey", str(button.icon().cacheKey()))
+    elif tinted_key:
+        button.setIcon(original)
+        button.setProperty("fdmDkey", None)
+
+
+def sync_dialog_icons(dialog):
+    for btn in dialog.findChildren(QPushButton):
+        sync_default_button_icon(btn)
+
+
 def is_dark_palette() -> bool:
     """True when the *currently applied* application palette is dark."""
     app = QApplication.instance()
@@ -122,17 +202,43 @@ class _PopupShaper(QObject):
         return False
 
 
+class _DialogIconSync(QObject):
+    """Applies sync_dialog_icons() to every dialog / message box when it is
+    shown and whenever focus moves inside it (the default button follows focus)."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        app = QApplication.instance()
+        if app is not None:
+            app.focusChanged.connect(self._on_focus_changed)
+
+    def _later(self, dialog):
+        QTimer.singleShot(0, lambda d=dialog: sync_dialog_icons(d))
+
+    def _on_focus_changed(self, old, new):
+        if new is not None and isinstance(new.window(), QDialog):
+            self._later(new.window())
+
+    def eventFilter(self, obj, event):
+        if event.type() == QEvent.Type.Show and isinstance(obj, QDialog):
+            self._later(obj)
+        return False
+
+
 class CustomProxyStyle(QProxyStyle):
     """Custom style for SpinBox arrows (follows the active palette)."""
 
     def __init__(self, *args):
         super().__init__(*args)
         self._popup_shaper = _PopupShaper(self)
+        self._dialog_icon_sync = _DialogIconSync(self)
 
     def polish(self, obj):
         if isinstance(obj, QPalette):
             return super().polish(obj)
         super().polish(obj)
+        if isinstance(obj, QDialog):
+            obj.installEventFilter(self._dialog_icon_sync)
         if hasattr(obj, "inherits") and obj.inherits("QComboBoxPrivateContainer"):
             # Transparent, shadow-less popup window + rounded mask (see _PopupShaper)
             obj.setWindowFlags(
@@ -757,6 +863,17 @@ QLabel#speed_label {
 
 /* ===== Check / radio ===== */
 QCheckBox, QRadioButton { spacing: 8px; }
+QCheckBox::indicator, QAbstractItemView::indicator { width: 18px; height: 18px; }
+QCheckBox::indicator:unchecked, QAbstractItemView::indicator:unchecked { image: url(@cb_off@); }
+QCheckBox::indicator:unchecked:hover, QAbstractItemView::indicator:unchecked:hover { image: url(@cb_off_hover@); }
+QCheckBox::indicator:unchecked:pressed { image: url(@cb_off_hover@); }
+QCheckBox::indicator:checked, QAbstractItemView::indicator:checked { image: url(@cb_on@); }
+QCheckBox::indicator:checked:hover, QAbstractItemView::indicator:checked:hover { image: url(@cb_on_hover@); }
+QCheckBox::indicator:checked:pressed { image: url(@cb_on_pressed@); }
+QCheckBox::indicator:indeterminate, QAbstractItemView::indicator:indeterminate { image: url(@cb_mixed@); }
+QCheckBox::indicator:unchecked:disabled, QAbstractItemView::indicator:unchecked:disabled { image: url(@cb_off_disabled@); }
+QCheckBox::indicator:checked:disabled, QAbstractItemView::indicator:checked:disabled { image: url(@cb_on_disabled@); }
+QCheckBox::indicator:indeterminate:disabled { image: url(@cb_on_disabled@); }
 
 /* ===== Group box ===== */
 QGroupBox {
@@ -856,9 +973,67 @@ def _make_arrow_icons(tokens: dict) -> dict:
     return result
 
 
+def _make_checkbox_icons(tokens: dict) -> dict:
+    """Paint the check-box indicators (QSS needs image files), once per theme."""
+    import tempfile
+    from PyQt6.QtGui import QPixmap, QPen
+    from PyQt6.QtCore import QPointF, QRectF
+
+    out_dir = os.path.join(tempfile.gettempdir(), "felfeldm-ui")
+    os.makedirs(out_dir, exist_ok=True)
+
+    # name -> (fill, border, mark colour or None, mark kind)
+    states = {
+        "cb_off": (tokens["input"], tokens["border_strong"], None, None),
+        "cb_off_hover": (tokens["input"], tokens["accent"], None, None),
+        "cb_off_disabled": (tokens["surface2"], tokens["border"], None, None),
+        "cb_on": (tokens["accent"], tokens["accent"], tokens["on_accent"], "check"),
+        "cb_on_hover": (tokens["accent_hover"], tokens["accent_hover"], tokens["on_accent"], "check"),
+        "cb_on_pressed": (tokens["accent_pressed"], tokens["accent_pressed"], tokens["on_accent"], "check"),
+        "cb_on_disabled": (tokens["border"], tokens["border"], tokens["faint"], "check"),
+        "cb_mixed": (tokens["accent"], tokens["accent"], tokens["on_accent"], "dash"),
+    }
+    result = {}
+    for key, (fill, border, mark, kind) in states.items():
+        tag = "".join(c.lstrip("#") for c in (fill, border, mark or "")) 
+        for scale, suffix in ((1, ""), (2, "@2x")):
+            size = 18 * scale
+            pm = QPixmap(size, size)
+            pm.fill(Qt.GlobalColor.transparent)
+            painter = QPainter(pm)
+            painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+
+            bw = 1.4 * scale
+            rect = QRectF(bw / 2 + 0.5 * scale, bw / 2 + 0.5 * scale,
+                          size - bw - 1 * scale, size - bw - 1 * scale)
+            painter.setPen(QPen(QColor(border), bw))
+            painter.setBrush(QColor(fill))
+            painter.drawRoundedRect(rect, 5 * scale, 5 * scale)
+
+            if kind:
+                pen = QPen(QColor(mark), 2.0 * scale)
+                pen.setCapStyle(Qt.PenCapStyle.RoundCap)
+                pen.setJoinStyle(Qt.PenJoinStyle.RoundJoin)
+                painter.setPen(pen)
+                painter.setBrush(Qt.BrushStyle.NoBrush)
+                if kind == "check":
+                    painter.drawPolyline([
+                        QPointF(5.2 * scale, 9.4 * scale),
+                        QPointF(7.9 * scale, 12.1 * scale),
+                        QPointF(13.0 * scale, 6.2 * scale),
+                    ])
+                else:
+                    painter.drawLine(QPointF(5.4 * scale, 9 * scale),
+                                     QPointF(12.6 * scale, 9 * scale))
+            painter.end()
+            pm.save(os.path.join(out_dir, f"{key}_{tag}{suffix}.png"))
+        result[key] = os.path.join(out_dir, f"{key}_{tag}.png").replace("\\", "/")
+    return result
+
+
 def build_stylesheet(tokens: dict) -> str:
     qss = QSS_TEMPLATE
-    tokens = {**tokens, **_make_arrow_icons(tokens)}
+    tokens = {**tokens, **_make_arrow_icons(tokens), **_make_checkbox_icons(tokens)}
     # longest keys first so e.g. @accent_soft@ is never clobbered by @accent@
     for key in sorted(tokens, key=len, reverse=True):
         qss = qss.replace(f"@{key}@", tokens[key])

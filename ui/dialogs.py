@@ -19,6 +19,7 @@ from PyQt6.QtCore import *
 from PyQt6.QtCore import QPointF, QRectF
 
 from utils.helpers import get_icon
+from utils.style import make_primary
 from utils.helpers import format_size
 from core.queue_model import Queue
 from datetime import datetime, time as dtime
@@ -666,6 +667,7 @@ class AddDownloadDialog(QDialog):
 
         ok_btn.setText("Download")
         ok_btn.setIcon(get_icon("download"))
+        make_primary(ok_btn)
         ok_btn.setMinimumWidth(140)
         ok_btn.setFixedHeight(34)
 
@@ -1351,6 +1353,7 @@ class YouTubeDownloadDialog(QDialog):
             "Add to Queue", QDialogButtonBox.ButtonRole.AcceptRole
         )
         self.download_btn.setIcon(get_icon("download"))
+        make_primary(self.download_btn)
         self.download_btn.setEnabled(False)
         self.download_btn.clicked.connect(self._on_add_to_queue)
 

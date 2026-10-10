@@ -38,7 +38,7 @@ from utils.helpers import (
     get_resource_path,
 )
 from core.local_server import LocalServer
-from utils.style import setup_style
+from utils.style import setup_style, make_primary
 from ui.splash import SplashScreen
 from core.proxy_manager import ProxyManager
 from core.rule_engine import expand_path
@@ -502,7 +502,7 @@ class MainWindow(QMainWindow):
         new_queue_btn = QPushButton(
             get_icon("list-add"), "New Queue", clicked=self._add_queue
         )
-        new_queue_btn.setProperty("variant", "primary")
+        make_primary(new_queue_btn)
         mgmt_lay.addWidget(new_queue_btn)
         mgmt_row = QHBoxLayout()
         mgmt_row.setSpacing(6)
@@ -656,8 +656,8 @@ class MainWindow(QMainWindow):
             return line
 
         self.btn_add = QPushButton(get_icon("download"), "Add Download")
-        self.btn_add.setProperty("variant", "primary")
         self.btn_add.setIconSize(icon_size)
+        make_primary(self.btn_add)
         self.btn_add.clicked.connect(self._add_download)
         tb_lay.addWidget(self.btn_add)
         tb_lay.addSpacing(4)
