@@ -591,7 +591,6 @@ class BackendWorker(QThread):
 
     @pyqtSlot(str)
     def _on_re_add_requested(self, download_id_or_gid: str):
-
         try:
             url = None
             save_path = None
@@ -660,6 +659,41 @@ class BackendWorker(QThread):
             }
             if speed_limit > 0:
                 options["max-download-limit"] = f"{speed_limit}K"
+
+            # ── Re-apply proxy for the re-added download ───────────────────
+            # Without this, a re-add after failure would lose the proxy that
+            # was originally configured (queue-level or per-download), because
+            # aria2 only remembers the global one across new addUri calls.
+            if self.proxy_manager is not None and matched_id:
+                proxy_dict = None
+                queue_name_for_proxy = None
+                for q in self.store.queues:
+                    if matched_id in q.downloads_info:
+                        queue_name_for_proxy = q.name
+                        break
+
+                try:
+                    proxy_dict = self.proxy_manager.get_effective_proxy_dict(
+                        download_id=matched_id,
+                        queue_name=queue_name_for_proxy,
+                    )
+                except Exception as e:
+                    print(
+                        f"⚠️ [Worker] Could not resolve proxy for re-add "
+                        f"{matched_id[:12]}: {e}"
+                    )
+                    proxy_dict = None
+
+                if proxy_dict:
+                    # aria2 takes a single URL for all-proxy; prefer https,
+                    # fall back to http (both are usually the same URL).
+                    proxy_url = proxy_dict.get("https") or proxy_dict.get("http")
+                    if proxy_url:
+                        options["all-proxy"] = proxy_url
+                        print(f"🌐 [Worker] Re-add with proxy: {proxy_url}")
+                else:
+                    print(f"🌐 [Worker] Re-add without proxy for {matched_id[:12]}")
+            # ────────────────────────────────────────────────────────────────
 
             new_gid = self.aria2.add_url(url, options)
             if new_gid:

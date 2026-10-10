@@ -58,8 +58,6 @@ class MainWindow(QMainWindow):
         "not found",
         "gone",
         "certificate",
-        "tls",
-        "ssl",
         "cert verify",
         "unsupported",
         "invalid url",
@@ -3278,6 +3276,9 @@ class MainWindow(QMainWindow):
         if not self._delete_files_with_confirmation(gids_to_remove):
             return
 
+         # Close any progress dialogs for these downloads first.
+        self._close_progress_dialogs_for(gids_to_remove)
+    
         # Now remove from UI + aria2
         for gid in gids_to_remove:
             try:
@@ -3377,6 +3378,9 @@ class MainWindow(QMainWindow):
             if not self._delete_files_with_confirmation(gids_to_remove):
                 return
 
+        # Close any progress dialogs for these downloads first.
+        self._close_progress_dialogs_for(gids_to_remove)
+        
         # Now remove from UI + aria2
         for gid in gids_to_remove:
             for q in self.store.queues:
@@ -4527,6 +4531,27 @@ class MainWindow(QMainWindow):
             except RuntimeError:
                 pass
 
+    def _close_progress_dialogs_for(self, gids: list) -> None:
+        """Close any open DownloadProgressDialog for the given download ids.
+
+        Called before removing a download from the UI/state so its progress
+        window never lingers around showing stale data.
+        """
+        for gid in gids:
+            if not gid:
+                continue
+            dialog = self._progress_dialogs.pop(gid, None)
+            if dialog is None:
+                continue
+            try:
+                dialog.close()
+            except RuntimeError:
+                pass
+            try:
+                dialog.deleteLater()
+            except RuntimeError:
+                pass
+
     def _pause_from_dialog(self, gid: str) -> None:
         if not gid or gid not in self._all_downloads:
             return
@@ -4558,7 +4583,7 @@ class MainWindow(QMainWindow):
 
         if real_status == "error":
             print(f"🔄 Retrying error download from dialog: {gid}")
-            self._retry_single_download(gid)
+            self._retry_single_download(gid, manual=True)
             return
 
         if real_status == "paused":
@@ -4587,7 +4612,12 @@ class MainWindow(QMainWindow):
             self._worker_remove(gid)
         except Exception:
             pass
+            
+        # Close the progress dialog (this method IS the cancel handler, so
+        # the dialog is still open — pop and close it here).
+        self._close_progress_dialogs_for([gid])
 
+        
         for q in self.store.queues:
             if gid in q.downloads:
                 q.downloads.remove(gid)
@@ -4620,6 +4650,9 @@ class MainWindow(QMainWindow):
 
         QApplication.processEvents()
 
+        # Close the progress dialog for this download.
+        self._close_progress_dialogs_for([gid])
+        
         for q in self.store.queues:
             if gid in q.downloads:
                 q.downloads.remove(gid)
@@ -4705,7 +4738,7 @@ class MainWindow(QMainWindow):
                 continue
 
             if status == "error":
-                self._retry_single_download(gid)
+                self._retry_single_download(gid, manual=True)
                 continue
 
             if status == "paused":
@@ -4717,7 +4750,16 @@ class MainWindow(QMainWindow):
         self._refresh_table()
         self._update_queue_buttons()
 
-    def _retry_single_download(self, gid: str) -> None:
+    def _retry_single_download(self, gid: str, manual: bool = False) -> None:
+        """Retry a download.
+
+        manual=True means the user explicitly clicked Retry: ask for
+        confirmation, then reset the automatic retry budget to 0 so the
+        download gets a fresh set of max_retry_attempts.
+
+        manual=False (called by the delayed-retry scheduler) keeps the
+        current count and enforces the cap silently.
+        """
         if not gid or gid not in self._all_downloads:
             return
 
@@ -4728,11 +4770,37 @@ class MainWindow(QMainWindow):
         max_retries = self.store.settings.get("max_retry_attempts", 5)
         error_count = self._to_int(self._all_downloads[gid].get("error_count", 0))
 
-        if error_count >= max_retries:
-            QMessageBox.warning(
+        if manual:
+            # Ask the user before resetting. Text makes it clear that the
+            # counter will start over, so they know what they're opting into.
+            reply = QMessageBox.question(
                 self,
-                "Max Retries Reached",
-                f"This download has failed {max_retries} times.",
+                "Retry Download",
+                "Do you want to try this download again?\n\n"
+                "The retry counter will be reset to 0, so automatic retries "
+                f"will be available again (up to {max_retries}).",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.Yes,
+            )
+            if reply != QMessageBox.StandardButton.Yes:
+                return
+
+            if error_count > 0:
+                print(
+                    f"🖐️ [Retry] Manual retry for {gid[:12]}: "
+                    f"resetting error_count {error_count} → 0"
+                )
+            self._all_downloads[gid]["error_count"] = 0
+            for q in self.store.queues:
+                if gid in q.downloads_info:
+                    q.downloads_info[gid]["error_count"] = 0
+                    break
+            error_count = 0
+        elif error_count >= max_retries:
+            # Automatic retry exhausted — stop silently, don't nag the user.
+            print(
+                f"⏹️ [Retry] Automatic retries exhausted for {gid[:12]} "
+                f"({error_count}/{max_retries})"
             )
             return
 
@@ -4748,7 +4816,6 @@ class MainWindow(QMainWindow):
 
         self._refresh_table()
         self._update_queue_buttons()
-
     def _re_add_download(self, gid: str) -> Optional[str]:
         if self.worker is None:
             return None
@@ -4794,7 +4861,7 @@ class MainWindow(QMainWindow):
         elif paused_gids:
             self._resume_selected()
         elif len(error_gids) == 1:
-            self._retry_single_download(error_gids[0])
+            self._retry_single_download(error_gids[0], manual=True)
 
     def _open_folder(self, gid: str) -> None:
         try:
@@ -4909,7 +4976,8 @@ class MainWindow(QMainWindow):
                     get_icon("view-refresh"),
                     "Retry",
                     lambda: self._retry_single_download(
-                        self.model.get_gid(rows[0].row())
+                        self.model.get_gid(rows[0].row()),
+                        manual=True
                     ),
                 )
 
@@ -4962,7 +5030,7 @@ class MainWindow(QMainWindow):
             menu.addAction(
                 get_icon("view-refresh"),
                 "Retry",
-                lambda: self._retry_single_download(gid),
+                lambda: self._retry_single_download(gid,manual=True),
             )
 
         menu.addSeparator()
@@ -5326,6 +5394,7 @@ class MainWindow(QMainWindow):
                         "download_type": download_type,
                         "matched_rule": matched_rule_name,
                         "rule_speed_limit": rule_speed,
+                        "proxy_url": info.get("proxy_url", ""), 
                     }
 
                     q.downloads_info[download_id]["status"] = final_status
@@ -5439,6 +5508,8 @@ class MainWindow(QMainWindow):
             == QMessageBox.StandardButton.No
         ):
             return
+        
+        self._close_progress_dialogs_for(completed_gids)
 
         for gid in completed_gids:
             try:
@@ -6011,6 +6082,10 @@ class MainWindow(QMainWindow):
             "error decoding",
             "eof from the server",
             "got eof",
+            "ssl/tls handshake failure",
+            "handshake failure",
+            "error in the pull function",
+            "pull function",
         ]
         if any(t in error_lower for t in transient_errors):
             print(

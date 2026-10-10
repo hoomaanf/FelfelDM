@@ -2802,7 +2802,7 @@ class DownloadProgressDialog(QDialog):
         main_layout.setSpacing(0)
         main_layout.setContentsMargins(0, 0, 0, 0)
 
-        # Tabs
+        # Tabs  
         self.tabs = QTabWidget()
         self.tabs.setDocumentMode(False)
         self.tabs.setUsesScrollButtons(False)
@@ -2936,7 +2936,6 @@ class DownloadProgressDialog(QDialog):
         err_layout.addWidget(self.error_retry_lbl)
 
         general_layout.addWidget(self.error_banner)
-        general_layout.addStretch()
 
         # Progress bar (bottom)
         general_layout.addSpacing(6)
@@ -3019,7 +3018,6 @@ class DownloadProgressDialog(QDialog):
             speed_hint.setStyleSheet("color: #4a4a5a;")
         speed_tab_layout.addWidget(speed_hint)
 
-        speed_tab_layout.addStretch()
 
         self.tabs.addTab(speed_tab, "Speed Limit")
 
@@ -3044,7 +3042,6 @@ class DownloadProgressDialog(QDialog):
         copy_row = QHBoxLayout()
         copy_row.addStretch()
         self.copy_tech_btn = QPushButton(get_icon("edit-copy"), "Copy")
-        self.copy_tech_btn.setFixedHeight(28)
         self.copy_tech_btn.setMinimumWidth(90)
         self.copy_tech_btn.clicked.connect(self._on_copy_technical)
         copy_row.addWidget(self.copy_tech_btn)
@@ -3098,8 +3095,8 @@ class DownloadProgressDialog(QDialog):
                 self._file_path = files[0]["path"]
             self.update_data(dl_data)
 
-        self.adjustSize()
-
+        
+        
     def _apply_styles(self):
         self.details_card.setStyleSheet("""
             QFrame#details_card {
