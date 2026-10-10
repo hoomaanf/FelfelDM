@@ -19,7 +19,7 @@ class SplashScreen(QSplashScreen):
             bg_style = "#f5f5f8"
             text_color = "#1e1e21"
             sub_color = "#6a6a70"
-            accent_color = "#3daee9"
+            accent_color = "#e85d4c"
 
         pixmap = QPixmap(480, 280)
         pixmap.fill(bg_color)
@@ -130,7 +130,7 @@ class SplashScreen(QSplashScreen):
 
             }}
             QProgressBar::chunk {{
-                background-color: #3daee9;
+                background-color: #e85d4c;
                 border-radius: 7px;
             }}
         """)
