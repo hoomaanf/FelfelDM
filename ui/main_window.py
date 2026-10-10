@@ -142,6 +142,7 @@ class MainWindow(QMainWindow):
 
         self.setWindowTitle("FelfelDM")
         self.setMinimumSize(1300, 680)
+        self.resize(1400,680)
 
         self.splash.update_status("Setting up queues...", 25)
         QApplication.processEvents()
