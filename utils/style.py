@@ -1,6 +1,7 @@
 import os
 import subprocess
-from PyQt6.QtWidgets import QApplication, QProxyStyle, QStyle, QStyleFactory
+from typing import Optional
+from PyQt6.QtWidgets import QApplication, QProxyStyle, QStyle, QStyleFactory, QStyleOptionButton
 from PyQt6.QtCore import Qt, QPoint, QObject, QEvent
 from PyQt6.QtGui import QPalette, QColor, QBrush, QIcon, QBitmap, QPainter
 from PyQt6.QtWidgets import QWidget, QDialog, QPushButton
@@ -32,10 +33,10 @@ DARK = {
     "accent_text": "#f5a099",
     "accent_soft": "rgba(232, 93, 76, 36)",
     "on_accent": "#1a0e0c",
-    "success": "#4caf7a",
-    "success_hover": "#5ec08b",
+    "success": "#3a8a5c",
+    "success_hover": "#4a9d6e",
     "success_text": "#7dd4a4",
-    "success_soft": "rgba(76, 175, 122, 32)",
+    "success_soft": "rgba(58, 138, 92, 32)",
     "warning": "#e0a04a",
     "warning_soft": "rgba(224, 160, 74, 32)",
     "danger": "#e85d4c",
@@ -68,10 +69,10 @@ LIGHT = {
     "accent_text": "#b83628",
     "accent_soft": "rgba(196, 60, 44, 12)",
     "on_accent": "#ffffff",
-    "success": "#1f7a4d",
-    "success_hover": "#268a58",
+    "success": "#1a5c3a",
+    "success_hover": "#206b48",
     "success_text": "#1a6b43",
-    "success_soft": "rgba(31, 122, 77, 16)",
+    "success_soft": "rgba(26, 92, 58, 16)",
     "warning": "#9a6b12",
     "warning_soft": "rgba(154, 107, 18, 16)",
     "danger": "#c43c2c",
@@ -110,57 +111,205 @@ def tint_icon(icon: QIcon, color: QColor, disabled_color: QColor = None) -> QIco
         result.addPixmap(paint(disabled_color), QIcon.Mode.Disabled)
     return result
 
+class _IconGuard(QObject):
+    """Keeps a painted icon's colour in sync no matter when the owning
+    widget calls setIcon().
+
+    The guard runs at paint time. It reads the button's current
+    ``variant`` property, ``isDefault()`` state and mouse-over state,
+    and re-tints the icon to match the colour the QSS applies to the
+    button text in that same state.
+
+    Rules (mirror QSS_TEMPLATE):
+        primary                → on_accent
+        success                → white
+        warning                → warning colour (dark text on hover)
+        danger                 → danger colour (white text on hover)
+        :default (no variant)  → on_accent
+    """
+
+    _P_ORIG = "fdmOrigIcon"     # untinted original of the CURRENT icon
+    _P_TINT = "fdmTintKey"      # str(cacheKey) of currently-applied tint
+    _P_MODE = "fdmTintMode"     # str describing the tint mode (see below)
+
+    def __init__(self, button: QPushButton):
+        super().__init__(button)
+        self._button = button
+
+    # ── helpers ───────────────────────────────────────────────────────
+    def _icon_key(self) -> Optional[str]:
+        icon = self._button.icon()
+        if icon.isNull():
+            return None
+        return str(icon.cacheKey())
+
+    def _is_our_tint(self) -> bool:
+        """True if the button's current icon is the tinted copy we made."""
+        current = self._icon_key()
+        return (
+            current is not None
+            and current == self._button.property(self._P_TINT)
+        )
+
+    def _store_original(self, icon: QIcon) -> None:
+        self._button.setProperty(self._P_ORIG, icon)
+
+    def _apply_tint(self, mode: str, color: QColor) -> None:
+        original = self._button.property(self._P_ORIG)
+        if original is None or original.isNull():
+            return
+        tinted = tint_icon(original, color, theme_color("faint"))
+        self._button.setIcon(tinted)
+        self._button.setProperty(self._P_TINT, self._icon_key())
+        self._button.setProperty(self._P_MODE, mode)
+
+    def _restore_original(self) -> None:
+        original = self._button.property(self._P_ORIG)
+        if original is None or original.isNull():
+            return
+        self._button.setIcon(original)
+        self._button.setProperty(self._P_TINT, None)
+        self._button.setProperty(self._P_MODE, None)
+
+    def _is_hovered(self) -> bool:
+        """Query the button's hover state via its style option.
+
+        underMouse() is sometimes one frame behind on Wayland, so we
+        ask the widget's current style option instead — that's the
+        same state QSS uses for :hover.
+        """
+        try:
+            opt = QStyleOptionButton()
+            self._button.initStyleOption(opt)
+            return bool(opt.state & QStyle.StateFlag.State_MouseOver)
+        except Exception:
+            return self._button.underMouse()
+
+    # ── public entry point ────────────────────────────────────────────
+    def refresh(self) -> None:
+        try:
+            icon = self._button.icon()
+            if icon.isNull():
+                return
+
+            variant = self._button.property("variant")
+            is_primary = variant == "primary"
+            is_success = variant == "success"
+            is_warning = variant == "warning"
+            is_danger = variant == "danger"
+            is_default = self._button.isDefault()
+            hovered = self._is_hovered()
+
+            # Did the dialog swap the icon behind our back?
+            if not self._is_our_tint():
+                # Fresh icon from the dialog — remember it as the new original.
+                self._store_original(icon)
+                self._button.setProperty(self._P_TINT, None)
+                self._button.setProperty(self._P_MODE, None)
+
+            # Decide which tint (if any) this button should have right now.
+            if is_primary:
+                target_mode = "primary"
+                target_color = theme_color("on_accent")
+
+            elif is_success:
+                # Success is always white text, hover doesn't change it.
+                target_mode = "success"
+                target_color = QColor("#ffffff")
+
+            elif is_warning:
+                # Normal: warning-coloured text on soft background.
+                # Hover: dark text on solid warning background.
+                if hovered:
+                    target_mode = "warning-hover"
+                    target_color = QColor("#1b1e25")
+                else:
+                    target_mode = "warning"
+                    target_color = theme_color("warning")
+
+            elif is_danger:
+                # Normal: danger-coloured text on soft background.
+                # Hover: white text on solid danger background.
+                if hovered:
+                    target_mode = "danger-hover"
+                    target_color = QColor("#ffffff")
+                else:
+                    target_mode = "danger"
+                    target_color = theme_color("danger")
+
+            elif is_default:
+                target_mode = "default"
+                target_color = theme_color("on_accent")
+
+            else:
+                target_mode = None
+                target_color = None
+
+            if target_mode is None:
+                if self._is_our_tint():
+                    self._restore_original()
+                return
+
+            # Only re-tint if our stored tint is missing or the mode changed.
+            already = (
+                self._is_our_tint()
+                and self._button.property(self._P_MODE) == target_mode
+            )
+            if not already:
+                self._apply_tint(target_mode, target_color)
+
+        except RuntimeError:
+            pass
+
+    # ── event filter ──────────────────────────────────────────────────
+    def eventFilter(self, obj, event):
+        et = event.type()
+        # Paint: fires right before the button is drawn — the perfect
+        # moment to correct the icon without any visible flicker.
+        # Enter/Leave: fire as soon as hover state changes, so the
+        # guard re-tints in the same event loop turn (avoids a 1-frame
+        # lag on slow compositors).
+        if et in (QEvent.Type.Paint, QEvent.Type.Enter, QEvent.Type.Leave):
+            self.refresh()
+        return False
+    
+def _install_icon_guard(button: QPushButton) -> None:
+    """Attach (once) an _IconGuard to `button`."""
+    if not isinstance(button, QPushButton):
+        return
+    if button.property("fdmGuardInstalled"):
+        return
+    guard = _IconGuard(button)
+    button.installEventFilter(guard)
+    # Keep a reference on the button so Python doesn't GC the filter.
+    button.setProperty("fdmGuardInstalled", True)
+    button._fdm_icon_guard = guard  # noqa: SLF001
 
 def make_primary(button):
-    """Style a QPushButton as a primary (blue) button.
+    """Style a QPushButton as a primary button.
 
-    Besides the stylesheet variant, its icon is painted in the same colour as
-    the button text (and the muted colour when disabled), so it stays readable
-    in both light and dark themes.
+    The icon tinting is handled by the _IconGuard installed via polish();
+    here we just set the variant property and make sure a guard exists so
+    the first paint is already correct.
     """
     button.setProperty("variant", "primary")
-    icon = button.icon()
-    # State lives in Qt properties (not Python attributes): the Python wrapper of
-    # a C++-created button (e.g. QDialogButtonBox's OK) can be recreated at any time.
-    if not icon.isNull() and button.property("fdmPkey") != str(icon.cacheKey()):
-        button.setIcon(
-            tint_icon(icon, theme_color("on_accent"), theme_color("faint"))
-        )
-        button.setProperty("fdmPkey", str(button.icon().cacheKey()))
+    _install_icon_guard(button)
     return button
 
 
 def sync_default_button_icon(button):
-    """Dialog default buttons are blue (``:default``): keep their icon in the
-    text colour while they are the default, and restore it when they stop
-    being the default (the default follows focus inside a dialog)."""
-    if button.property("variant") == "primary":
-        return  # handled by make_primary
-    icon = button.icon()
-    if icon.isNull():
-        return
-    tinted_key = button.property("fdmDkey")  # str of the tinted icon's key, or None
-    if tinted_key and icon.cacheKey() == int(tinted_key):
-        original = button.property("fdmDorig")
-    else:
-        original = icon
-        button.setProperty("fdmDorig", icon)
-        button.setProperty("fdmDkey", None)
-        tinted_key = None
-    if button.isDefault():
-        if not tinted_key:
-            button.setIcon(
-                tint_icon(original, theme_color("on_accent"), theme_color("faint"))
-            )
-            button.setProperty("fdmDkey", str(button.icon().cacheKey()))
-    elif tinted_key:
-        button.setIcon(original)
-        button.setProperty("fdmDkey", None)
+    """No-op placeholder kept for compatibility.
 
-
+    Icon tinting is now handled by _IconGuard, which runs at paint time
+    and follows the default-button state automatically. This function is
+    kept so existing callers don't break.
+    """
+    _install_icon_guard(button)
+    
 def sync_dialog_icons(dialog):
+    """Install icon guards on every push button inside `dialog`."""
     for btn in dialog.findChildren(QPushButton):
-        sync_default_button_icon(btn)
+        _install_icon_guard(btn)
 
 
 def is_dark_palette() -> bool:
@@ -201,46 +350,25 @@ class _PopupShaper(QObject):
                 obj.setMask(mask)
         return False
 
-
-class _DialogIconSync(QObject):
-    """Applies sync_dialog_icons() to every dialog / message box when it is
-    shown and whenever focus moves inside it (the default button follows focus)."""
-
-    def __init__(self, parent=None):
-        super().__init__(parent)
-        app = QApplication.instance()
-        if app is not None:
-            app.focusChanged.connect(self._on_focus_changed)
-
-    def _later(self, dialog):
-        QTimer.singleShot(0, lambda d=dialog: sync_dialog_icons(d))
-
-    def _on_focus_changed(self, old, new):
-        if new is not None and isinstance(new.window(), QDialog):
-            self._later(new.window())
-
-    def eventFilter(self, obj, event):
-        if event.type() == QEvent.Type.Show and isinstance(obj, QDialog):
-            self._later(obj)
-        return False
-
-
 class CustomProxyStyle(QProxyStyle):
     """Custom style for SpinBox arrows (follows the active palette)."""
 
     def __init__(self, *args):
         super().__init__(*args)
         self._popup_shaper = _PopupShaper(self)
-        self._dialog_icon_sync = _DialogIconSync(self)
 
     def polish(self, obj):
         if isinstance(obj, QPalette):
             return super().polish(obj)
         super().polish(obj)
+        if isinstance(obj, QPushButton):
+            _install_icon_guard(obj)
         if isinstance(obj, QDialog):
-            obj.installEventFilter(self._dialog_icon_sync)
+            # Install guards on any buttons already in the dialog,
+            # and on any created later.
+            for btn in obj.findChildren(QPushButton):
+                _install_icon_guard(btn)
         if hasattr(obj, "inherits") and obj.inherits("QComboBoxPrivateContainer"):
-            # Transparent, shadow-less popup window + rounded mask (see _PopupShaper)
             obj.setWindowFlags(
                 Qt.WindowType.Popup
                 | Qt.WindowType.FramelessWindowHint
@@ -248,7 +376,6 @@ class CustomProxyStyle(QProxyStyle):
             )
             obj.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
             obj.installEventFilter(self._popup_shaper)
-
     def _draw_spin_arrow(self, option, painter, widget, up: bool):
         pal = widget.palette() if widget is not None else QApplication.palette()
         base = pal.color(QPalette.ColorRole.Button)
@@ -485,6 +612,38 @@ QToolTip {
 QWidget#sidebar {
     background-color: @surface@;
     border-right: 1px solid @border@;
+}
+QFrame#queue_card {
+    background-color: @surface2@;
+    border: 1px solid @border@;
+    border-radius: 12px;
+}
+QFrame#queue_card QLabel { background: transparent; }
+QFrame#sidebar_separator {
+    background-color: @border@;
+    border: none;
+}
+
+/* ===== Details card (info panel) ===== */
+QFrame#details_card {
+    background-color: @surface2@;
+    border: 1px solid @border@;
+    border-radius: 10px;
+}
+QFrame#details_card QLabel {
+    background: transparent;
+    font-size: 12px;
+}
+
+QPushButton[tool="true"] {
+    min-height: 32px;
+    max-height: 32px;
+    padding: 0;
+}
+QPushButton[compact="true"] {
+    padding: 4px 14px;
+    min-height: 26px;
+    border-radius: 8px;
 }
 QLabel#section_title {
     color: @muted@;

@@ -678,7 +678,7 @@ class AddDownloadDialog(QDialog):
         cancel_btn = self.btn_box.button(QDialogButtonBox.StandardButton.Cancel)
 
         ok_btn.setText("Download")
-        ok_btn.setIcon(get_icon("download"))
+        ok_btn.setIcon(get_icon("edit-download"))
         make_primary(ok_btn)
         ok_btn.setMinimumWidth(140)
         ok_btn.setFixedHeight(34)
@@ -1447,7 +1447,7 @@ class YouTubeDownloadDialog(QDialog):
         self.download_btn = self.btn_box.addButton(
             "Add to Queue", QDialogButtonBox.ButtonRole.AcceptRole
         )
-        self.download_btn.setIcon(get_icon("download"))
+        self.download_btn.setIcon(get_icon("edit-download"))
         make_primary(self.download_btn)
         self.download_btn.setEnabled(False)
         self.download_btn.clicked.connect(self._on_add_to_queue)

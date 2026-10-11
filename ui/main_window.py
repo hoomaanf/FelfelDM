@@ -140,7 +140,7 @@ class MainWindow(QMainWindow):
 
         self.setWindowTitle("FelfelDM")
         self.setMinimumSize(1300, 680)
-        self.resize(1400,680)
+        self.resize(1400, 680)
 
         self.splash.update_status("Setting up queues...", 25)
         QApplication.processEvents()
@@ -431,7 +431,7 @@ class MainWindow(QMainWindow):
 
         splitter.addWidget(sidebar)
         splitter.addWidget(main_area)
-        splitter.setSizes([230, 840])
+        splitter.setSizes([260, 840])
 
         root.addWidget(splitter)
 
@@ -441,105 +441,129 @@ class MainWindow(QMainWindow):
         self._update_queue_buttons()
 
     def _build_sidebar(self) -> QWidget:
+        """Sidebar layout (top to bottom):
+
+        header (title + New)  →  queue list  →  tool row for the selected queue
+        →  "queue card" (state, limits, schedule, Start / Pause)  →  connection footer
+        """
         sidebar = QWidget()
         sidebar.setObjectName("sidebar")
-        sidebar.setMinimumWidth(210)
-        sidebar.setMaximumWidth(350)
+        sidebar.setMinimumWidth(230)
+        sidebar.setMaximumWidth(360)
         sb_lay = QVBoxLayout(sidebar)
-        sb_lay.setContentsMargins(12, 14, 12, 12)
-        sb_lay.setSpacing(8)
+        sb_lay.setContentsMargins(14, 16, 14, 12)
+        sb_lay.setSpacing(10)
 
+        # ── Header: title + New queue ──────────────────────────────
+        header_lay = QHBoxLayout()
+        header_lay.setContentsMargins(2, 0, 0, 0)
+        header_lay.setSpacing(8)
         queues_title = QLabel("Queues")
         queues_title.setObjectName("section_title")
-        sb_lay.addWidget(queues_title)
+        header_lay.addWidget(queues_title)
+        header_lay.addStretch()
+        new_queue_btn = QPushButton(
+            get_icon("list-add"), "New", clicked=self._add_queue
+        )
+        new_queue_btn.setToolTip("Create a new queue")
+        new_queue_btn.setProperty("compact", True)
+        make_primary(new_queue_btn)
+        header_lay.addWidget(new_queue_btn)
+        sb_lay.addLayout(header_lay)
 
+        # ── Queue list ─────────────────────────────────────────────
         self.queue_list = QListWidget()
+        self.queue_list.setFrameShape(QFrame.Shape.NoFrame)
+        self.queue_list.setSpacing(2)
+        self.queue_list.setVerticalScrollMode(
+            QAbstractItemView.ScrollMode.ScrollPerPixel
+        )
         self.queue_list.currentRowChanged.connect(self._on_queue_changed)
-        sb_lay.addWidget(self.queue_list)
+        sb_lay.addWidget(self.queue_list, 1)
 
+        # ── Tools for the selected queue (icon buttons) ────────────
+        tools_lay = QHBoxLayout()
+        tools_lay.setSpacing(6)
+
+        def tool_button(icon_name, fallback_text, tooltip, slot):
+            btn = QPushButton()
+            icon = get_icon(icon_name)
+            if icon.isNull():
+                btn.setText(fallback_text)
+            else:
+                btn.setIcon(icon)
+            btn.setToolTip(tooltip)
+            btn.setProperty("tool", True)
+            btn.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+            btn.clicked.connect(slot)
+            tools_lay.addWidget(btn)
+            return btn
+
+        self.move_up_btn = tool_button(
+            "go-up", "↑", "Move queue up", self._move_queue_up
+        )
+        self.move_down_btn = tool_button(
+            "go-down", "↓", "Move queue down", self._move_queue_down
+        )
+        tools_lay.addSpacing(6)
+        tool_button("configure", "⚙", "Queue settings", self._edit_queue)
+        delete_queue_btn = tool_button(
+            "list-remove", "✕", "Delete queue", self._delete_queue
+        )
+        delete_queue_btn.setProperty("variant", "danger")
+        sb_lay.addLayout(tools_lay)
+
+        # ── Queue card: state + limits + schedule + Start/Pause ────
+        card = QFrame()
+        card.setObjectName("queue_card")
+        card_lay = QVBoxLayout(card)
+        card_lay.setContentsMargins(14, 12, 14, 14)
+        card_lay.setSpacing(6)
+
+        self.queue_status_lbl = QLabel("⏸ Paused")
+        self.queue_status_lbl.setStyleSheet(
+            "color: #f39c12; font-weight: bold; font-size: 14px;"
+        )
+        card_lay.addWidget(self.queue_status_lbl)
+
+        self.speed_limit_lbl = QLabel("")
+        self.speed_limit_lbl.setStyleSheet("color: #f39c12; font-size: 11px;")
+        card_lay.addWidget(self.speed_limit_lbl)
+
+        self.schedule_status_lbl = QLabel("")
+        self.schedule_status_lbl.setStyleSheet("color: #3498db; font-size: 11px;")
+        self.schedule_status_lbl.setWordWrap(True)
+        card_lay.addWidget(self.schedule_status_lbl)
+
+        card_lay.addSpacing(4)
         btn_layout = QHBoxLayout()
-        btn_layout.setSpacing(6)
+        btn_layout.setSpacing(8)
         self.start_queue_btn = QPushButton(get_icon("media-playback-start"), "Start")
         self.start_queue_btn.setObjectName("start_btn")
+        self.start_queue_btn.setProperty("variant", "success")
+        self.start_queue_btn.setMinimumHeight(36)
         self.start_queue_btn.clicked.connect(self._start_current_queue)
         btn_layout.addWidget(self.start_queue_btn)
 
         self.pause_queue_btn = QPushButton(get_icon("media-playback-pause"), "Pause")
         self.pause_queue_btn.setObjectName("pause_btn")
+        self.pause_queue_btn.setProperty("variant", "warning")
+        self.pause_queue_btn.setMinimumHeight(36)
         self.pause_queue_btn.clicked.connect(self._pause_current_queue)
         btn_layout.addWidget(self.pause_queue_btn)
-        sb_lay.addLayout(btn_layout)
+        card_lay.addLayout(btn_layout)
+        sb_lay.addWidget(card)
 
-        move_layout = QHBoxLayout()
-        move_layout.setSpacing(6)
-
-        self.move_up_btn = QPushButton()
-        self.move_up_btn.setIcon(get_icon("go-up"))
-        self.move_up_btn.setToolTip("Move queue up")
-        self.move_up_btn.setSizePolicy(
-            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed
-        )
-        self.move_up_btn.setFixedHeight(30)
-        self.move_up_btn.clicked.connect(self._move_queue_up)
-        move_layout.addWidget(self.move_up_btn)
-
-        self.move_down_btn = QPushButton()
-        self.move_down_btn.setIcon(get_icon("go-down"))
-        self.move_down_btn.setToolTip("Move queue down")
-        self.move_down_btn.setSizePolicy(
-            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed
-        )
-        self.move_down_btn.setFixedHeight(30)
-        self.move_down_btn.clicked.connect(self._move_queue_down)
-        move_layout.addWidget(self.move_down_btn)
-
-        sb_lay.addLayout(move_layout)
-
-        mgmt_lay = QVBoxLayout()
-        mgmt_lay.setSpacing(6)
-        new_queue_btn = QPushButton(
-            get_icon("list-add"), "New Queue", clicked=self._add_queue
-        )
-        make_primary(new_queue_btn)
-        mgmt_lay.addWidget(new_queue_btn)
-        mgmt_row = QHBoxLayout()
-        mgmt_row.setSpacing(6)
-        mgmt_row.addWidget(
-            QPushButton(get_icon("configure"), "Settings", clicked=self._edit_queue)
-        )
-        delete_queue_btn = QPushButton(
-            get_icon("list-remove"), "Delete", clicked=self._delete_queue
-        )
-        delete_queue_btn.setProperty("variant", "danger")
-        mgmt_row.addWidget(delete_queue_btn)
-        mgmt_lay.addLayout(mgmt_row)
-        sb_lay.addLayout(mgmt_lay)
-
-        sb_lay.addSpacing(12)
-
-        status_group = QGroupBox("Status")
-        status_lay = QVBoxLayout(status_group)
-        status_lay.setSpacing(4)
-
-        self.queue_status_lbl = QLabel("⏸ Paused")
-        self.queue_status_lbl.setStyleSheet("color: #f39c12; font-weight: bold;")
-        status_lay.addWidget(self.queue_status_lbl)
-
-        self.speed_limit_lbl = QLabel("")
-        self.speed_limit_lbl.setStyleSheet("color: #f39c12; font-size: 11px;")
-        status_lay.addWidget(self.speed_limit_lbl)
+        # ── Footer: connection status ──────────────────────────────
+        separator = QFrame()
+        separator.setObjectName("sidebar_separator")
+        separator.setFixedHeight(1)
+        sb_lay.addWidget(separator)
 
         self.status_lbl = QLabel("● Disconnected")
         self.status_lbl.setStyleSheet("color: #e74c3c; font-weight: bold;")
-        status_lay.addWidget(self.status_lbl)
-
-        self.schedule_status_lbl = QLabel("")
-        self.schedule_status_lbl.setStyleSheet("color: #3498db; font-size: 11px;")
-        self.schedule_status_lbl.setWordWrap(True)
-        status_lay.addWidget(self.schedule_status_lbl)
-
-        sb_lay.addWidget(status_group)
-        sb_lay.addStretch()
+        self.status_lbl.setContentsMargins(2, 0, 0, 0)
+        sb_lay.addWidget(self.status_lbl)
         return sidebar
 
     def _build_main_area(self) -> QWidget:
@@ -653,7 +677,7 @@ class MainWindow(QMainWindow):
             line.setFixedHeight(22)
             return line
 
-        self.btn_add = QPushButton(get_icon("download"), "Add Download")
+        self.btn_add = QPushButton(get_icon("edit-download"), "Add Download")
         self.btn_add.setIconSize(icon_size)
         make_primary(self.btn_add)
         self.btn_add.clicked.connect(self._add_download)
@@ -743,8 +767,7 @@ class MainWindow(QMainWindow):
         self.progress_bar = QProgressBar()
         self.progress_bar.setMaximum(100)
         self.progress_bar.setValue(0)
-        
-    
+
         self.statusBar().setSizeGripEnabled(False)
         self.statusBar().addPermanentWidget(self.progress_bar)
         self.progress_bar.setTextVisible(True)
@@ -764,7 +787,7 @@ class MainWindow(QMainWindow):
         mb = self.menuBar()
 
         file_menu = mb.addMenu("&File")
-        add_action = QAction(get_icon("download"), "Add Download", self)
+        add_action = QAction(get_icon("edit-download"), "Add Download", self)
         add_action.triggered.connect(self._add_download)
         add_action.setShortcut("Ctrl+N")
         file_menu.addAction(add_action)
@@ -846,7 +869,9 @@ class MainWindow(QMainWindow):
     def _start_backend(self) -> None:
         print("🚀 Starting BackendWorker...")
 
-        self.worker = BackendWorker(self.aria2, self.store, proxy_manager=self.proxy_manager)
+        self.worker = BackendWorker(
+            self.aria2, self.store, proxy_manager=self.proxy_manager
+        )
 
         self.worker.stats_updated.connect(self._on_stats_received)
         self.worker.aria2_error.connect(self._on_aria2_error)
@@ -2878,115 +2903,165 @@ class MainWindow(QMainWindow):
         self._refresh_table()
 
     def _build_details_panel(self) -> QWidget:
-        """Collapsible details panel for selected download"""
         panel = QWidget()
         panel.setObjectName("details_panel")
         panel.setMinimumHeight(100)
-        panel.setMaximumHeight(180)
+        panel.setMaximumHeight(190)
         panel.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
 
         lay = QHBoxLayout(panel)
         lay.setContentsMargins(16, 10, 16, 10)
         lay.setSpacing(16)
 
+        # ── Empty-state label (shown when nothing is selected) ───────────
         self.empty_label = QLabel("Select a download to view details")
         self.empty_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.empty_label.setObjectName("details_empty")
         self.empty_label.setVisible(True)
         lay.addWidget(self.empty_label)
 
+        # ── Details container ───────────────────────────────────────────
         self.details_container = QWidget()
         self.details_container.setVisible(False)
         details_lay = QHBoxLayout(self.details_container)
         details_lay.setContentsMargins(0, 0, 0, 0)
         details_lay.setSpacing(16)
 
-        info_widget = QWidget()
-        info_lay = QGridLayout(info_widget)
-        info_lay.setSpacing(6)
-        info_lay.setContentsMargins(0, 0, 0, 0)
+        # ─────────────────────────────────────────────────────────────
+        # Left column: download info (card) — takes most of the width
+        # ─────────────────────────────────────────────────────────────
+        self.info_card = QFrame()
+        self.info_card.setObjectName("details_card")
+        self.info_card.setFrameShape(QFrame.Shape.NoFrame)
 
-        labels = [
-            ("text-x-generic", "File:", "name", 0),
-            ("package-x-generic", "Size:", "size", 1),
-            ("emblem-downloads", "Downloaded:", "downloaded", 2),
-            ("dialog-information", "Status:", "status", 3),
-            ("dialog-warning", "Reason:", "reason", 4),
-            ("folder", "Path:", "path", 5),
+        card_lay = QVBoxLayout(self.info_card)
+        card_lay.setContentsMargins(16, 12, 16, 12)
+        card_lay.setSpacing(8)
+
+        info_grid = QGridLayout()
+        info_grid.setSpacing(8)
+        info_grid.setHorizontalSpacing(14)
+        info_grid.setContentsMargins(0, 0, 0, 0)
+        info_grid.setColumnStretch(0, 0)   # icon
+        info_grid.setColumnStretch(1, 0)   # label
+        info_grid.setColumnStretch(2, 1)   # value
+
+        # Icon name candidates: first themed icon that resolves wins.
+        rows = [
+            ("File",       "name",       ["text-x-generic", "document-new"]),
+            ("Size",       "size",       ["drive-harddisk", "drive-harddisk-symbolic"]),
+            ("Downloaded", "downloaded", ["download", "go-bottom", "arrow-down"]),
+            ("Status",     "status",     ["dialog-information", "emblem-info"]),
+            ("Path",       "path",       ["folder", "folder-open"]),
+            ("Reason",     "reason",     ["dialog-warning", "emblem-warning"]),
         ]
 
         self.detail_labels = {}
-        for icon_name, label_text, key, row in labels:
+        self.detail_icon_labels = {}
 
+        for row_idx, (label_text, key, icon_candidates) in enumerate(rows):
+            # -- icon --
             icon_label = QLabel()
-            icon = get_icon(icon_name)
-            if not icon.isNull():
-                icon_label.setPixmap(icon.pixmap(16, 16))
+            icon_label.setFixedSize(20, 20)
+            icon_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            icon = self._resolve_theme_icon(icon_candidates)
+            if icon is not None:
+                icon_label.setPixmap(icon.pixmap(18, 18))
             else:
+                icon_label.setText("•")
+                icon_label.setStyleSheet("color: palette(mid); font-size: 18px;")
+            info_grid.addWidget(
+                icon_label, row_idx, 0, alignment=Qt.AlignmentFlag.AlignVCenter
+            )
+            self.detail_icon_labels[key] = icon_label
 
-                icon_label.setText("📄")
-                icon_label.setStyleSheet("font-size: 14px;")
-            info_lay.addWidget(
-                icon_label, row, 0, alignment=Qt.AlignmentFlag.AlignCenter
+            # -- label (bolder, slightly larger) --
+            lbl = QLabel(f"{label_text}:")
+            lbl.setProperty("role", "muted")
+            lbl.setMinimumWidth(96)
+            info_grid.addWidget(
+                lbl, row_idx, 1, alignment=Qt.AlignmentFlag.AlignVCenter
             )
 
-            label = QLabel(label_text)
-            label.setProperty("role", "muted")
-            info_lay.addWidget(label, row, 1)
+            # -- value (larger, selectable) --
+            val = QLabel("—")
+            val.setObjectName(f"detail_{key}")
+            val.setProperty("role", "value")
+            val.setTextInteractionFlags(
+                Qt.TextInteractionFlag.TextSelectableByMouse
+            )
+            val.setWordWrap(False)
+            info_grid.addWidget(
+                val, row_idx, 2, alignment=Qt.AlignmentFlag.AlignVCenter
+            )
+            self.detail_labels[key] = val
 
-            value = QLabel("—")
-            value.setObjectName(f"detail_{key}")
-            value.setProperty("role", "value")
-            value.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
-            info_lay.addWidget(value, row, 2)
-            self.detail_labels[key] = value
+        card_lay.addLayout(info_grid)
+        card_lay.addStretch()
 
-        details_lay.addWidget(info_widget, stretch=3)
+        # Give the info card much more room than the action column.
+        details_lay.addWidget(self.info_card, stretch=5)
 
+        # ─────────────────────────────────────────────────────────────
+        # Right column: compact action buttons (single column, small)
+        # ─────────────────────────────────────────────────────────────
         action_widget = QWidget()
-        action_lay = QGridLayout(action_widget)
+        action_lay = QVBoxLayout(action_widget)
         action_lay.setSpacing(6)
         action_lay.setContentsMargins(0, 0, 0, 0)
 
-        self.detail_pause_btn = QPushButton(get_icon("media-playback-pause"), "Pause")
-        self.detail_pause_btn.clicked.connect(self._toggle_pause_resume)
-        self.detail_pause_btn.setMinimumWidth(110)
-        self.detail_pause_btn.setFixedHeight(34)
-        self.detail_pause_btn.setEnabled(False)
-        action_lay.addWidget(self.detail_pause_btn, 0, 0)
+        def _mk_action(icon_name, text, slot):
+            btn = QPushButton(get_icon(icon_name), text)
+            btn.clicked.connect(slot)
+            btn.setMinimumHeight(30)
+            btn.setMaximumHeight(30)
+            btn.setMinimumWidth(120)
+            btn.setMaximumWidth(120)
+            btn.setIconSize(QSize(14, 14))
+            btn.setEnabled(False)
+            btn.setProperty("compact", "true")
+            return btn
 
-        self.detail_cancel_btn = QPushButton(get_icon("edit-delete"), "Cancel")
-        self.detail_cancel_btn.clicked.connect(self._remove_selected)
+        self.detail_pause_btn = _mk_action(
+            "media-playback-pause", "Pause", self._toggle_pause_resume
+        )
+        action_lay.addWidget(self.detail_pause_btn)
+
+        self.detail_cancel_btn = _mk_action(
+            "edit-delete", "Cancel", self._remove_selected
+        )
         self.detail_cancel_btn.setProperty("variant", "danger")
-        self.detail_cancel_btn.setMinimumWidth(110)
-        self.detail_cancel_btn.setFixedHeight(34)
-        self.detail_cancel_btn.setEnabled(False)
-        action_lay.addWidget(self.detail_cancel_btn, 0, 1)
+        action_lay.addWidget(self.detail_cancel_btn)
 
-        self.detail_open_btn = QPushButton(get_icon("folder"), "Open Folder")
-        self.detail_open_btn.clicked.connect(
-            lambda: self._open_folder(self._selected_gid())
+        self.detail_open_btn = _mk_action(
+            "folder", "Open Folder",
+            lambda: self._open_folder(self._selected_gid()),
         )
-        self.detail_open_btn.setMinimumWidth(110)
-        self.detail_open_btn.setFixedHeight(34)
-        self.detail_open_btn.setEnabled(False)
-        action_lay.addWidget(self.detail_open_btn, 1, 0)
+        action_lay.addWidget(self.detail_open_btn)
 
-        self.detail_copy_btn = QPushButton(get_icon("edit-copy"), "Copy URL")
-        self.detail_copy_btn.clicked.connect(
-            lambda: self._copy_link(self._selected_gid())
+        self.detail_copy_btn = _mk_action(
+            "edit-copy", "Copy URL",
+            lambda: self._copy_link(self._selected_gid()),
         )
-        self.detail_copy_btn.setMinimumWidth(110)
-        self.detail_copy_btn.setFixedHeight(34)
-        self.detail_copy_btn.setEnabled(False)
-        action_lay.addWidget(self.detail_copy_btn, 1, 1)
+        action_lay.addWidget(self.detail_copy_btn)
 
-        action_lay.setRowStretch(2, 1)
-        details_lay.addWidget(action_widget, stretch=1)
+        action_lay.addStretch()
+
+        # Give the action column just enough room — no more.
+        details_lay.addWidget(action_widget, stretch=0)
 
         lay.addWidget(self.details_container)
-
         return panel
+   
+    def _resolve_theme_icon(self, candidates: list):
+        """Return the first QIcon from `candidates` that resolves in the
+        current theme, or None if none of them exist. Used to avoid relying
+        on a single icon name that may be missing in some icon themes."""
+        for name in candidates:
+            icon = get_icon(name)
+            if icon is not None and not icon.isNull():
+                return icon
+        return None
 
     def _refresh_empty_state(self, *args) -> None:
         """Show a hint over the table while it has no rows."""
@@ -3276,9 +3351,9 @@ class MainWindow(QMainWindow):
         if not self._delete_files_with_confirmation(gids_to_remove):
             return
 
-         # Close any progress dialogs for these downloads first.
+        # Close any progress dialogs for these downloads first.
         self._close_progress_dialogs_for(gids_to_remove)
-    
+
         # Now remove from UI + aria2
         for gid in gids_to_remove:
             try:
@@ -3380,7 +3455,7 @@ class MainWindow(QMainWindow):
 
         # Close any progress dialogs for these downloads first.
         self._close_progress_dialogs_for(gids_to_remove)
-        
+
         # Now remove from UI + aria2
         for gid in gids_to_remove:
             for q in self.store.queues:
@@ -4612,12 +4687,11 @@ class MainWindow(QMainWindow):
             self._worker_remove(gid)
         except Exception:
             pass
-            
+
         # Close the progress dialog (this method IS the cancel handler, so
         # the dialog is still open — pop and close it here).
         self._close_progress_dialogs_for([gid])
 
-        
         for q in self.store.queues:
             if gid in q.downloads:
                 q.downloads.remove(gid)
@@ -4652,7 +4726,7 @@ class MainWindow(QMainWindow):
 
         # Close the progress dialog for this download.
         self._close_progress_dialogs_for([gid])
-        
+
         for q in self.store.queues:
             if gid in q.downloads:
                 q.downloads.remove(gid)
@@ -4816,6 +4890,7 @@ class MainWindow(QMainWindow):
 
         self._refresh_table()
         self._update_queue_buttons()
+
     def _re_add_download(self, gid: str) -> Optional[str]:
         if self.worker is None:
             return None
@@ -4976,8 +5051,7 @@ class MainWindow(QMainWindow):
                     get_icon("view-refresh"),
                     "Retry",
                     lambda: self._retry_single_download(
-                        self.model.get_gid(rows[0].row()),
-                        manual=True
+                        self.model.get_gid(rows[0].row()), manual=True
                     ),
                 )
 
@@ -5030,7 +5104,7 @@ class MainWindow(QMainWindow):
             menu.addAction(
                 get_icon("view-refresh"),
                 "Retry",
-                lambda: self._retry_single_download(gid,manual=True),
+                lambda: self._retry_single_download(gid, manual=True),
             )
 
         menu.addSeparator()
@@ -5394,7 +5468,7 @@ class MainWindow(QMainWindow):
                         "download_type": download_type,
                         "matched_rule": matched_rule_name,
                         "rule_speed_limit": rule_speed,
-                        "proxy_url": info.get("proxy_url", ""), 
+                        "proxy_url": info.get("proxy_url", ""),
                     }
 
                     q.downloads_info[download_id]["status"] = final_status
@@ -5508,7 +5582,7 @@ class MainWindow(QMainWindow):
             == QMessageBox.StandardButton.No
         ):
             return
-        
+
         self._close_progress_dialogs_for(completed_gids)
 
         for gid in completed_gids:
