@@ -1,6 +1,6 @@
 from PyQt6.QtWidgets import QStyledItemDelegate, QApplication, QStyle, QStyleOptionViewItem
 from PyQt6.QtCore import Qt, QRectF
-from PyQt6.QtGui import QColor, QPalette, QPainter, QBrush, QPen
+from PyQt6.QtGui import QColor, QIcon, QPalette, QPainter, QBrush, QPen
 
 from utils.style import theme_color
 
@@ -82,4 +82,82 @@ class ProgressDelegate(QStyledItemDelegate):
                 int(Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignRight),
                 f"{val}%",
             )
+        painter.restore()
+
+class CategoryDelegate(QStyledItemDelegate):
+    ICON_SIZE = 14
+    GAP = 4
+    PAD = 4
+
+    def __init__(self, parent=None, align="center"):
+        super().__init__(parent)
+        self.align = align
+
+    def paint(self, painter, option, index):
+        opt = QStyleOptionViewItem(option)
+        self.initStyleOption(opt, index)
+        opt.text = ""
+        opt.icon = QIcon()
+        widget = option.widget
+        style = widget.style() if widget is not None else QApplication.style()
+        style.drawControl(
+            QStyle.ControlElement.CE_ItemViewItem, opt, painter, widget
+        )
+
+        icon = index.data(Qt.ItemDataRole.DecorationRole)
+        text = str(index.data(Qt.ItemDataRole.DisplayRole) or "")
+        has_icon = icon is not None and not icon.isNull()
+        icon_w = self.ICON_SIZE if has_icon else 0
+        gap_w = self.GAP if has_icon else 0
+
+        metrics = option.fontMetrics
+        text_w = metrics.horizontalAdvance(text)
+        cell = option.rect
+        total_w = icon_w + gap_w + text_w
+
+        if total_w > cell.width() - 2 * self.PAD:
+            avail = cell.width() - 2 * self.PAD - icon_w - gap_w
+            text = metrics.elidedText(
+                text, Qt.TextElideMode.ElideRight, max(0, avail)
+            )
+            text_w = metrics.horizontalAdvance(text)
+            total_w = icon_w + gap_w + text_w
+
+        if self.align == "center":
+            start_x = cell.left() + (cell.width() - total_w) // 2
+            if start_x < cell.left() + self.PAD:
+                start_x = cell.left() + self.PAD
+        else:
+            start_x = cell.left() + self.PAD
+
+        painter.save()
+        painter.setClipRect(cell)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+
+        x = start_x
+        h = cell.height()
+
+        if has_icon:
+            icon_rect = QRectF(
+                x,
+                cell.top() + (h - self.ICON_SIZE) / 2.0,
+                self.ICON_SIZE,
+                self.ICON_SIZE,
+            ).toRect()
+            icon.paint(painter, icon_rect, Qt.AlignmentFlag.AlignCenter)
+            x = icon_rect.right() + gap_w
+
+        text_rect = QRectF(x, cell.top(), cell.right() - x - self.PAD, h)
+        selected = bool(opt.state & QStyle.StateFlag.State_Selected)
+        color = opt.palette.color(
+            QPalette.ColorRole.HighlightedText
+            if selected
+            else QPalette.ColorRole.Text
+        )
+        painter.setPen(QPen(color))
+        painter.drawText(
+            text_rect,
+            int(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter),
+            text,
+        )
         painter.restore()

@@ -6,7 +6,83 @@ from utils.helpers import (
     format_speed,
     format_eta,
     get_category_from_filename,
+    get_icon,
 )
+
+
+# ─────────────────────────────────────────────────────────────────────
+# Category → icon-theme name.
+# utils/helpers.py still returns emoji-prefixed strings; we translate
+# at the display layer only. Comparisons in the rest of the code keep
+# working against the emoji-prefixed form.
+# ─────────────────────────────────────────────────────────────────────
+CATEGORY_ICON_NAMES = {
+    "🎬 Video":     "video-x-generic",
+    "🎵 Audio":     "audio-x-generic",
+    "📦 Archive":   "package-x-generic",
+    "📄 Document":  "x-office-document",
+    "🖼️ Image":     "image-x-generic",
+    "⚙️ Program":   "application-x-executable",
+    "💻 Code":      "text-x-script",
+    "📚 Ebook":     "application-epub+zip",
+    "🔤 Font":      "font-x-generic",
+    "🗄️ Database":  "application-x-sqlite2",
+    "💿 Disk":      "drive-harddisk",
+    "🧲 Torrent":   "application-x-bittorrent",
+    "📝 Subtitle":  "text-x-generic-template",
+    "📋 Playlist":  "audio-x-playlist",
+    "📁 Other":     "folder",
+    "🎬 YouTube":   "applications-multimedia",
+}
+
+CATEGORY_DISPLAY = {
+    "🎬 Video":     "Video",
+    "🎵 Audio":     "Audio",
+    "📦 Archive":   "Archive",
+    "📄 Document":  "Document",
+    "🖼️ Image":     "Image",
+    "⚙️ Program":   "Program",
+    "💻 Code":      "Code",
+    "📚 Ebook":     "Ebook",
+    "🔤 Font":      "Font",
+    "🗄️ Database":  "Database",
+    "💿 Disk":      "Disk",
+    "🧲 Torrent":   "Torrent",
+    "📝 Subtitle":  "Subtitle",
+    "📋 Playlist":  "Playlist",
+    "📁 Other":     "Other",
+    "🎬 YouTube":   "YouTube",
+}
+
+STATUS_ICON_NAMES = {
+    "active":       "go-down",
+    "downloading":  "go-down",
+    "waiting":      "appointment-soon",
+    "paused":       "media-playback-pause",
+    "complete":     "emblem-default",
+    "completed":    "emblem-default",
+    "error":        "dialog-error",
+    "removed":      "edit-delete",
+    "pending":      "appointment-soon",
+    "cancelled":    "edit-delete",
+    "stopped":      "media-playback-pause",
+    "retrying":     "view-refresh",
+}
+
+STATUS_DISPLAY = {
+    "active":       "Downloading",
+    "downloading":  "Downloading",
+    "waiting":      "Waiting",
+    "paused":       "Paused",
+    "complete":     "Complete",
+    "completed":    "Complete",
+    "error":        "Error",
+    "removed":      "Removed",
+    "pending":      "Pending",
+    "cancelled":    "Cancelled",
+    "stopped":      "Stopped",
+    "retrying":     "Retrying...",
+}
 
 
 class DownloadTableModel(QAbstractTableModel):
@@ -105,12 +181,18 @@ class DownloadTableModel(QAbstractTableModel):
             if col == self.COL_CATEGORY:
                 return self._display_category(row, download_type)
 
+        # ── Decoration (icon) role — Category column shows a theme icon ──
+        if role == Qt.ItemDataRole.DecorationRole and col == self.COL_CATEGORY:
+            return self._category_icon(row, download_type)
+
         # ── Tooltip ──
         if role == Qt.ItemDataRole.ToolTipRole:
             if col == self.COL_PROGRESS:
                 return self._tooltip_progress(row, download_type)
             if col == self.COL_CONNS:
                 return self._tooltip_connections(row)
+            if col == self.COL_CATEGORY:
+                return self._display_category(row, download_type)
 
         # ── Foreground (only Status is colored) ──
         if role == Qt.ItemDataRole.ForegroundRole and col == self.COL_STATUS:
@@ -208,40 +290,43 @@ class DownloadTableModel(QAbstractTableModel):
         return format_eta(total, completed, speed)
 
     def _display_status(self, row, download_type, status):
-        status_map = {
-            "active": "⬇ Downloading",
-            "waiting": "⏳ Waiting",
-            "paused": "⏸ Paused",
-            "complete": "✅ Complete",
-            "completed": "✅ Complete",
-            "error": "❌ Error",
-            "removed": "🗑 Removed",
-            "pending": "⏳ Pending",
-            "downloading": "⬇ Downloading",
-            "cancelled": "🗑 Cancelled",
-            "stopped": "⏸ Stopped",
-            "retrying": "🔄 Retrying...",
-        }
-
+        # Retrying has a countdown detail string that replaces the label.
         if status == "retrying":
             detail = row.get("status_detail")
             if detail:
-                return detail
+                # Strip any leading emoji like "🔄 " if present.
+                return detail.lstrip("🔄 ").strip() or "Retrying..."
 
+        # YouTube uses a slightly different vocabulary.
         if download_type == "youtube":
             yt_map = {
-                "downloading": "⬇ Downloading (yt-dlp)",
-                "pending": "⏳ Pending",
-                "paused": "⏸ Paused",
-                "completed": "✅ Complete",
-                "error": "❌ Error",
-                "cancelled": "🗑 Cancelled",
+                "downloading": "Downloading (yt-dlp)",
+                "pending":     "Pending",
+                "paused":      "Paused",
+                "completed":   "Complete",
+                "error":       "Error",
+                "cancelled":   "Cancelled",
             }
             if status in yt_map:
                 return yt_map[status]
 
         if not isinstance(status, str):
             status = str(status)
+
+        status_map = {
+            "active":      "Downloading",
+            "downloading": "Downloading",
+            "waiting":     "Waiting",
+            "paused":      "Paused",
+            "complete":    "Complete",
+            "completed":   "Complete",
+            "error":       "Error",
+            "removed":     "Removed",
+            "pending":     "Pending",
+            "cancelled":   "Cancelled",
+            "stopped":     "Stopped",
+            "retrying":    "Retrying...",
+        }
 
         result = status_map.get(status)
         if result is None:
@@ -250,10 +335,11 @@ class DownloadTableModel(QAbstractTableModel):
             except AttributeError:
                 result = str(status)
         return result
-
     def _display_category(self, row, download_type):
+        """Category as plain text (no emoji) — the icon is drawn by
+        the DecorationRole branch of data()."""
         if download_type == "youtube":
-            return "🎬 YouTube"
+            return "YouTube"
 
         category = row.get("category", "📁 Other")
         if isinstance(category, dict):
@@ -261,13 +347,44 @@ class DownloadTableModel(QAbstractTableModel):
         if not isinstance(category, str):
             category = str(category)
 
+        # If the row has no explicit category, derive it from the filename.
         if category in ("📁 Other", "", None):
             name = row.get("name", "")
             if isinstance(name, dict):
                 name = str(name)
             if name:
                 category = get_category_from_filename(name)
-        return category
+
+        # Lookup the plain name. Fall back to stripping any leading
+        # emoji-run if the key is unknown.
+        return CATEGORY_DISPLAY.get(
+            category,
+            category.lstrip("📁🎬🎵📦📄🖼️⚙️💻📚🔤🗄️💿🧲📝📋 ").strip() or "Other",
+        )
+
+    def _category_icon(self, row, download_type):
+        """Return a QIcon for the Category column's decoration."""
+        if download_type == "youtube":
+            key = "🎬 YouTube"
+        else:
+            category = row.get("category", "📁 Other")
+            if isinstance(category, dict):
+                category = str(category)
+            if not isinstance(category, str):
+                category = str(category)
+            if category in ("📁 Other", "", None):
+                name = row.get("name", "")
+                if isinstance(name, dict):
+                    name = str(name)
+                if name:
+                    category = get_category_from_filename(name)
+            key = category
+
+        icon_name = CATEGORY_ICON_NAMES.get(key, "folder")
+        icon = get_icon(icon_name)
+        if icon.isNull():
+            icon = get_icon("folder")
+        return icon
 
     # ─────────────────────────────────────────────────────────────
     # Tooltips
@@ -371,6 +488,7 @@ class DownloadTableModel(QAbstractTableModel):
                     bottom_right,
                     [
                         Qt.ItemDataRole.DisplayRole,
+                        Qt.ItemDataRole.DecorationRole,
                         Qt.ItemDataRole.ForegroundRole,
                         Qt.ItemDataRole.ToolTipRole,
                         Qt.ItemDataRole.TextAlignmentRole,

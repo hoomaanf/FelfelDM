@@ -24,7 +24,7 @@ from core import (
 )
 from ui.dialogs import *
 from ui.table_model import DownloadTableModel
-from ui.delegates import ProgressDelegate
+from ui.delegates import ProgressDelegate,CategoryDelegate
 from ui.youtube_progress import YouTubeProgressDialog
 from ui.export_dialog import ExportDialog
 from ui.export_manager import ExportManager
@@ -591,6 +591,9 @@ class MainWindow(QMainWindow):
         self.model = DownloadTableModel()
         self.progress_delegate = ProgressDelegate(self)
         self.table.setItemDelegateForColumn(2, self.progress_delegate)
+
+        self.category_delegate = CategoryDelegate(self)
+        self.table.setItemDelegateForColumn(7, self.category_delegate)
         self.table.setModel(self.model)
 
         self.table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
