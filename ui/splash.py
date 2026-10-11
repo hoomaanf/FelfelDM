@@ -13,7 +13,7 @@ class SplashScreen(QSplashScreen):
             bg_style = "#1e1e20"
             text_color = "#efeff1"
             sub_color = "#95a5a6"
-            accent_color = "#3daee9"
+            accent_color = "#e85d4c"
         else:
             bg_color = QColor(245, 245, 248)
             bg_style = "#f5f5f8"
