@@ -317,6 +317,7 @@ class AddDownloadDialog(QDialog):
         self._orphan_fetchers: list = []
 
         self._build_ui()
+        self._update_ok_button_label()
         self._setup_tab_order()
 
     # ─────────────────────────────────────────────────────────────
@@ -675,10 +676,11 @@ class AddDownloadDialog(QDialog):
         )
 
         ok_btn = self.btn_box.button(QDialogButtonBox.StandardButton.Ok)
+        self._ok_btn = ok_btn
         cancel_btn = self.btn_box.button(QDialogButtonBox.StandardButton.Cancel)
 
         ok_btn.setText("Download")
-        ok_btn.setIcon(get_icon("edit-download"))
+        ok_btn.setIcon(get_icon("download"))
         make_primary(ok_btn)
         ok_btn.setMinimumWidth(140)
         ok_btn.setFixedHeight(34)
@@ -1217,7 +1219,33 @@ class AddDownloadDialog(QDialog):
                         q.save_path or os.path.expanduser("~/Downloads")
                     )
                     break
+        self._update_ok_button_label()
 
+    def _update_ok_button_label(self):
+        if not hasattr(self, "_ok_btn"):
+            return
+
+        queue_name = self.queue_cb.currentData()
+        if queue_name == "__direct__":
+            new_icon = get_icon("download")
+            new_text = "Download"
+        else:
+           new_icon = get_icon("list-add")
+           new_text = "Add to Queue"
+           self._ok_btn.setIconSize(QSize(14, 14)) 
+           self._ok_btn.setText(new_text)
+           self._ok_btn.setIcon(new_icon)
+
+        btn = self._ok_btn
+
+        def _apply():
+            btn.setProperty("fdmOrigIcon", None)
+            btn.setProperty("fdmTintKey", None)
+            btn.setProperty("fdmTintMode", None)
+            btn.setText(new_text)
+            btn.setIcon(new_icon)
+
+        QTimer.singleShot(0, _apply)
     def _import_from_txt(self):
         file_path, _ = QFileDialog.getOpenFileName(
             self, "Open Links File", "", "Text Files (*.txt);;All Files (*)"
@@ -1447,7 +1475,7 @@ class YouTubeDownloadDialog(QDialog):
         self.download_btn = self.btn_box.addButton(
             "Add to Queue", QDialogButtonBox.ButtonRole.AcceptRole
         )
-        self.download_btn.setIcon(get_icon("edit-download"))
+        self.download_btn.setIcon(get_icon("download"))
         make_primary(self.download_btn)
         self.download_btn.setEnabled(False)
         self.download_btn.clicked.connect(self._on_add_to_queue)

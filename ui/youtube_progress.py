@@ -16,7 +16,7 @@ from PyQt6.QtWidgets import (
     QPlainTextEdit,
     QApplication,
 )
-from PyQt6.QtCore import Qt, QUrl, QTimer, pyqtSignal, QRect
+from PyQt6.QtCore import QPoint, Qt, QUrl, QTimer, pyqtSignal, QRect
 from PyQt6.QtGui import QDesktopServices, QColor, QFont, QPainter, QBrush, QPixmap, QPen
 from core.youtube_worker import YouTubeWorker
 from utils.helpers import format_size, get_icon

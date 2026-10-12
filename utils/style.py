@@ -88,29 +88,42 @@ LIGHT = {
 def tint_icon(icon: QIcon, color: QColor, disabled_color: QColor = None) -> QIcon:
     """Return a copy of ``icon`` painted in a single colour.
 
-    ``disabled_color`` is used for the disabled state (otherwise Qt would
-    generate it from ``color``, which can end up invisible on light buttons).
+    Painted at 16, 24, 32 and 48 px so the resulting QIcon has crisp
+    pixmaps for all common sizes. Painting only at 64 px and letting
+    Qt scale down produced blurry / "bloated" icons, especially for
+    small menu items.
     """
-    def paint(c):
-        pm = icon.pixmap(64, 64)
+    if icon.isNull():
+        return icon
+
+    def paint(size, c):
+        pm = icon.pixmap(size, size)
         if pm.isNull():
             return None
+        # Preserve the source pixmap's device pixel ratio when possible
+        # so HiDPI screens get the right scale.
         painter = QPainter(pm)
-        painter.setCompositionMode(QPainter.CompositionMode.CompositionMode_SourceIn)
+        painter.setCompositionMode(
+            QPainter.CompositionMode.CompositionMode_SourceIn
+        )
         painter.fillRect(pm.rect(), c)
         painter.end()
         return pm
 
-    normal = paint(color)
-    if normal is None:
-        return icon
     result = QIcon()
-    result.addPixmap(normal, QIcon.Mode.Normal)
-    result.addPixmap(normal, QIcon.Mode.Active)
-    if disabled_color is not None:
-        result.addPixmap(paint(disabled_color), QIcon.Mode.Disabled)
+    for size in (16, 24, 32, 48, 64):
+        normal = paint(size, color)
+        if normal is not None:
+            result.addPixmap(normal, QIcon.Mode.Normal, QIcon.State.Off)
+            result.addPixmap(normal, QIcon.Mode.Active, QIcon.State.Off)
+            result.addPixmap(normal, QIcon.Mode.Selected, QIcon.State.Off)
+        if disabled_color is not None:
+            disabled = paint(size, disabled_color)
+            if disabled is not None:
+                result.addPixmap(
+                    disabled, QIcon.Mode.Disabled, QIcon.State.Off
+                )
     return result
-
 class _IconGuard(QObject):
     """Keeps a painted icon's colour in sync no matter when the owning
     widget calls setIcon().

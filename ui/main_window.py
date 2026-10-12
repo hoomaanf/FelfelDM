@@ -463,8 +463,9 @@ class MainWindow(QMainWindow):
         header_lay.addWidget(queues_title)
         header_lay.addStretch()
         new_queue_btn = QPushButton(
-            get_icon("list-add"), "New", clicked=self._add_queue
+            get_icon("list-add"), "",clicked=self._add_queue
         )
+        new_queue_btn.setFixedSize(36, 36)
         new_queue_btn.setToolTip("Create a new queue")
         new_queue_btn.setProperty("compact", True)
         make_primary(new_queue_btn)
@@ -680,7 +681,7 @@ class MainWindow(QMainWindow):
             line.setFixedHeight(22)
             return line
 
-        self.btn_add = QPushButton(get_icon("edit-download"), "Add Download")
+        self.btn_add = QPushButton(get_icon("download"), "Add Download")
         self.btn_add.setIconSize(icon_size)
         make_primary(self.btn_add)
         self.btn_add.clicked.connect(self._add_download)
@@ -790,7 +791,7 @@ class MainWindow(QMainWindow):
         mb = self.menuBar()
 
         file_menu = mb.addMenu("&File")
-        add_action = QAction(get_icon("edit-download"), "Add Download", self)
+        add_action = QAction(get_icon("download"), "Add Download", self)
         add_action.triggered.connect(self._add_download)
         add_action.setShortcut("Ctrl+N")
         file_menu.addAction(add_action)
