@@ -1,5 +1,7 @@
 # core/worker.py
 
+from pathlib import Path
+
 from PyQt6.QtCore import QThread, pyqtSignal, pyqtSlot, Qt
 from typing import Dict, Optional, List, Set
 from concurrent.futures import ThreadPoolExecutor
@@ -172,19 +174,44 @@ class BackendWorker(QThread):
             self.msleep(300)
 
     def stop(self):
-        self.running = False
-        self._stop_all_youtube_downloads()
-        self._stop_all_size_workers()
+        """Stop the worker loop and all child threads.
 
+        This is called from the UI thread during quit_app, so it must
+        return in a bounded amount of time — otherwise the shutdown
+        splash freezes on screen.
+        """
+        self.running = False
+
+        # Cancel YouTube workers (bounded: each has a 3s wait timeout).
+        try:
+            self._stop_all_youtube_downloads()
+        except Exception as e:
+            print(f"⚠️ Error stopping YouTube workers: {e}")
+
+        # Stop size-fetcher workers (bounded: 1s per worker).
+        try:
+            self._stop_all_size_workers()
+        except Exception as e:
+            print(f"⚠️ Error stopping size workers: {e}")
+
+        # Shut down the size-fetch thread pool. cancel_futures drops
+        # queued tasks immediately; running tasks finish within their
+        # own timeout (FileSizeFetcher uses a 30s timeout, so this is
+        # the worst case — but in practice most fetches complete or
+        # fail fast).
         try:
             self._size_executor.shutdown(wait=True, cancel_futures=True)
         except TypeError:
+            # Python < 3.9 fallback (no cancel_futures).
             self._size_executor.shutdown(wait=True)
         except Exception as e:
             print(f"⚠️ Error shutting down size executor: {e}")
 
-        if not self.wait(2000):
+        # Wait for the run() loop to notice running=False and exit.
+        if not self.wait(3000):
+            print("⚠️ [BackendWorker] stop: thread didn't exit in 3s, " "terminating")
             self.terminate()
+            self.wait(1000)
 
     def _build_gid_to_download_id_map(self) -> Dict[str, str]:
 
@@ -320,7 +347,10 @@ class BackendWorker(QThread):
                         if uris and uris[0].get("uri"):
                             url = uris[0].get("uri")
                     if url:
-                        self._fetching_sizes.add(gid)
+                        # _fetch_size_for_gid handles adding to
+                        # _fetching_sizes and cleaning up on every exit
+                        # path. Adding here would leak the gid if that
+                        # function returns early for any reason.
                         self._fetch_size_for_gid(gid, url)
 
             return complete_info
@@ -367,60 +397,73 @@ class BackendWorker(QThread):
 
         Resolves the owning download_id + queue_name so the worker can pick
         the correct proxy (download > queue > global) when fetching the size.
+
+        C24 fix:
+        - The gid is claimed in _fetching_sizes BEFORE any early-return
+          check, so a poll that races with a previous fetch cannot
+          re-submit the same gid.
+        - A try/finally releases the claim on every exit path EXCEPT the
+          successful submit. When submit succeeds, _fetch_size_worker's
+          own finally is responsible for the release, so the claim stays
+          held for the full lifetime of the fetch.
         """
-        if gid in self._fetched_sizes:
-            print(f"⏭️ [Worker] Size already fetched for {gid}, skipping")
+        # Atomically claim the gid. If someone else already claimed it
+        # (or already fetched it), do nothing.
+        if gid in self._fetching_sizes or gid in self._fetched_sizes:
             return
+        self._fetching_sizes.add(gid)
 
-        # Skip recently-failed gids to avoid spamming the fetcher every poll.
-        failed_at = self._failed_sizes.get(gid)
-        if failed_at is not None:
-            if time.time() - failed_at < 300.0:  # 5 minutes
-                return
-            del self._failed_sizes[gid]
-
-        # Resolve the download_id and queue_name that own this gid.
-        # This is what lets us pick the correct proxy for the fetch.
-        download_id = None
-        queue_name = None
-        for q in self.store.queues:
-            for dl_id, info in q.downloads_info.items():
-                if dl_id == gid or info.get("aria2_gid") == gid:
-                    download_id = dl_id
-                    queue_name = q.name
-                    break
-            if download_id:
-                break
-
-        # If we already know the size in storage, don't re-fetch.
-        if download_id and queue_name:
-            for q in self.store.queues:
-                if q.name != queue_name:
-                    continue
-                existing_size = q.downloads_info.get(download_id, {}).get(
-                    "totalLength", 0
-                )
-                if existing_size > 0:
-                    self._fetched_sizes.add(gid)
-                    print(
-                        f"⏭️ [Worker] Size exists in storage for {gid}: "
-                        f"{existing_size}, skipping fetch"
-                    )
-                    from utils.helpers import get_category_from_filename
-
-                    filename = q.downloads_info[download_id].get("name", "")
-                    if not filename:
-                        filename = url.split("/")[-1].split("?")[0]
-                    category = get_category_from_filename(filename)
-                    self.size_fetched.emit(gid, existing_size, category)
-                    self._fetching_sizes.discard(gid)
-                    return
-                break
-
-        if gid in self.youtube_gids or gid in self._fetched_sizes:
-            return
-
+        submitted = False
         try:
+            # Skip recently-failed gids (5-minute cooldown).
+            failed_at = self._failed_sizes.get(gid)
+            if failed_at is not None:
+                if time.time() - failed_at < 300.0:
+                    return
+                # Cooldown expired: forget the previous failure and retry.
+                del self._failed_sizes[gid]
+
+            if gid in self.youtube_gids:
+                return
+
+            # Resolve the download_id and queue_name that own this gid.
+            download_id = None
+            queue_name = None
+            for q in self.store.queues:
+                for dl_id, info in q.downloads_info.items():
+                    if dl_id == gid or info.get("aria2_gid") == gid:
+                        download_id = dl_id
+                        queue_name = q.name
+                        break
+                if download_id:
+                    break
+
+            # If we already know the size in storage, emit it and skip.
+            if download_id and queue_name:
+                for q in self.store.queues:
+                    if q.name != queue_name:
+                        continue
+                    existing_size = q.downloads_info.get(download_id, {}).get(
+                        "totalLength", 0
+                    )
+                    if existing_size > 0:
+                        self._fetched_sizes.add(gid)
+                        print(
+                            f"⏭️ [Worker] Size exists in storage for {gid}: "
+                            f"{existing_size}, skipping fetch"
+                        )
+                        from utils.helpers import get_category_from_filename
+
+                        filename = q.downloads_info[download_id].get("name", "")
+                        if not filename:
+                            filename = url.split("/")[-1].split("?")[0]
+                        category = get_category_from_filename(filename)
+                        self.size_fetched.emit(gid, existing_size, category)
+                        return
+                    break
+
+            # Submit to executor. On success, _fetch_size_worker will
+            # release the claim in its own finally.
             self._size_executor.submit(
                 self._fetch_size_worker,
                 gid,
@@ -428,9 +471,17 @@ class BackendWorker(QThread):
                 download_id,
                 queue_name,
             )
+            submitted = True
+
         except RuntimeError as e:
             print(f"⚠️ [Worker] Size executor is shut down: {e}")
-
+        except Exception as e:
+            print(f"⚠️ [Worker] _fetch_size_for_gid failed for {gid}: {e}")
+        finally:
+            if not submitted:
+                # Early return or submit failure: release the claim so a
+                # future call (after the cooldown) can retry.
+                self._fetching_sizes.discard(gid)
     def _fetch_size_worker(
         self,
         gid: str,
@@ -591,11 +642,20 @@ class BackendWorker(QThread):
 
     @pyqtSlot(str)
     def _on_re_add_requested(self, download_id_or_gid: str):
+        """Re-add a download to aria2 after a failure.
+
+        C5 fix: read every option the user originally configured from
+        downloads_info, instead of hardcoding split=8 / conn=8 and
+        losing the header, connections, speed limit, matched rule,
+        proxy, etc. The goal is for the re-added download to look
+        identical to the original add.
+        """
         try:
             url = None
             save_path = None
-            speed_limit = 0
             matched_id = None
+            info = None
+            owning_queue = None
 
             def _report(new_gid=None, error=None):
                 # Always tell the UI WHICH download this result is for, so
@@ -610,68 +670,84 @@ class BackendWorker(QThread):
                     },
                 )
 
+            # ── 1. Locate the download in any queue ──
+            # First try as a download_id, then fall back to matching
+            # aria2_gid. This covers both modern and legacy ids.
             for q in self.store.queues:
                 if download_id_or_gid in q.downloads_info:
                     info = q.downloads_info[download_id_or_gid]
-                    url = info.get("url")
-                    save_path = info.get("save_path") or q.save_path
-                    speed_limit = getattr(q, "speed_limit", 0)
                     matched_id = download_id_or_gid
+                    owning_queue = q
                     break
 
-            if not url:
+            if info is None:
                 for q in self.store.queues:
-                    for dl_id, info in q.downloads_info.items():
-                        if info.get("aria2_gid") == download_id_or_gid:
-                            url = info.get("url")
-                            save_path = info.get("save_path") or q.save_path
-                            speed_limit = getattr(q, "speed_limit", 0)
+                    for dl_id, d_info in q.downloads_info.items():
+                        if d_info.get("aria2_gid") == download_id_or_gid:
+                            info = d_info
                             matched_id = dl_id
+                            owning_queue = q
                             break
-                    if url:
+                    if info is not None:
                         break
 
-            # ⭐ مرحله ۳ (transitional): خود کلید یه GID قدیمیه
-            if not url:
-                for q in self.store.queues:
-                    if download_id_or_gid in q.downloads_info:
-                        info = q.downloads_info[download_id_or_gid]
-                        url = info.get("url")
-                        save_path = info.get("save_path") or q.save_path
-                        speed_limit = getattr(q, "speed_limit", 0)
-                        matched_id = download_id_or_gid
-                        break
-
-            if not url or not save_path:
+            if info is None:
                 print(
-                    f"❌ [Worker] Cannot re-add: missing info for {download_id_or_gid}"
+                    f"❌ [Worker] Cannot re-add: no info for "
+                    f"{download_id_or_gid}"
                 )
                 _report(error="missing download info")
                 return
 
+            url = info.get("url")
+            save_path = info.get("save_path") or (
+                owning_queue.save_path if owning_queue else None
+            )
+
+            if not url or not save_path:
+                print(
+                    f"❌ [Worker] Cannot re-add: missing url or save_path "
+                    f"for {download_id_or_gid}"
+                )
+                _report(error="missing url or save_path")
+                return
+
+            # ── 2. Rebuild options from the persisted settings ──
+            # Every field below was stored by _process_add_download_common
+            # at add time. Defaults are chosen to match the add path so
+            # old entries without these fields behave the same.
+            connections = int(info.get("connections") or 8)
+            min_split_size = info.get("min_split_size") or "1M"
+            stream_piece_selector = info.get("stream_piece_selector") or "geom"
+            header = info.get("header") or []
+
             options = {
                 "dir": save_path,
-                "split": "8",
-                "max-connection-per-server": "8",
+                "split": str(connections),
+                "max-connection-per-server": str(connections),
+                "min-split-size": min_split_size,
+                "stream-piece-selector": stream_piece_selector,
                 "continue": "true",
                 "always-resume": "true",
                 "pause": "false",
             }
-            if speed_limit > 0:
-                options["max-download-limit"] = f"{speed_limit}K"
 
-            # ── Re-apply proxy for the re-added download ───────────────────
-            # Without this, a re-add after failure would lose the proxy that
-            # was originally configured (queue-level or per-download), because
-            # aria2 only remembers the global one across new addUri calls.
+            # Re-apply the original header (User-Agent, cookies, referer…)
+            if header:
+                options["header"] = list(header)
+
+            # Per-download speed limit (overrides queue speed limit).
+            # If absent, fall back to the queue's speed limit.
+            per_download_speed = int(info.get("speed_limit") or 0)
+            queue_speed = getattr(owning_queue, "speed_limit", 0) if owning_queue else 0
+            effective_speed = per_download_speed or queue_speed
+            if effective_speed > 0:
+                options["max-download-limit"] = f"{effective_speed}K"
+
+            # ── 3. Re-apply the proxy (download > queue > global) ──
             if self.proxy_manager is not None and matched_id:
+                queue_name_for_proxy = owning_queue.name if owning_queue else None
                 proxy_dict = None
-                queue_name_for_proxy = None
-                for q in self.store.queues:
-                    if matched_id in q.downloads_info:
-                        queue_name_for_proxy = q.name
-                        break
-
                 try:
                     proxy_dict = self.proxy_manager.get_effective_proxy_dict(
                         download_id=matched_id,
@@ -685,27 +761,34 @@ class BackendWorker(QThread):
                     proxy_dict = None
 
                 if proxy_dict:
-                    # aria2 takes a single URL for all-proxy; prefer https,
-                    # fall back to http (both are usually the same URL).
                     proxy_url = proxy_dict.get("https") or proxy_dict.get("http")
                     if proxy_url:
                         options["all-proxy"] = proxy_url
                         print(f"🌐 [Worker] Re-add with proxy: {proxy_url}")
                 else:
-                    print(f"🌐 [Worker] Re-add without proxy for {matched_id[:12]}")
-            # ────────────────────────────────────────────────────────────────
+                    print(
+                        f"🌐 [Worker] Re-add without proxy for "
+                        f"{matched_id[:12]}"
+                    )
 
+            # ── 4. Submit ──
             new_gid = self.aria2.add_url(url, options)
             if new_gid:
-                id_short = matched_id[:12] if matched_id else download_id_or_gid[:12]
-                print(f"🔄 [Worker] Re-added id={id_short} -> gid={new_gid}")
+                id_short = (
+                    matched_id[:12] if matched_id else download_id_or_gid[:12]
+                )
+                print(
+                    f"🔄 [Worker] Re-added id={id_short} -> gid={new_gid} "
+                    f"(conn={connections}, speed={effective_speed}K, "
+                    f"proxy={'yes' if 'all-proxy' in options else 'no'}, "
+                    f"header={'yes' if header else 'no'})"
+                )
                 _report(new_gid=new_gid)
             else:
                 _report(error="aria2 rejected add_url")
         except Exception as e:
             print(f"⚠️ [Worker] Re-add failed: {e}")
             _report(error=str(e))
-
     @pyqtSlot(str, int)
     def _on_set_speed_limit(self, gid: str, speed_kb: int):
         try:
@@ -803,6 +886,8 @@ class BackendWorker(QThread):
             format_id=format_id,
             quality=quality,
             format_spec=yt_opts.get("format_spec"),
+            title=yt_opts.get("title"),
+            download_id=download_id,
         )
 
         size_worker.size_fetched.connect(
@@ -900,6 +985,8 @@ class BackendWorker(QThread):
             format_id=format_id,
             quality=quality,
             format_spec=yt_opts.get("format_spec"),
+            title=yt_opts.get("title"),
+            download_id=download_id,
         )
         worker.progress.connect(lambda p: self._on_youtube_progress(download_id, p))
         worker.status.connect(lambda s: self._on_youtube_status(download_id, s))
@@ -929,6 +1016,8 @@ class BackendWorker(QThread):
             format_id=yt_options.get("format_id"),
             quality=yt_options.get("quality", "best"),
             format_spec=yt_options.get("format_spec"),
+            title=yt_options.get("title"),
+            download_id=download_id,
         )
         worker.progress.connect(lambda p: self._on_youtube_progress(download_id, p))
         worker.status.connect(lambda s: self._on_youtube_status(download_id, s))
@@ -971,31 +1060,70 @@ class BackendWorker(QThread):
             self.youtube_status.emit(download_id, "downloading")
 
     def cancel_youtube_download(self, download_id: str):
+        """Cancel a YouTube download and safely remove only its own files.
+
+        C29 fix: the previous implementation unconditionally called
+        os.remove(file_path) where file_path was derived from the stored
+        title. If a completed download with the same title existed on disk
+        (e.g. the user re-added the same video), that file was deleted.
+        It also built glob patterns from the title, which are unsafe if the
+        title contains glob metacharacters.
+
+        Now: we only ask the YouTubeWorker to clean up (it knows exactly
+        which files it produced), and we only remove the final target file
+        if we can prove it was created by THIS run — i.e. its mtime is not
+        older than the moment this download was started, and it lives
+        directly inside save_path.
+        """
         print(f"🗑️ [Worker] Cancelling YouTube download: {download_id}")
         worker = None
-        file_path = None
         save_path = None
-        title = "Unknown"
+        expected_final_path = None
+        download_started_at = None
+
         with self.youtube_lock:
             if download_id in self.youtube_workers:
                 worker = self.youtube_workers[download_id]
                 del self.youtube_workers[download_id]
             if download_id in self.youtube_downloads:
-                yt_options = self.youtube_downloads[download_id].get("yt_options", {})
+                item = self.youtube_downloads[download_id]
+                yt_options = item.get("yt_options", {})
                 title = yt_options.get("title", "Unknown")
                 format_type = yt_options.get("format", "video")
                 ext = "mp4" if format_type == "video" else "mp3"
-                filename = re.sub(r'[<>:"/\\|?*]', "_", title)
-                full_filename = f"{filename}.{ext}"
-                save_path = self.youtube_downloads[download_id].get("save_path", "")
-                file_path = os.path.join(save_path, full_filename)
+                # Sanitize the same way yt-dlp does when it builds filenames.
+                safe_title = re.sub(r'[<>:"/\\|?*]', "_", title)
+                filename = f"{safe_title}.{ext}"
+                save_path = item.get("save_path", "")
+                if save_path:
+                    expected_final_path = os.path.join(save_path, filename)
+                # If we have a creation timestamp, use it to prove the file
+                # is from this run.
+                created_at = item.get("created_at")
+                if created_at:
+                    try:
+                        from datetime import datetime as _dt
 
+                        download_started_at = _dt.fromisoformat(created_at).timestamp()
+                    except Exception:
+                        download_started_at = None
+
+        # 1. Let the worker clean up files it produced. This is the
+        #    authoritative cleanup — it uses _produced_paths plus a safe
+        #    fallback scan anchored to the exact title.
         if worker and worker.is_running():
             worker.cancel()
             worker.wait(1000)
 
-        if file_path and save_path:
-            self._delete_youtube_files(file_path, save_path, title)
+        # 2. If the worker wasn't running (e.g. it had already exited but
+        #    the download wasn't marked finished yet), clean up via the
+        #    worker's safe routines directly. But we need a reference to
+        #    the worker object; if it's gone, fall back to a minimal,
+        #    provably-safe check on the expected final path.
+        if worker is None and expected_final_path and save_path:
+            self._safe_delete_final_file(
+                expected_final_path, save_path, download_started_at
+            )
 
         with self.youtube_lock:
             if download_id in self.youtube_downloads:
@@ -1007,53 +1135,65 @@ class BackendWorker(QThread):
                     if size_worker.isRunning():
                         size_worker.quit()
                         size_worker.wait(1000)
-                except:
+                except Exception:
                     pass
                 del self._size_workers[download_id]
 
         print(
-            f"🗑️ [Worker] YouTube download cancelled and files deleted: {download_id}"
+            f"🗑️ [Worker] YouTube download cancelled and its files deleted: "
+            f"{download_id}"
         )
 
-    def _delete_youtube_files(self, file_path: str, save_path: str, title: str):
+    def _safe_delete_final_file(
+        self,
+        file_path: str,
+        save_path: str,
+        download_started_at: Optional[float],
+    ):
+        """Delete a single final-output file, but only if it's safe.
+
+        Safety rules (C29):
+        - Must be a regular file directly inside save_path.
+        - If we know when the download started, the file's mtime must not
+        predate that by more than a small grace window (5s) — this
+        prevents deleting a pre-existing file with the same name.
+        """
         try:
-            if os.path.exists(file_path):
-                os.remove(file_path)
-                print(f"🗑️ Deleted: {file_path}")
+            real_save = Path(save_path).resolve()
+            real_file = Path(file_path).resolve()
+        except (OSError, RuntimeError) as e:
+            print(f"⚠️ [Worker] Cannot resolve paths for delete: {e}")
+            return
 
-            base_name = os.path.splitext(os.path.basename(file_path))[0]
-            patterns = [
-                f"{base_name}.*.part",
-                f"{base_name}.*.ytdl",
-                f"{base_name}.*.f*",
-                f"{base_name}.*.temp",
-                f"{base_name}.*.download",
-            ]
-            for pattern in patterns:
-                for f in glob.glob(os.path.join(save_path, pattern)):
-                    try:
-                        os.remove(f)
-                        print(f"🗑️ Deleted partial: {f}")
-                    except:
-                        pass
+        if real_file.parent != real_save:
+            print(f"⚠️ [Worker] Refusing to delete outside save_path: {real_file}")
+            return
+        if not real_file.exists():
+            return
+        if real_file.is_dir():
+            print(f"⚠️ [Worker] Refusing to rmtree directory: {real_file}")
+            return
 
-            safe_title = re.sub(r'[<>:"/\\|?*]', "_", title)
-            partial_patterns = [
-                f"{safe_title}.*.part",
-                f"{safe_title}.*.ytdl",
-                f"{safe_title}.*.f*",
-                f"{safe_title}.*.temp",
-                f"{safe_title}.*.download",
-            ]
-            for pattern in partial_patterns:
-                for f in glob.glob(os.path.join(save_path, pattern)):
-                    try:
-                        os.remove(f)
-                        print(f"🗑️ Deleted partial (title): {f}")
-                    except:
-                        pass
-        except Exception as e:
-            print(f"⚠️ Error deleting files: {e}")
+        if download_started_at is not None:
+            try:
+                mtime = real_file.stat().st_mtime
+            except OSError:
+                return
+            # Grace window: yt-dlp may write the final file a few seconds
+            # before we recorded 'created_at' (clock skew, save).
+            if mtime < download_started_at - 5.0:
+                print(
+                    f"⚠️ [Worker] Refusing to delete older file "
+                    f"(mtime={mtime:.0f} < start={download_started_at:.0f}): "
+                    f"{real_file.name}"
+                )
+                return
+
+        try:
+            real_file.unlink()
+            print(f"🗑️ [Worker] Deleted: {real_file.name}")
+        except OSError as e:
+            print(f"⚠️ [Worker] Could not delete {real_file}: {e}")
 
     def cancel_youtube_download_without_delete(self, download_id: str):
         print(f"🗑️ [Worker] Cancelling YouTube download without delete: {download_id}")
@@ -1133,14 +1273,25 @@ class BackendWorker(QThread):
         self.youtube_finished.emit(download_id, success, message)
 
     def _stop_all_youtube_downloads(self):
+        # Take a snapshot of the workers under the lock, then cancel them
+        # OUTSIDE the lock. cancel() calls self.wait() internally, so
+        # holding youtube_lock across it would block any other thread that
+        # needs the lock (and, since this is called from the UI thread via
+        # quit_app -> worker.stop(), it would freeze the whole UI).
         with self.youtube_lock:
-            for download_id, worker in list(self.youtube_workers.items()):
+            workers_snapshot = list(self.youtube_workers.items())
+            self.youtube_workers.clear()
+
+        for download_id, worker in workers_snapshot:
+            try:
                 if worker.is_running():
                     worker.cancel()
-                    if download_id in self.youtube_downloads:
-                        self.youtube_downloads[download_id]["status"] = "paused"
-                        self.store.update_youtube_status(download_id, "paused")
-            self.youtube_workers.clear()
+            except Exception as e:
+                print(f"⚠️ Error cancelling YouTube worker {download_id[:8]}: {e}")
+            with self.youtube_lock:
+                if download_id in self.youtube_downloads:
+                    self.youtube_downloads[download_id]["status"] = "paused"
+                    self.store.update_youtube_status(download_id, "paused")
 
     def _stop_all_size_workers(self):
         for download_id, worker in list(self._size_workers.items()):

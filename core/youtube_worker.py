@@ -6,10 +6,29 @@ import json
 import re
 import signal
 import time
-import glob
+import uuid
 import shutil
 import sys
+import tempfile
+from typing import Optional, Set
+from pathlib import Path
 from PyQt6.QtCore import QThread, pyqtSignal
+
+
+def _is_safe_path(path: Path, output_dir: Path) -> bool:
+    """Reject anything that escapes output_dir via "..", symlinks, or
+    is a directory."""
+    try:
+        real_output = output_dir.resolve()
+        real_path = path.resolve()
+    except (OSError, RuntimeError):
+        return False
+    # Must live directly inside output_dir (no subdirs, no ".." escape).
+    if real_path.parent != real_output:
+        return False
+    if real_path == real_output:
+        return False
+    return True
 
 
 class YouTubeWorker(QThread):
@@ -32,6 +51,8 @@ class YouTubeWorker(QThread):
         format_id=None,
         quality="best",
         format_spec=None,
+        title=None,
+        download_id=None,
     ):
         super().__init__()
         self.url = url
@@ -52,8 +73,23 @@ class YouTubeWorker(QThread):
         self.quality = quality
         self.format_spec = format_spec
 
-    def _find_system_ytdlp(self) -> str:
+        # ── C28 fix: track files yt-dlp reported as produced ──
+        self._produced_paths: Set[Path] = set()
 
+        # ── Dedicated temp dir (only for THIS download) ──
+        # yt-dlp writes .part/.fXXX/.ytdl intermediates here. On
+        # cancel we rmtree() the whole dir — safe because it's ours
+        # alone and never contains user files.
+        self.download_id = download_id or uuid.uuid4().hex
+        self._temp_dir: Optional[Path] = None
+
+        # Optional title (kept for callers; not used for deletion).
+        self._title: Optional[str] = title or None
+
+    # ─────────────────────────────────────────────────────────────
+    #  yt-dlp discovery
+    # ─────────────────────────────────────────────────────────────
+    def _find_system_ytdlp(self) -> str:
         preferred_paths = [
             os.path.expanduser("~/.local/bin/yt-dlp"),
             "/usr/local/bin/yt-dlp",
@@ -62,7 +98,6 @@ class YouTubeWorker(QThread):
             "/snap/bin/yt-dlp",
             os.path.expanduser("~/bin/yt-dlp"),
         ]
-
         venv_bin = os.path.join(sys.prefix, "bin")
 
         def is_venv_path(path: str) -> bool:
@@ -112,6 +147,9 @@ class YouTubeWorker(QThread):
         self.is_fetching_size = True
         self.start()
 
+    # ─────────────────────────────────────────────────────────────
+    #  Size fetch
+    # ─────────────────────────────────────────────────────────────
     def _fetch_size(self):
         try:
             self.status.emit("Getting file size...")
@@ -235,6 +273,9 @@ class YouTubeWorker(QThread):
             self.is_fetching_size = False
             self._is_running = False
 
+    # ─────────────────────────────────────────────────────────────
+    #  Pause / Resume
+    # ─────────────────────────────────────────────────────────────
     def pause(self):
         if self.process and not self.is_paused and self._is_running:
             self.is_paused = True
@@ -259,28 +300,44 @@ class YouTubeWorker(QThread):
             except Exception as e:
                 print(f"Resume error: {e}")
 
+    # ─────────────────────────────────────────────────────────────
+    #  Cancel — kill process, rmtree temp dir, sweep reported files
+    # ─────────────────────────────────────────────────────────────
     def cancel(self):
+        """Cancel the download.
+
+        - Kill the yt-dlp process group (SIGTERM then SIGKILL).
+        - Remove the dedicated temp directory (rmtree). Safe because
+          the dir is exclusively ours.
+        - Sweep any files yt-dlp already reported via --print-to-file
+          that may have landed in the user's output_path.
+        """
         if not self._is_running:
             return
         self.is_cancelled = True
+
         if self.process:
             try:
                 pgid = os.getpgid(self.process.pid)
-                # If the process was paused, wake the whole group up first so
-                # it can actually receive and act on SIGTERM/SIGKILL.
                 try:
                     os.killpg(pgid, signal.SIGCONT)
                 except Exception:
                     pass
+
                 os.killpg(pgid, signal.SIGTERM)
-                time.sleep(0.3)
+
+                deadline = time.time() + 2.0
+                while time.time() < deadline:
+                    if self.process.poll() is not None:
+                        break
+                    time.sleep(0.05)
+
                 if self.process.poll() is None:
                     os.killpg(pgid, signal.SIGKILL)
+
             except ProcessLookupError:
                 pass
             except Exception:
-                # Fallback in case the process group is unavailable for
-                # some reason (e.g. it already exited).
                 try:
                     self.process.terminate()
                     time.sleep(0.3)
@@ -288,40 +345,106 @@ class YouTubeWorker(QThread):
                         self.process.kill()
                 except Exception:
                     pass
-        self._delete_partial_files()
+
+        # Give the kernel a moment to release file handles.
+        time.sleep(0.3)
+
+        # 1. rmtree the dedicated temp dir (safe, ours alone).
+        self._cleanup_temp_dir()
+
+        # 2. Sweep any files yt-dlp reported into output_path.
+        try:
+            self._delete_partial_files()
+        except Exception as e:
+            print(f"⚠️ [YouTubeWorker] Safe cleanup failed: {e}")
+
         self.speed_eta.emit("", "")
-        self.wait()
+
+        if not self.wait(3000):
+            print(
+                "⚠️ [YouTubeWorker] cancel: thread didn't exit in 3s, "
+                "terminating anyway"
+            )
+            self.terminate()
+            self.wait(1000)
+
         self.finished.emit(False, "Download cancelled by user")
 
-    def _delete_partial_files(self):
+    # ─────────────────────────────────────────────────────────────
+    #  Temp dir cleanup
+    # ─────────────────────────────────────────────────────────────
+    def _cleanup_temp_dir(self):
+        """Remove the dedicated temp directory for this download.
+
+        Safe: the dir is named felfeldm-dl-<uuid> and only contains
+        files yt-dlp created for this specific download.
+        """
+        if not self._temp_dir:
+            return
         try:
-            pattern = os.path.join(self.output_path, "*.part")
-            for f in glob.glob(pattern):
-                try:
-                    os.remove(f)
-                    print(f"🗑️ Deleted: {f}")
-                except:
-                    pass
-
-            pattern = os.path.join(self.output_path, "*.ytdl")
-            for f in glob.glob(pattern):
-                try:
-                    os.remove(f)
-                    print(f"🗑️ Deleted: {f}")
-                except:
-                    pass
-
-            pattern = os.path.join(self.output_path, "*.f*")
-            for f in glob.glob(pattern):
-                try:
-                    if os.path.getsize(f) < 1024 * 1024:
-                        os.remove(f)
-                        print(f"🗑️ Deleted: {f}")
-                except:
-                    pass
+            if self._temp_dir.exists():
+                shutil.rmtree(self._temp_dir, ignore_errors=True)
+                print(f"🗑️ [YouTubeWorker] Removed temp dir: {self._temp_dir}")
         except Exception as e:
-            print(f"Error deleting partial files: {e}")
+            print(f"⚠️ [YouTubeWorker] Could not remove temp dir: {e}")
+        finally:
+            self._temp_dir = None
 
+    # ─────────────────────────────────────────────────────────────
+    #  Delete only files yt-dlp explicitly reported
+    # ─────────────────────────────────────────────────────────────
+    def _delete_partial_files(self):
+        """Delete ONLY files that yt-dlp itself reported as produced.
+
+        Design principle: never guess. If we're not 100% sure a file
+        was created by THIS download, we leave it alone.
+
+        The list comes from --print-to-file with before_dl:filename,
+        after_dl:filepath and after_move:filepath. Only files under
+        output_path are considered here; files under _temp_dir are
+        removed wholesale by _cleanup_temp_dir().
+        """
+        output_dir = Path(self.output_path).resolve()
+        if not output_dir.is_dir():
+            print(f"⚠️ [YouTubeWorker] Output dir missing: {output_dir}")
+            return
+
+        if not self._produced_paths:
+            print(
+                "ℹ️ [YouTubeWorker] No produced paths recorded; "
+                "nothing deleted (safe)"
+            )
+            return
+
+        deleted = 0
+        for path in list(self._produced_paths):
+            try:
+                if not path.exists():
+                    continue
+                if not _is_safe_path(path, output_dir):
+                    print(
+                        f"⚠️ [YouTubeWorker] Refusing to delete " f"outside dir: {path}"
+                    )
+                    continue
+                if path.is_dir():
+                    print(f"⚠️ [YouTubeWorker] Refusing to rmtree: {path}")
+                    continue
+                path.unlink()
+                deleted += 1
+                print(f"🗑️ Deleted (produced): {path.name}")
+            except FileNotFoundError:
+                pass
+            except OSError as e:
+                print(f"⚠️ Could not delete {path}: {e}")
+
+        if deleted == 0:
+            print("ℹ️ [YouTubeWorker] Nothing to delete (safe)")
+        else:
+            print(f"✅ [YouTubeWorker] Deleted {deleted} file(s)")
+
+    # ─────────────────────────────────────────────────────────────
+    #  Info fetch
+    # ─────────────────────────────────────────────────────────────
     def _fetch_info(self):
         try:
             self.status.emit("Getting video info...")
@@ -353,6 +476,7 @@ class YouTubeWorker(QThread):
                 return
 
             info = json.loads(result.stdout)
+            self._title = info.get("title") or None
             self.progress.emit(100)
             self.info_fetched.emit(info)
             self.finished.emit(True, "Info fetched successfully!")
@@ -370,8 +494,21 @@ class YouTubeWorker(QThread):
         finally:
             self._is_running = False
 
+    # ─────────────────────────────────────────────────────────────
+    #  Download (uses -P temp: and -P home:)
+    # ─────────────────────────────────────────────────────────────
     def _download(self):
-        """Download YouTube video/audio"""
+        """Download YouTube video/audio.
+
+        Uses yt-dlp's -P (--paths):
+          -P home:<output_path>  → final merged file goes here
+          -P temp:<temp_dir>     → .part, .fXXX.mp4, .ytdl, etc. go here
+
+        The temp_dir is dedicated to this download (named
+        felfeldm-dl-<uuid>), so we can safely rmtree() it on cancel
+        without touching any user file.
+        """
+        produced_list_path: Optional[Path] = None
         try:
             self.status.emit("Preparing download...")
             self.progress.emit(0)
@@ -379,10 +516,32 @@ class YouTubeWorker(QThread):
             ytdlp_path = self._find_system_ytdlp()
             print(f"🎯 yt-dlp resolved to: {ytdlp_path}")
 
+            # ── Dedicated temp dir ──
+            self._temp_dir = (
+                Path(tempfile.gettempdir()) / f"felfeldm-dl-{self.download_id}"
+            )
+            self._temp_dir.mkdir(parents=True, exist_ok=True)
+            try:
+                os.chmod(self._temp_dir, 0o700)
+            except OSError:
+                pass
+            print(f"📂 [YouTubeWorker] temp dir: {self._temp_dir}")
+
+            # ── --print-to-file log ──
+            fd, produced_name = tempfile.mkstemp(
+                prefix="felfeldm-ytdlp-paths-", suffix=".txt"
+            )
+            os.close(fd)
+            produced_list_path = Path(produced_name)
+
             cmd = [
                 ytdlp_path,
+                "-P",
+                f"home:{self.output_path}",
+                "-P",
+                f"temp:{self._temp_dir}",
                 "-o",
-                os.path.join(self.output_path, "%(title)s.%(ext)s"),
+                "%(title)s.%(ext)s",
                 "--no-playlist",
                 "--progress",
                 "--newline",
@@ -391,6 +550,15 @@ class YouTubeWorker(QThread):
                 "--socket-timeout",
                 "60",
                 "--no-check-certificate",
+                "--print-to-file",
+                "before_dl:filename",
+                str(produced_list_path),
+                "--print-to-file",
+                "after_dl:filepath",
+                str(produced_list_path),
+                "--print-to-file",
+                "after_move:filepath",
+                str(produced_list_path),
             ]
 
             if self.proxy_url:
@@ -414,12 +582,6 @@ class YouTubeWorker(QThread):
             else:
                 cmd.extend(["-f", "bv+ba/b"])
 
-            # When merging separate video+audio streams, yt-dlp picks a
-            # container based on the source codecs (often .mkv/.webm),
-            # which doesn't match the ".mp4" extension the app assumes
-            # for the saved file entry. Force the container to mp4 for
-            # video downloads so the predicted filename/extension the app
-            # stores actually matches what ends up on disk.
             if self.format_type not in ("mp3", "audio", "m4a"):
                 cmd.extend(["--merge-output-format", "mp4"])
 
@@ -428,7 +590,6 @@ class YouTubeWorker(QThread):
             self.status.emit("⬇ Downloading...")
 
             env = os.environ.copy()
-
             extra_paths = [
                 os.path.expanduser("~/.local/bin"),
                 "/usr/local/bin",
@@ -485,6 +646,15 @@ class YouTubeWorker(QThread):
 
             self.process.wait()
 
+            # Ingest produced paths BEFORE checking returncode, so a
+            # partially-successful download still has its paths
+            # registered for future cleanup.
+            self._ingest_produced_paths(produced_list_path)
+
+            # Clean up temp dir regardless of outcome — no reason to
+            # leave an empty felfeldm-dl-<id> directory around.
+            self._cleanup_temp_dir()
+
             if self.is_cancelled:
                 return
 
@@ -513,71 +683,69 @@ class YouTubeWorker(QThread):
         except Exception as e:
             self.finished.emit(False, f"Error: {str(e)}")
         finally:
+            if produced_list_path is not None:
+                try:
+                    produced_list_path.unlink()
+                except OSError:
+                    pass
+            self._cleanup_temp_dir()
             self._is_running = False
             self.process = None
 
-    def _set_proxy_env(self):
-        """Set environment variables for proxy as fallback"""
-        if not self.proxy_url:
+    # ─────────────────────────────────────────────────────────────
+    #  Ingest --print-to-file output
+    # ─────────────────────────────────────────────────────────────
+    def _ingest_produced_paths(self, produced_list_path: Path) -> None:
+        """Read the paths yt-dlp reported and store them for cleanup.
+
+        With -P home: and -P temp:, yt-dlp reports final paths under
+        output_path and intermediate paths under the temp dir. We
+        keep both; the temp-dir entries are useful for logging, and
+        they're also removed by _cleanup_temp_dir() anyway.
+        """
+        try:
+            text = produced_list_path.read_text(encoding="utf-8", errors="replace")
+        except OSError:
             return
-        try:
-            import urllib.parse
 
-            parsed = urllib.parse.urlparse(self.proxy_url)
-            os.environ["HTTP_PROXY"] = self.proxy_url
-            os.environ["HTTPS_PROXY"] = self.proxy_url
-            os.environ["http_proxy"] = self.proxy_url
-            os.environ["https_proxy"] = self.proxy_url
-            print(f"🌐 Environment proxy set: {self.proxy_url}")
-            if parsed.username:
-                os.environ["NO_PROXY"] = "localhost,127.0.0.1"
-                os.environ["no_proxy"] = "localhost,127.0.0.1"
-        except Exception as e:
-            print(f"⚠️ Error setting proxy env: {e}")
+        output_dir = Path(self.output_path).resolve()
+        temp_dir_resolved: Optional[Path] = None
+        if self._temp_dir is not None:
+            try:
+                temp_dir_resolved = self._temp_dir.resolve()
+            except (OSError, RuntimeError):
+                temp_dir_resolved = None
 
-    def get_proxy_status(self) -> str:
-        if self.proxy_url:
-            return f"🌐 Proxy: {self.proxy_url}"
-        return "🌐 No proxy"
+        for line in text.splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                p = Path(line)
+            except Exception:
+                continue
+            if not p.is_absolute():
+                p = Path.cwd() / p
+            try:
+                resolved = p.resolve(strict=False)
+            except (OSError, RuntimeError):
+                continue
 
-    def get_command(self) -> str:
-        ytdlp_path = self._find_system_ytdlp()
-        cmd = [
-            ytdlp_path,
-            "-o",
-            os.path.join(self.output_path, "%(title)s.%(ext)s"),
-            "--no-playlist",
-            "--progress",
-            "--newline",
-            "--continue",
-            self.url,
-        ]
-        if self.proxy_url:
-            cmd.extend(["--proxy", self.proxy_url])
-        if self.cookie_file and os.path.exists(self.cookie_file):
-            cmd.extend(["--cookies", self.cookie_file])
-        return " ".join(cmd)
+            # Accept files under output_path or the dedicated temp dir.
+            if resolved.parent != output_dir:
+                if not (temp_dir_resolved and resolved.parent == temp_dir_resolved):
+                    continue
+            if resolved == output_dir:
+                continue
+            if temp_dir_resolved and resolved == temp_dir_resolved:
+                continue
 
-    def test_proxy(self) -> tuple:
-        if not self.proxy_url:
-            return False, "No proxy configured"
-        try:
-            import urllib.request
-            import urllib.error
-            import urllib.parse as _up
+            self._produced_paths.add(resolved)
 
-            parsed = _up.urlparse(self.proxy_url)
-            proxy_handler = urllib.request.ProxyHandler(
-                {"http": self.proxy_url, "https": self.proxy_url}
+        if self._produced_paths:
+            print(
+                f"📋 [YouTubeWorker] Recorded {len(self._produced_paths)} "
+                f"produced path(s)"
             )
-            opener = urllib.request.build_opener(proxy_handler)
-            urllib.request.install_opener(opener)
-            response = urllib.request.urlopen("https://www.google.com", timeout=10)
-            if response.status == 200:
-                return True, "Proxy is working"
-            else:
-                return False, f"Proxy returned status: {response.status}"
-        except urllib.error.URLError as e:
-            return False, f"Proxy error: {str(e)}"
-        except Exception as e:
-            return False, f"Error: {str(e)}"
+            for p in sorted(self._produced_paths):
+                print(f"   • {p.name}")

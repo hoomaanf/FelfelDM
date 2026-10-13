@@ -580,7 +580,18 @@ class AddDownloadDialog(QDialog):
 
         self.conn_spin = QSpinBox()
         self.conn_spin.setRange(1, 16)
-        self.conn_spin.setValue(8)
+        # Use the global "connections" setting as the default instead
+        # of a hardcoded 8, so the user's choice in Settings is
+        # respected here.
+        _default_conn = 8
+        if self._main_window is not None and hasattr(self._main_window, "store"):
+            try:
+                _default_conn = int(
+                    self._main_window.store.settings.get("connections", 8)
+                )
+            except (ValueError, TypeError):
+                _default_conn = 8
+        self.conn_spin.setValue(max(1, min(16, _default_conn)))
         self.conn_spin.setFixedWidth(80)
         conn_row.addWidget(self.conn_spin)
         conn_row.addStretch()

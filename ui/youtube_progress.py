@@ -491,7 +491,6 @@ class YouTubeProgressDialog(QDialog):
         copy_row = QHBoxLayout()
         copy_row.addStretch()
         self.copy_tech_btn = QPushButton(get_icon("edit-copy"), "Copy")
-        self.copy_tech_btn.setFixedHeight(28)
         self.copy_tech_btn.setMinimumWidth(90)
         self.copy_tech_btn.clicked.connect(self._on_copy_technical)
         copy_row.addWidget(self.copy_tech_btn)
@@ -634,13 +633,11 @@ class YouTubeProgressDialog(QDialog):
                 stripe_color = "#e69a00"
                 base_color = "#f5b400"
 
-            self.progress_bar.set_striped(
-                True,
-                base_color=base_color,
-                stripe_color=stripe_color,
-            )
+            self.progress_bar.set_color(base_color)
+            self.progress_bar.set_striped(True, stripe_color=stripe_color)
         else:
-            self.progress_bar.set_striped(False, base_color=chunk_color)
+            self.progress_bar.set_striped(False)
+            self.progress_bar.set_color(chunk_color)
 
     # ═══════════════════════════════════════════════════════════
     # Technical tab
@@ -972,12 +969,11 @@ class YouTubeProgressDialog(QDialog):
     def _on_finished(self, success, message):
         if success:
             self._is_complete = True
-            self.title_label.setText(f"✅ {self.title_label.text()}")
-
+            # Title stays as the plain title — no ✅/❌ prefix.
             if self.video_info and self.video_info.get("title"):
-                self.setWindowTitle(f"✅ {self.video_info['title']}")
+                self.setWindowTitle(self.video_info["title"])
             else:
-                self.setWindowTitle("✅ Download completed!")
+                self.setWindowTitle("Download completed")
 
             self.info_labels["status"].setText("Completed")
             self.info_labels["speed"].setText("Done")
@@ -1015,7 +1011,8 @@ class YouTubeProgressDialog(QDialog):
                 self._file_path = os.path.join(self.output_path, f"{safe_title}.{ext}")
 
         else:
-            self.title_label.setText(f"❌ {self.title_label.text()}")
+            # No ❌ on the title — the status field already shows "Failed",
+            # and the error message appears in the log / status area.
             self.info_labels["status"].setText("Failed")
             self.info_labels["speed"].setText("—")
             self.info_labels["eta"].setText("—")
@@ -1031,7 +1028,6 @@ class YouTubeProgressDialog(QDialog):
             self.cancel_btn.clicked.connect(self.reject)
 
         self._update_technical()
-
     # ═══════════════════════════════════════════════════════════
     # Misc
     # ═══════════════════════════════════════════════════════════

@@ -6,6 +6,7 @@ import secrets
 import shutil
 import threading
 import uuid
+import time
 from copy import deepcopy
 from datetime import datetime, time as dtime, timedelta
 from pathlib import Path
@@ -166,6 +167,7 @@ class Queue:
             "downloads": self.downloads,
             "downloads_info": downloads_info,
             "paused": self.paused,
+            "manually_paused": self.manually_paused,
             "proxy_config": proxy_dict,
             "speed_limit": self.speed_limit,
             "error_count": self.error_count,
@@ -179,6 +181,8 @@ class Queue:
         q.save_path = d.get("save_path") or os.path.expanduser("~/Downloads")
         q.schedule_enabled = bool(d.get("schedule_enabled", False))
         q.paused = bool(d.get("paused", True))
+        
+        q.manually_paused = bool(d.get("manually_paused", False))
 
         st = str(d.get("schedule_start", "00:00")).split(":")
         en = str(d.get("schedule_end", "23:59")).split(":")
@@ -373,11 +377,7 @@ class DataStore:
     def _mark_main_dirty(self) -> None:
         with self._lock:
             self._main_dirty = True
-
-    def _mark_main_dirty(self) -> None:
-        with self._lock:
-            self._main_dirty = True
-
+            
     def mark_dirty(self) -> None:
         """
         Record that in-memory state changed without writing to disk yet.
@@ -546,30 +546,58 @@ class DataStore:
             print(f"⚠️ Could not prune old corrupted backups: {e}")
 
     def _persist(self, *, require_dirty: bool) -> None:
+        """Persist the current state atomically.
+
+        Thread-safety:
+        - We never run to_dict() on a live downloads_info dict inside
+          the lock. We take a snapshot of queues under the lock, then
+          serialize outside the lock.
+        - aria2_secret is temporarily removed from settings before
+          serialization and restored in a finally block.
+        - On write failure we re-mark dirty so the next flush retries.
+        """
+        # ── 1. Take a consistent snapshot under the lock ──
         with self._lock:
             if require_dirty and not self._main_dirty:
                 return
-            self._main_dirty = True
 
+            queues_snapshot = list(self.queues)
             secret = self.settings.pop("aria2_secret", "")
+            settings_snapshot = deepcopy(self.settings)
+            proxies_snapshot = deepcopy(self.download_proxies)
+            rules_snapshot = self.rule_engine.to_dict_list()
+
+            # Mark clean NOW, so any change during serialization will
+            # re-set the flag and be picked up by the next flush.
+            self._main_dirty = False
+
+        try:
+            # ── 2. Serialize outside the lock ──
             payload = {
                 "version": DATA_VERSION,
-                "queues": [q.to_dict() for q in self.queues],
-                "settings": deepcopy(self.settings),
-                "download_proxies": deepcopy(self.download_proxies),
-                "rules": self.rule_engine.to_dict_list(),
+                "queues": [q.to_dict() for q in queues_snapshot],
+                "settings": settings_snapshot,
+                "download_proxies": proxies_snapshot,
+                "rules": rules_snapshot,
             }
-            self.settings["aria2_secret"] = secret
+        finally:
+            # Always restore the secret, even if serialization raised.
+            with self._lock:
+                self.settings["aria2_secret"] = secret
 
         if secret:
             self._save_secret(secret)
 
+        # ── 3. Write to disk ──
         try:
             _atomic_write_json(self.data_file, payload)
-            with self._lock:
-                self._main_dirty = False
         except Exception as e:
-            print(f"⚠️ Error saving data (previous config on disk is unchanged): {e}")
+            with self._lock:
+                self._main_dirty = True
+            print(
+                f"⚠️ Error saving data (previous config on disk is "
+                f"unchanged): {e}"
+            )
 
     def save(self) -> None:
         """
@@ -593,11 +621,22 @@ class DataStore:
         self._persist(require_dirty=True)
 
     def _main_flush_loop(self) -> None:
+        """Background writer loop.
+
+        Catches all exceptions so a single bad serialization cannot
+        kill the thread and silently stop all persistence.
+        """
         while True:
-            stop_requested = self._main_stop.wait(self._main_flush_interval)
-            self._flush_if_dirty()
-            if stop_requested:
-                break
+            try:
+                stop_requested = self._main_stop.wait(self._main_flush_interval)
+                self._flush_if_dirty()
+                if stop_requested:
+                    break
+            except Exception as e:
+                print(f"⚠️ [DataStore] Flush loop error (continuing): {e}")
+                import traceback
+                traceback.print_exc()
+                time.sleep(1.0)
 
     def _load_youtube_downloads(self) -> None:
         if not self.youtube_downloads_file.exists():
@@ -615,17 +654,25 @@ class DataStore:
             self.youtube_downloads = {}
 
     def _flush_youtube_downloads(self) -> None:
-        if not self._yt_dirty.is_set():
-            return
+        """Write youtube_downloads.json if dirty.
+
+        Clears the dirty flag BEFORE the snapshot and write, so any
+        update that lands during the write re-sets the flag and is
+        picked up by the next flush.
+        """
+        self._yt_dirty.clear()
 
         with self._yt_lock:
             snapshot = deepcopy(self.youtube_downloads)
+
         try:
             _atomic_write_json(
-                self.youtube_downloads_file, {"downloads": snapshot}, indent=None
+                self.youtube_downloads_file,
+                {"downloads": snapshot},
+                indent=None,
             )
-            self._yt_dirty.clear()
         except Exception as e:
+            self._yt_dirty.set()
             print(f"⚠️ Error saving YouTube downloads: {e}")
 
     def _yt_flush_loop(self) -> None:
@@ -636,7 +683,8 @@ class DataStore:
                 break
 
     def flush(self) -> None:
-        self._yt_dirty.clear()
+        """Force a synchronous flush of both stores."""
+        self._persist(require_dirty=False)
         self._flush_youtube_downloads()
 
     def shutdown(self, timeout: float = 5.0) -> None:
