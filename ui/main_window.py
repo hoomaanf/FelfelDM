@@ -84,7 +84,6 @@ class MainWindow(QMainWindow):
         self._current_queue_idx: int = 0
         self._pending_size_fetch: Dict[str, float] = {}
         self._retrying_gids: Set[str] = set()
-        self._retrying_gids: Set[str] = set()
         self._retry_timers: Dict[str, QTimer] = {}
         self._retry_state: Dict[str, dict] = {}
         # download_id -> (time healthy streak began, completedLength at that time)
