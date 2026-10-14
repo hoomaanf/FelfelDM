@@ -4,13 +4,12 @@ from __future__ import annotations
 
 import time
 from datetime import datetime, time as dt_time
-from typing import Dict, List, Set
+from typing import Dict, List, Set, Optional, Callable
 
 from PyQt6.QtCore import QThread, pyqtSignal, QMutex, QMutexLocker
 
 
 class ScheduleConfig:
-
     def __init__(self, queue_name, start, end, days, enabled=True):
         self.queue_name = queue_name
         self.start = start
@@ -20,17 +19,41 @@ class ScheduleConfig:
 
 
 class ScheduleManagerThread(QThread):
+    """Background scheduler.
 
+    IMPORTANT (Wayland / lock-screen fix):
+    This thread does the actual queue start/pause work itself, using
+    the store and aria2 references passed in at construction. It does
+    NOT rely on signals crossing to the UI thread, because on Wayland
+    the Qt main event loop is frozen while the screen is locked — so
+    any queued signal would sit unprocessed until the user unlocks.
+
+    The signals below are kept as a lightweight "please refresh the
+    UI" notification. They are allowed to be delayed; the actual
+    download state change already happened here in the worker thread.
+    """
+
+    # Lightweight UI notifications only. The real work is done here.
     start_queue = pyqtSignal(str)
     pause_queue = pyqtSignal(str)
 
-    def __init__(self, check_interval=5.0, parent=None):
+    def __init__(
+        self,
+        store,
+        aria2,
+        check_interval=5.0,
+        parent=None,
+    ):
         super().__init__(parent)
         self._check_interval = check_interval
         self._mutex = QMutex()
         self._schedules: Dict[str, ScheduleConfig] = {}
         self._running_queues: Set[str] = set()
         self._stop_requested = False
+
+        # References to shared state. Used directly from this thread.
+        self._store = store
+        self._aria2 = aria2
 
     def set_schedules(self, schedules: List[ScheduleConfig]):
         with QMutexLocker(self._mutex):
@@ -74,8 +97,166 @@ class ScheduleManagerThread(QThread):
         else:
             return current >= start or current < end
 
-    def run(self):
+    # ─────────────────────────────────────────────────────────────
+    #  Direct queue control (runs in this worker thread)
+    # ─────────────────────────────────────────────────────────────
 
+    def _find_queue(self, queue_name: str):
+        """Find a queue object by name. Reads from the shared store."""
+        try:
+            for q in self._store.queues:
+                if q.name == queue_name:
+                    return q
+        except Exception as e:
+            print(f"⚠️ [Scheduler] Could not read queues: {e}")
+        return None
+
+    def _start_queue_direct(self, queue_name: str) -> None:
+        """Start a queue and all its downloads directly, without
+        involving the UI thread.
+
+        This is what makes the schedule work while the screen is
+        locked on Wayland: we never emit a signal that the UI has to
+        process — we change state and talk to aria2 ourselves.
+        """
+        q = self._find_queue(queue_name)
+        if q is None:
+            print(f"⚠️ [Scheduler] Queue '{queue_name}' not found")
+            return
+
+        if q.manually_paused:
+            print(
+                f"⏸️ [Scheduler] Queue '{queue_name}' is manually paused "
+                f"— skipping auto-start"
+            )
+            return
+
+        if not q.paused:
+            return
+
+        print(f"▶️ [Scheduler] Starting queue '{queue_name}' (direct)")
+
+        q.paused = False
+        q.manually_paused = False
+
+        # Collect gids that need to be unpaused in aria2.
+        gids_to_resume = []
+        for gid in q.downloads:
+            info = q.downloads_info.get(gid)
+            if not info:
+                continue
+
+            dtype = info.get("download_type", "normal")
+            if dtype == "youtube":
+                # YouTube downloads are handled by the worker's
+                # add_youtube_download path when the UI processes the
+                # start signal. Skip them here — a locked screen can't
+                # safely interact with the yt-dlp workers, and resuming
+                # a paused yt-dlp mid-process is what the UI does.
+                continue
+
+            aria2_gid = info.get("aria2_gid")
+            if not aria2_gid:
+                continue
+
+            # Only resume downloads that are paused/waiting/stopped.
+            try:
+                st = self._aria2.get_status(aria2_gid)
+            except Exception:
+                st = None
+            if not st:
+                continue
+            real_status = st.get("status", "")
+            if real_status in ("paused", "waiting", "stopped"):
+                gids_to_resume.append(aria2_gid)
+                info["status"] = "active"
+
+        if gids_to_resume:
+            try:
+                # Use the bulk API to keep it to one round trip.
+                ok = self._aria2.resume_multi(gids_to_resume)
+                if ok:
+                    print(
+                        f"▶️ [Scheduler] Resumed {len(gids_to_resume)} "
+                        f"download(s) in queue '{queue_name}'"
+                    )
+                else:
+                    print(
+                        f"⚠️ [Scheduler] resume_multi returned False for "
+                        f"queue '{queue_name}'"
+                    )
+            except Exception as e:
+                print(f"⚠️ [Scheduler] resume_multi failed: {e}")
+
+        # Persist the new state so a restart preserves it.
+        try:
+            self._store.save()
+        except Exception as e:
+            print(f"⚠️ [Scheduler] Could not save store: {e}")
+
+    def _pause_queue_direct(self, queue_name: str) -> None:
+        """Pause a queue and all its downloads directly, without
+        involving the UI thread.
+        """
+        q = self._find_queue(queue_name)
+        if q is None:
+            return
+
+        if q.paused:
+            return
+
+        print(f"⏸️ [Scheduler] Pausing queue '{queue_name}' (direct)")
+
+        q.paused = True
+        q.manually_paused = False  # Schedule-driven pause, not user
+
+        gids_to_pause = []
+        for gid in q.downloads:
+            info = q.downloads_info.get(gid)
+            if not info:
+                continue
+
+            dtype = info.get("download_type", "normal")
+            if dtype == "youtube":
+                continue  # handled by UI when unlocked
+
+            aria2_gid = info.get("aria2_gid")
+            if not aria2_gid:
+                continue
+
+            try:
+                st = self._aria2.get_status(aria2_gid)
+            except Exception:
+                st = None
+            if not st:
+                continue
+            real_status = st.get("status", "")
+            if real_status in ("active", "waiting"):
+                gids_to_pause.append(aria2_gid)
+                info["status"] = "paused"
+                info["downloadSpeed"] = 0
+
+        if gids_to_pause:
+            try:
+                ok = self._aria2.pause_multi(gids_to_pause)
+                if ok:
+                    print(
+                        f"⏸️ [Scheduler] Paused {len(gids_to_pause)} "
+                        f"download(s) in queue '{queue_name}'"
+                    )
+            except Exception as e:
+                print(f"⚠️ [Scheduler] pause_multi failed: {e}")
+
+        try:
+            self._store.save()
+        except Exception as e:
+            print(f"⚠️ [Scheduler] Could not save store: {e}")
+
+    # ─────────────────────────────────────────────────────────────
+    #  Main loop
+    # ─────────────────────────────────────────────────────────────
+
+    def run(self):
         while not self._stop_requested:
             now = datetime.now()
 
@@ -88,15 +269,18 @@ class ScheduleManagerThread(QThread):
                         currently_should_run.add(cfg.queue_name)
 
                 to_start = currently_should_run - self._running_queues
-
                 to_pause = self._running_queues - currently_should_run
 
                 for queue_name in to_start:
                     self._running_queues.add(queue_name)
+                    # Do the real work here, in this thread.
+                    self._start_queue_direct(queue_name)
+                    # Then notify the UI (may be delayed on Wayland lock).
                     self.start_queue.emit(queue_name)
 
                 for queue_name in to_pause:
                     self._running_queues.discard(queue_name)
+                    self._pause_queue_direct(queue_name)
                     self.pause_queue.emit(queue_name)
 
             slept = 0.0

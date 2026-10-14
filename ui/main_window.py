@@ -123,10 +123,7 @@ class MainWindow(QMainWindow):
         self._last_tray_state = False
         self._startup_complete = False
         self.export_manager = ExportManager(self)
-        self.schedule_thread = ScheduleManagerThread(check_interval=5.0)
-        self.schedule_thread.start_queue.connect(self._on_schedule_start)
-        self.schedule_thread.pause_queue.connect(self._on_schedule_pause)
-        self.schedule_thread.start()
+        self.schedule_thread = None
         self._drop_overlay: Optional[DropOverlay] = None
 
     def _init_ui(self) -> None:
@@ -171,6 +168,15 @@ class MainWindow(QMainWindow):
             self.store.settings["aria2_port"],
             self.store.settings["aria2_secret"],
         )
+
+        self.schedule_thread = ScheduleManagerThread(
+            store=self.store,
+            aria2=self.aria2,
+            check_interval=5.0,
+        )
+        self.schedule_thread.start_queue.connect(self._on_schedule_start)
+        self.schedule_thread.pause_queue.connect(self._on_schedule_pause)
+        self.schedule_thread.start()
 
         self.proxy_manager = ProxyManager(self.store)
         self._apply_proxy_to_aria2()
@@ -341,86 +347,71 @@ class MainWindow(QMainWindow):
             )
 
     def _on_schedule_start(self, queue_name: str):
-        print(f"▶️ [Schedule] Starting queue: {queue_name}")
+        """UI notification that the scheduler has started a queue.
 
+        The scheduler already did the real work (unpaused aria2
+        downloads, updated the store). We need to:
+          1. Reload the queue's paused flag from the store, because
+             the scheduler may have changed it while the UI was
+             frozen (Wayland lock).
+          2. Refresh the UI so the user sees the new state.
+        """
+        print(f"🔔 [UI] Scheduler started queue: {queue_name}")
+
+        # The store is the source of truth: re-read what the scheduler
+        # wrote. We also update the live runtime dicts to match.
         for i, q in enumerate(self.store.queues):
-            if q.name == queue_name:
+            if q.name != queue_name:
+                continue
 
-                if q.manually_paused:
-                    print(
-                        f"⏸️ [Schedule] Queue '{queue_name}' is "
-                        f"manually paused — skipping auto-start"
-                    )
-                    break
+            # Re-read paused from the store.
+            # q.paused was already updated by the scheduler via the
+            # shared store object — but if the UI was frozen during
+            # the write, our local view may be stale. Force a refresh.
+            self._all_downloads  # touch to avoid lints
+            for gid in q.downloads:
+                info = q.downloads_info.get(gid)
+                if not info:
+                    continue
+                # Trust the store's "status" field.
+                new_status = info.get("status", "")
+                if gid in self._all_downloads and new_status:
+                    self._all_downloads[gid]["status"] = new_status
 
-                self._current_queue_idx = i
-                self._refresh_queue_list()
-
-                if q.paused:
-                    q.paused = False
-                    q.manually_paused = False
-                    self.store.save()
-                    self._start_current_queue()
-                break
+            self._queue_list_dirty = True
+            self._refresh_queue_list()
+            self._refresh_table()
+            self._update_queue_status()
+            self._update_queue_buttons()
+            self._update_shutdown_button_state()
+            break
 
     def _on_schedule_pause(self, queue_name: str):
-        print(f"⏸️ [Schedule] Pausing queue: {queue_name}")
+        """UI notification that the scheduler has paused a queue."""
+        print(f"🔔 [UI] Scheduler paused queue: {queue_name}")
 
         for i, q in enumerate(self.store.queues):
-            if q.name == queue_name:
-                self._current_queue_idx = i
-                self._refresh_queue_list()
+            if q.name != queue_name:
+                continue
 
-                if not q.paused:
-                    # Pause because the schedule window ended — this is
-                    # NOT a user-initiated pause, so manually_paused
-                    # stays False.
-                    q.paused = True
-                    q.manually_paused = False
+            for gid in q.downloads:
+                info = q.downloads_info.get(gid)
+                if not info:
+                    continue
+                new_status = info.get("status", "")
+                if gid in self._all_downloads and new_status:
+                    self._all_downloads[gid]["status"] = new_status
+                    if new_status == "paused":
+                        self._all_downloads[gid]["downloadSpeed"] = 0
 
-                    # Pause all active downloads in this queue without
-                    # going through _pause_current_queue (which would
-                    # set manually_paused=True).
-                    gids_to_pause = []
-                    for gid in q.downloads:
-                        if gid in self._all_downloads:
-                            current_status = self._all_downloads[gid].get(
-                                "status", ""
-                            )
-                            dtype = self._all_downloads[gid].get(
-                                "download_type", "normal"
-                            )
+            self._queue_list_dirty = True
+            self._refresh_queue_list()
+            self._refresh_table()
+            self._update_queue_status()
+            self._update_queue_buttons()
+            self._update_shutdown_button_state()
+            break
 
-                            if dtype == "youtube":
-                                if current_status in (
-                                    "downloading", "active", "waiting"
-                                ):
-                                    self._pause_youtube_download(gid)
-                                    self._all_downloads[gid]["status"] = "paused"
-                                    if gid in q.downloads_info:
-                                        q.downloads_info[gid]["status"] = "paused"
-                                continue
-
-                            if current_status in (
-                                "active", "waiting", "downloading"
-                            ):
-                                gids_to_pause.append(gid)
-                                self._all_downloads[gid]["status"] = "paused"
-                                self._all_downloads[gid]["downloadSpeed"] = 0
-                                self._mark_pending_status(gid, "paused")
-                                if gid in q.downloads_info:
-                                    q.downloads_info[gid]["status"] = "paused"
-
-                    if gids_to_pause:
-                        self._worker_pause_multi(gids_to_pause)
-
-                    self.store.save()
-                    self._refresh_table()
-                    self._queue_list_dirty = True
-                    self._refresh_queue_list()
-                    self._update_queue_status()
-                    self._update_queue_buttons()
-                break
     def _load_schedules(self):
         schedules = []
         for q in self.store.queues:
@@ -516,6 +507,8 @@ class MainWindow(QMainWindow):
         self._refresh_queue_list()
         self._update_queue_buttons()
 
+        self._update_queue_status()
+
     def _build_sidebar(self) -> QWidget:
         """Sidebar layout (top to bottom):
 
@@ -595,20 +588,47 @@ class MainWindow(QMainWindow):
         card_lay.setContentsMargins(14, 12, 14, 14)
         card_lay.setSpacing(6)
 
-        self.queue_status_lbl = QLabel("⏸ Paused")
+        # Status row: icon + text
+        self.queue_status_row = QWidget()
+        qsr_lay = QHBoxLayout(self.queue_status_row)
+        qsr_lay.setContentsMargins(0, 0, 0, 0)
+        qsr_lay.setSpacing(6)
+
+        self.queue_status_icon = QLabel()
+        self.queue_status_icon.setFixedSize(18, 18)
+        self.queue_status_icon.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        qsr_lay.addWidget(self.queue_status_icon)
+
+        self.queue_status_lbl = QLabel("Paused")
         self.queue_status_lbl.setStyleSheet(
             "color: #f39c12; font-weight: bold; font-size: 14px;"
         )
-        card_lay.addWidget(self.queue_status_lbl)
+        qsr_lay.addWidget(self.queue_status_lbl)
+        qsr_lay.addStretch()
+
+        card_lay.addWidget(self.queue_status_row)
 
         self.speed_limit_lbl = QLabel("")
         self.speed_limit_lbl.setStyleSheet("color: #f39c12; font-size: 11px;")
         card_lay.addWidget(self.speed_limit_lbl)
 
+        # Schedule row: icon + text
+        self.schedule_status_row = QWidget()
+        ssr_lay = QHBoxLayout(self.schedule_status_row)
+        ssr_lay.setContentsMargins(0, 0, 0, 0)
+        ssr_lay.setSpacing(6)
+
+        self.schedule_status_icon = QLabel()
+        self.schedule_status_icon.setFixedSize(14, 14)
+        self.schedule_status_icon.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        ssr_lay.addWidget(self.schedule_status_icon, 0, Qt.AlignmentFlag.AlignTop)
+
         self.schedule_status_lbl = QLabel("")
         self.schedule_status_lbl.setStyleSheet("color: #3498db; font-size: 11px;")
         self.schedule_status_lbl.setWordWrap(True)
-        card_lay.addWidget(self.schedule_status_lbl)
+        ssr_lay.addWidget(self.schedule_status_lbl, 1)
+
+        card_lay.addWidget(self.schedule_status_row)
 
         card_lay.addSpacing(4)
         btn_layout = QHBoxLayout()
@@ -1042,10 +1062,7 @@ class MainWindow(QMainWindow):
         self._last_speed_limit_active_count = None
         self._apply_queue_speed_limit(q)
 
-    def _pause_current_queue(self) -> None:
-        """Pause the current queue and all its active/waiting downloads"""
-        print("⏸️ Pausing queue...")
-
+    def _pause_current_queue(self):
         q = self._current_queue()
         if not q or q.name == "__direct__":
             return
@@ -1064,30 +1081,69 @@ class MainWindow(QMainWindow):
         q.manually_paused = True
         self.store.save()
 
-        gids_to_pause = []
+        # Ask aria2 directly which gids are currently active/waiting.
+        # We cannot trust _all_downloads[gid]["status"] here because
+        # the scheduler may have changed aria2's state while the UI
+        # was frozen (Wayland lock).
+        #
+        # IMPORTANT: we collect *download_ids* (not aria2 gids) here,
+        # because _worker_pause_multi expects download_ids and will
+        # translate them to aria2 gids itself. Sending aria2 gids
+        # would cause _get_aria2_gid() to return None for each one,
+        # silently dropping every gid — which is exactly why the
+        # queue was "paused" in the UI but still downloading.
+        download_ids_to_pause = []
         for gid in q.downloads:
-            if gid in self._all_downloads:
-                current_status = self._all_downloads[gid].get("status", "")
-                dtype = self._all_downloads[gid].get("download_type", "normal")
+            info = q.downloads_info.get(gid, {})
+            dtype = info.get("download_type", "normal")
 
-                if dtype == "youtube":
-                    if current_status in ["downloading", "active", "waiting"]:
+            if dtype == "youtube":
+                # YouTube handled via the existing _pause_youtube_download path.
+                if gid in self._all_downloads:
+                    st = self._all_downloads[gid].get("status", "")
+                    if st in ("downloading", "active", "waiting"):
                         self._pause_youtube_download(gid)
                         self._all_downloads[gid]["status"] = "paused"
                         if gid in q.downloads_info:
                             q.downloads_info[gid]["status"] = "paused"
-                    continue
+                continue
 
-                if current_status in ["active", "waiting", "downloading"]:
-                    gids_to_pause.append(gid)
+            aria2_gid = info.get("aria2_gid")
+            if not aria2_gid:
+                continue
+
+            # Ask aria2 for the real status.
+            real_status = ""
+            try:
+                st = self.aria2.get_status(aria2_gid)
+                if st:
+                    real_status = st.get("status", "")
+            except Exception:
+                pass
+
+            # If aria2 reports the download is active or waiting, we
+            # want to pause it. We use the download_id (gid), not the
+            # aria2 gid, because _worker_pause_multi resolves the
+            # aria2 gid from _all_downloads itself.
+            if real_status in ("active", "waiting", "paused"):
+                download_ids_to_pause.append(gid)
+
+            # Update our local view to match aria2.
+            if real_status in ("active", "waiting"):
+                if gid in self._all_downloads:
                     self._all_downloads[gid]["status"] = "paused"
                     self._all_downloads[gid]["downloadSpeed"] = 0
-                    self._mark_pending_status(gid, "paused")
-                    if gid in q.downloads_info:
-                        q.downloads_info[gid]["status"] = "paused"
+                if gid in q.downloads_info:
+                    q.downloads_info[gid]["status"] = "paused"
 
-        if gids_to_pause:
-            self._worker_pause_multi(gids_to_pause)
+        if download_ids_to_pause:
+            print(
+                f"⏸️ [UI] Pausing queue '{q.name}': "
+                f"{len(download_ids_to_pause)} download(s)"
+            )
+            self._worker_pause_multi(download_ids_to_pause)
+        else:
+            print(f"⏸️ [UI] Queue '{q.name}' has no active downloads to pause")
 
         self.store.save()
         self._refresh_table()
@@ -1386,7 +1442,7 @@ class MainWindow(QMainWindow):
             self.worker.set_speed_limit_multi_requested.emit(aria2_gids, speed_kb)
 
     def _extract_filename(self, url: str) -> str:
-  
+
         try:
             raw_name = url.split("/")[-1]
             clean_name = raw_name.split("?")[0] if "?" in raw_name else raw_name
@@ -1580,9 +1636,23 @@ class MainWindow(QMainWindow):
             self.pause_queue_btn.setEnabled(False)
 
             if q and q.name == "__direct__":
-                self.queue_status_lbl.setText("Direct Downloads")
+                self._set_status_with_icon(
+                    self.queue_status_lbl,
+                    self.queue_status_icon,
+                    "Direct Downloads",
+                    "folder-download",
+                    "#3498db",
+                    size=18,
+                )
             else:
-                self.queue_status_lbl.setText("📭 Empty")
+                self._set_status_with_icon(
+                    self.queue_status_lbl,
+                    self.queue_status_icon,
+                    "Empty",
+                    "folder-open",
+                    "#95a5a6",
+                    size=18,
+                )
             return
 
         has_active = False
@@ -1611,9 +1681,14 @@ class MainWindow(QMainWindow):
         has_resumable = has_paused or has_error or has_getting_size
 
         if q.paused:
-
-            self.queue_status_lbl.setText("⏸ Paused")
-            self.queue_status_lbl.setStyleSheet("color: #f39c12; font-weight: bold;")
+            self._set_status_with_icon(
+                self.queue_status_lbl,
+                self.queue_status_icon,
+                "Paused",
+                "media-playback-pause",
+                "#f39c12",
+                size=18,
+            )
 
             if has_active or has_waiting:
                 self.start_queue_btn.setEnabled(True)
@@ -1627,23 +1702,35 @@ class MainWindow(QMainWindow):
         else:
 
             if has_active or has_waiting:
-                self.queue_status_lbl.setText("▶ Running")
-                self.queue_status_lbl.setStyleSheet(
-                    "color: #27ae60; font-weight: bold;"
+                self._set_status_with_icon(
+                    self.queue_status_lbl,
+                    self.queue_status_icon,
+                    "Running",
+                    "media-playback-start",
+                    "#27ae60",
+                    size=18,
                 )
                 self.start_queue_btn.setEnabled(False)
                 self.pause_queue_btn.setEnabled(True)
             elif has_resumable:
-                self.queue_status_lbl.setText("⏳ Idle")
-                self.queue_status_lbl.setStyleSheet(
-                    "color: #95a5a6; font-weight: bold;"
+                self._set_status_with_icon(
+                    self.queue_status_lbl,
+                    self.queue_status_icon,
+                    "Idle",
+                    "appointment-soon",
+                    "#95a5a6",
+                    size=18,
                 )
                 self.start_queue_btn.setEnabled(True)
                 self.pause_queue_btn.setEnabled(False)
             else:
-                self.queue_status_lbl.setText("⏳ Idle")
-                self.queue_status_lbl.setStyleSheet(
-                    "color: #95a5a6; font-weight: bold;"
+                self._set_status_with_icon(
+                    self.queue_status_lbl,
+                    self.queue_status_icon,
+                    "Idle",
+                    "appointment-soon",
+                    "#95a5a6",
+                    size=18,
                 )
                 self.start_queue_btn.setEnabled(False)
                 self.pause_queue_btn.setEnabled(False)
@@ -1651,24 +1738,45 @@ class MainWindow(QMainWindow):
     def _update_queue_status(self) -> None:
         q = self._current_queue()
         if not q:
-            self.queue_status_lbl.setText("⏸ No Queue")
-            self.queue_status_lbl.setStyleSheet("color: #95a5a6; font-weight: bold;")
+            self._set_status_with_icon(
+                self.queue_status_lbl,
+                self.queue_status_icon,
+                "No Queue",
+                "dialog-question",
+                "#95a5a6",
+                size=18,
+            )
+            self.schedule_status_icon.clear()
             self.schedule_status_lbl.setText("")
             self.status_label.setText("Ready")
             return
 
         if q.name == "__direct__":
-            self.queue_status_lbl.setText("Direct Downloads")
-            self.queue_status_lbl.setStyleSheet("color: #3498db; font-weight: bold;")
+            self._set_status_with_icon(
+                self.queue_status_lbl,
+                self.queue_status_icon,
+                "Direct Downloads",
+                "folder-download",
+                "#3498db",
+                size=18,
+            )
+            self.schedule_status_icon.clear()
             self.schedule_status_lbl.setText("")
             self.status_label.setText("Direct Downloads")
             return
 
         if len(q.downloads) == 0:
-            self.queue_status_lbl.setText("📭 Empty")
-            self.queue_status_lbl.setStyleSheet("color: #95a5a6; font-weight: bold;")
+            self._set_status_with_icon(
+                self.queue_status_lbl,
+                self.queue_status_icon,
+                "Empty",
+                "folder-open",
+                "#95a5a6",
+                size=18,
+            )
+            self.schedule_status_icon.clear()
             self.schedule_status_lbl.setText("Add downloads to start")
-            self.status_label.setText("📭 Empty queue")
+            self.status_label.setText("Empty queue")
             return
 
         if getattr(q, "speed_limit", 0) > 0:
@@ -1691,16 +1799,53 @@ class MainWindow(QMainWindow):
                 break
 
         if all_complete and has_any_download:
-            self.queue_status_lbl.setText("✅ Complete")
-            self.queue_status_lbl.setStyleSheet("color: #27ae60; font-weight: bold;")
+            self._set_status_with_icon(
+                self.queue_status_lbl,
+                self.queue_status_icon,
+                "Complete",
+                "emblem-default",
+                "#27ae60",
+                size=18,
+            )
+            self.schedule_status_icon.clear()
             self.schedule_status_lbl.setText("")
-            self.status_label.setText("✅ All downloads complete")
+            self.status_label.setText("All downloads complete")
             return
 
         if q.schedule_enabled:
             self._update_scheduled_queue_status(q)
         else:
             self._update_regular_queue_status(q)
+
+    def _set_status_with_icon(
+        self,
+        text_label: QLabel,
+        icon_label: QLabel,
+        text: str,
+        icon_name: str,
+        color: str,
+        size: int = 16,
+    ) -> None:
+        """Set a status label's text plus a themed icon next to it.
+
+        Falls back to a colored Unicode bullet if the theme has no
+        matching icon, so the layout never collapses.
+        """
+        text_label.setText(text)
+        text_label.setStyleSheet(f"color: {color}; font-weight: bold;")
+
+        icon = get_icon(icon_name)
+        if icon is not None and not icon.isNull():
+            pm = icon.pixmap(size, size)
+            if not pm.isNull():
+                icon_label.setPixmap(pm)
+                icon_label.setStyleSheet("")
+                return
+
+        # Fallback: colored bullet
+        icon_label.clear()
+        icon_label.setText("●")
+        icon_label.setStyleSheet(f"color: {color}; font-size: {size}px;")
 
     def _update_scheduled_queue_status(self, q: Queue) -> None:
         if q.is_scheduled_now():
@@ -1712,62 +1857,100 @@ class MainWindow(QMainWindow):
                     for gid in q.downloads
                 )
                 if has_active:
-                    self.queue_status_lbl.setText("▶ Running (🕐 Scheduled)")
-                    self.queue_status_lbl.setStyleSheet(
-                        "color: #27ae60; font-weight: bold;"
+                    self._set_status_with_icon(
+                        self.queue_status_lbl,
+                        self.queue_status_icon,
+                        "Running",
+                        "media-playback-start",
+                        "#27ae60",
+                        size=18,
                     )
                 else:
-                    self.queue_status_lbl.setText("⏳ Waiting (🕐 Scheduled)")
-                    self.queue_status_lbl.setStyleSheet(
-                        "color: #3498db; font-weight: bold;"
+                    self._set_status_with_icon(
+                        self.queue_status_lbl,
+                        self.queue_status_icon,
+                        "Waiting",
+                        "appointment-soon",
+                        "#3498db",
+                        size=18,
                     )
-                self.schedule_status_lbl.setText("🕐 Schedule time is active ✓")
-                self.schedule_status_lbl.setStyleSheet(
-                    "color: #27ae60; font-weight: bold;"
+
+                self._set_status_with_icon(
+                    self.schedule_status_lbl,
+                    self.schedule_status_icon,
+                    "Schedule active",
+                    "alarm-clock",
+                    "#27ae60",
+                    size=14,
                 )
-                self.status_label.setText("🕐 Scheduled time is active")
+                self.status_label.setText("Scheduled time is active")
             else:
-                self.queue_status_lbl.setText("⏸ Paused (🕐 Scheduled)")
-                self.queue_status_lbl.setStyleSheet(
-                    "color: #f39c12; font-weight: bold;"
+                self._set_status_with_icon(
+                    self.queue_status_lbl,
+                    self.queue_status_icon,
+                    "Waiting",
+                    "appointment-soon",
+                    "#f39c12",
+                    size=18,
                 )
-                self.schedule_status_lbl.setText(
-                    "🕐 Click 'Start' to begin downloads now"
+                next_time = q.get_next_schedule_time()
+                if next_time:
+                    wait_text = f"Starts at {next_time.strftime('%H:%M')}"
+                else:
+                    wait_text = "Waiting for schedule"
+                self._set_status_with_icon(
+                    self.schedule_status_lbl,
+                    self.schedule_status_icon,
+                    wait_text,
+                    "alarm-clock",
+                    "#3498db",
+                    size=14,
                 )
-                self.schedule_status_lbl.setStyleSheet(
-                    "color: #3498db; font-weight: bold;"
-                )
-                self.status_label.setText("⏸ Paused - Schedule active")
+                self.status_label.setText("Waiting for scheduled time")
         else:
             days_text = ", ".join(
                 ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"][i] for i in q.days
             )
             next_time = q.get_next_schedule_time()
             if next_time:
-                self.schedule_status_lbl.setText(
-                    f"⏰ Next: {next_time.strftime('%H:%M on %A')}"
-                )
+                next_text = f"Next: {next_time.strftime('%H:%M on %A')}"
             else:
-                self.schedule_status_lbl.setText(
-                    f"⏰ Next: {q.schedule_start.strftime('%H:%M')}-{q.schedule_end.strftime('%H:%M')} {days_text}"
+                next_text = (
+                    f"Next: {q.schedule_start.strftime('%H:%M')}-"
+                    f"{q.schedule_end.strftime('%H:%M')} {days_text}"
                 )
-            self.schedule_status_lbl.setStyleSheet("color: #3498db; font-size: 11px;")
+            self._set_status_with_icon(
+                self.schedule_status_lbl,
+                self.schedule_status_icon,
+                next_text,
+                "appointment-soon",
+                "#3498db",
+                size=14,
+            )
 
             if q.paused:
-                self.queue_status_lbl.setText("⏸ Paused (⏰ Waiting)")
-                self.queue_status_lbl.setStyleSheet(
-                    "color: #f39c12; font-weight: bold;"
+                self._set_status_with_icon(
+                    self.queue_status_lbl,
+                    self.queue_status_icon,
+                    "Paused (waiting)",
+                    "media-playback-pause",
+                    "#f39c12",
+                    size=18,
                 )
                 self.status_label.setText(
-                    f"⏸ Paused - Next: {q.schedule_start.strftime('%H:%M')}"
+                    f"Paused - Next: {q.schedule_start.strftime('%H:%M')}"
                 )
             else:
-                self.queue_status_lbl.setText("⏰ Waiting for Schedule")
-                self.queue_status_lbl.setStyleSheet(
-                    "color: #3498db; font-weight: bold;"
+                self._set_status_with_icon(
+                    self.queue_status_lbl,
+                    self.queue_status_icon,
+                    "Waiting for schedule",
+                    "appointment-soon",
+                    "#3498db",
+                    size=18,
                 )
                 self.status_label.setText(
-                    f"⏰ Waiting: {q.schedule_start.strftime('%H:%M')}"
+                    f"Waiting: {q.schedule_start.strftime('%H:%M')}"
                 )
 
     def _update_regular_queue_status(self, q: Queue) -> None:
@@ -1778,19 +1961,35 @@ class MainWindow(QMainWindow):
                 for gid in q.downloads
             )
             if has_resumable:
-                self.queue_status_lbl.setText("⏸ Paused")
-                self.queue_status_lbl.setStyleSheet(
-                    "color: #f39c12; font-weight: bold;"
+                self._set_status_with_icon(
+                    self.queue_status_lbl,
+                    self.queue_status_icon,
+                    "Paused",
+                    "media-playback-pause",
+                    "#f39c12",
+                    size=18,
                 )
-                self.schedule_status_lbl.setText("Click 'Start' to resume downloads")
-                self.status_label.setText("⏸ Paused")
+                self._set_status_with_icon(
+                    self.schedule_status_lbl,
+                    self.schedule_status_icon,
+                    "Click Start to resume",
+                    "media-playback-start",
+                    "#3498db",
+                    size=14,
+                )
+                self.status_label.setText("Paused")
             else:
-                self.queue_status_lbl.setText("⏸ Paused")
-                self.queue_status_lbl.setStyleSheet(
-                    "color: #95a5a6; font-weight: bold;"
+                self._set_status_with_icon(
+                    self.queue_status_lbl,
+                    self.queue_status_icon,
+                    "Paused",
+                    "media-playback-pause",
+                    "#95a5a6",
+                    size=18,
                 )
+                self.schedule_status_icon.clear()
                 self.schedule_status_lbl.setText("")
-                self.status_label.setText("⏸ Paused")
+                self.status_label.setText("Paused")
         else:
             has_active = any(
                 gid in self._all_downloads
@@ -1799,18 +1998,27 @@ class MainWindow(QMainWindow):
                 for gid in q.downloads
             )
             if has_active:
-                self.queue_status_lbl.setText("▶ Running")
-                self.queue_status_lbl.setStyleSheet(
-                    "color: #27ae60; font-weight: bold;"
+                self._set_status_with_icon(
+                    self.queue_status_lbl,
+                    self.queue_status_icon,
+                    "Running",
+                    "media-playback-start",
+                    "#27ae60",
+                    size=18,
                 )
             else:
-                self.queue_status_lbl.setText("⏳ Idle")
-                self.queue_status_lbl.setStyleSheet(
-                    "color: #95a5a6; font-weight: bold;"
+                self._set_status_with_icon(
+                    self.queue_status_lbl,
+                    self.queue_status_icon,
+                    "Idle",
+                    "appointment-soon",
+                    "#95a5a6",
+                    size=18,
                 )
+            self.schedule_status_icon.clear()
             self.schedule_status_lbl.setText("")
-            self.status_label.setText("▶ Running")
-
+            self.status_label.setText("Running")
+    
     def _update_progress_bar(self) -> None:
         q = self._current_queue()
         total_size = 0
@@ -3017,7 +3225,7 @@ class MainWindow(QMainWindow):
         )
 
         self._refresh_table()
-   
+
     def _build_details_panel(self) -> QWidget:
         panel = QWidget()
         panel.setObjectName("details_panel")
@@ -3470,6 +3678,7 @@ class MainWindow(QMainWindow):
         entries = self._collect_files_for_gids(gids_to_remove)
         if entries:
             from ui.dialogs import DeleteFilesConfirmationDialog
+
             dlg = DeleteFilesConfirmationDialog(entries, parent=self)
             if dlg.exec() != QDialog.DialogCode.Accepted:
                 print("🗑️ [Delete] Cancelled by user")
@@ -3494,6 +3703,7 @@ class MainWindow(QMainWindow):
         # We poll until the gids are no longer reported by aria2, with
         # a hard cap so the UI can't hang.
         import time as _time
+
         deadline = _time.time() + 2.0
         remaining = set()
         while _time.time() < deadline:
@@ -3558,7 +3768,7 @@ class MainWindow(QMainWindow):
         self._queue_list_dirty = True
         self._refresh_queue_list()
         self._update_queue_buttons()
-        
+
     def _add_download(self) -> None:
         """Open the unified Add Download dialog (toolbar / Ctrl+N / Ctrl+U)."""
         self._open_or_update_add_dialog()
@@ -3782,7 +3992,7 @@ class MainWindow(QMainWindow):
                 )
 
         return entries
-    
+
     def _delete_files_with_confirmation(self, gids: List[str]) -> bool:
 
         entries = self._collect_files_for_gids(gids)
@@ -3809,9 +4019,7 @@ class MainWindow(QMainWindow):
                 if not os.path.exists(path):
                     continue
                 if os.path.isdir(path):
-                    print(
-                        f"⚠️ [Delete] Refusing to delete directory: {path}"
-                    )
+                    print(f"⚠️ [Delete] Refusing to delete directory: {path}")
                     continue
                 if not os.path.isfile(path):
                     continue
@@ -3828,7 +4036,7 @@ class MainWindow(QMainWindow):
 
         print(f"✅ Deleted {deleted} file(s)")
         return True
-    
+
     def _youtube_download(self) -> None:
         queues = [q for q in self.store.queues if q.name != "__direct__"]
         default_idx = 0
@@ -4802,6 +5010,7 @@ class MainWindow(QMainWindow):
         entries = self._collect_files_for_gids([gid])
         if entries:
             from ui.dialogs import DeleteFilesConfirmationDialog
+
             dlg = DeleteFilesConfirmationDialog(entries, parent=self)
             if dlg.exec() != QDialog.DialogCode.Accepted:
                 print("🗑️ [Delete] Cancelled by user")
@@ -4821,6 +5030,7 @@ class MainWindow(QMainWindow):
 
         # ── Wait for aria2 to actually release the file handles ──
         import time as _time
+
         deadline = _time.time() + 2.0
         while _time.time() < deadline:
             try:
@@ -4872,7 +5082,7 @@ class MainWindow(QMainWindow):
         self._queue_list_dirty = True
         self._refresh_queue_list()
         self._progress_dialog = None
-        
+
     def _pause_selected(self) -> None:
         """Pause every selected download that is currently active/waiting."""
         if not self.table.selectionModel():
