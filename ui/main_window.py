@@ -955,14 +955,36 @@ class MainWindow(QMainWindow):
         menu.addAction(get_icon("application-exit"), "Quit", self.quit_app)
 
         self.tray.setContextMenu(menu)
-        self.tray.activated.connect(
-            lambda r: (
-                self.show()
-                if r == QSystemTrayIcon.ActivationReason.DoubleClick
-                else None
-            )
-        )
+        self.tray.activated.connect(self._on_tray_activated)
         self.tray.show()
+    
+    def _on_tray_activated(self, reason) -> None:
+        """Toggle window visibility when the tray icon is clicked.
+
+        Behavior:
+        - Single left click toggles: if the window is visible and
+          active, hide it (minimize to tray); otherwise show + raise
+          + activate it.
+        - Double click always shows and raises (this is what most
+          users expect from a tray icon).
+        - Middle click and right click are ignored (right click
+          opens the context menu automatically).
+        """
+        if reason == QSystemTrayIcon.ActivationReason.DoubleClick:
+            self.show()
+            self.raise_()
+            self.activateWindow()
+            return
+
+        if reason == QSystemTrayIcon.ActivationReason.Trigger:
+            if self.isVisible() and not self.isMinimized():
+                self.hide()
+            else:
+                self.show()
+                if self.isMinimized():
+                    self.showNormal()
+                self.raise_()
+                self.activateWindow()
 
     def _start_backend(self) -> None:
         print("🚀 Starting BackendWorker...")
