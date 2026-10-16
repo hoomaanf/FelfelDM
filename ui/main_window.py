@@ -5704,9 +5704,14 @@ class MainWindow(QMainWindow):
         if not new_name:
             QMessageBox.warning(self, "Error", "Queue name is required.")
             return
-        if new_name == "Default":
+
+        # "Default" is reserved for NEW queues — but editing the existing
+        # Default queue without renaming it is fine, so only reject the
+        # name when the queue is actually being renamed TO it.
+        if new_name == "Default" and q.name != "Default":
             QMessageBox.warning(self, "Error", "Queue name 'Default' is reserved.")
             return
+
         # Renaming onto an existing queue name would make the two share a
         # schedule/proxy key and shadow each other.
         if new_name != q.name and any(

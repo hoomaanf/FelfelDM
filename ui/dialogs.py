@@ -18,6 +18,7 @@ import tempfile
 from PyQt6.QtCore import *
 from PyQt6.QtCore import QPointF, QRectF
 
+from core.data_store import Queue
 from utils.helpers import get_icon
 from utils.style import make_primary
 from utils.helpers import format_size
