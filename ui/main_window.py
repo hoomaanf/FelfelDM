@@ -3974,7 +3974,6 @@ class MainWindow(QMainWindow):
                     del q.downloads_info[gid]
             self._all_downloads.pop(gid, None)
             self._retrying_gids.discard(gid)
-            self._cancelling_youtube.discard(gid)
 
         try:
             self._worker_remove_multi([g for g in raw_gids if g])
@@ -4016,7 +4015,7 @@ class MainWindow(QMainWindow):
                         data = {"download_type": "youtube"}
                 except Exception:
                     data = None
-            if data.get("download_type") != "youtube":
+            if data is None or data.get("download_type") != "youtube":
                 continue
 
             # Suppress the stats-snapshot handler from resurrecting this
@@ -4045,7 +4044,13 @@ class MainWindow(QMainWindow):
             except Exception as e:
                 print(f"⚠️ [Remove] Could not delete YouTube record {gid[:12]}: {e}")
 
-            self._cancelling_youtube.discard(gid)
+            # Keep the guard for a while: a stats snapshot taken before the
+            # cancel can still arrive and would re-create the row as
+            # "downloading" -- a ghost nothing ever updates, which keeps the
+            # tray icon green forever.
+            QTimer.singleShot(
+                5000, lambda g=gid: self._cancelling_youtube.discard(g)
+            )
 
     def _reset_speed_if_idle(self) -> None:
         has_active = any(
@@ -6201,6 +6206,12 @@ class MainWindow(QMainWindow):
                 print(f"⏭️ [MainWindow] Skipping cancelling download: {yt_id[:8]}")
                 continue
 
+            # Never resurrect a row that is neither in the UI nor in a queue.
+            if yt_id not in self._all_downloads and not any(
+                yt_id in q.downloads for q in self.store.queues
+            ):
+                continue
+
             saved_data = self.store.get_youtube_download(yt_id)
             status = yt_data.get("status", "pending")
             progress = yt_data.get("progress", 0)
@@ -6253,6 +6264,23 @@ class MainWindow(QMainWindow):
             self._update_open_youtube_dialog(
                 yt_id, status, progress, speed, eta, total_size
             )
+
+        # Self-heal: a YouTube row that still claims to be active although
+        # the worker no longer knows it can never finish, and it would keep
+        # the tray icon green. Mark it paused so the user can resume/remove.
+        reported = {
+            d.get("id") for d in youtube_downloads if isinstance(d, dict)
+        }
+        for did, info in self._all_downloads.items():
+            if (
+                info.get("download_type") == "youtube"
+                and info.get("status") in ("active", "downloading")
+                and did not in reported
+                and did not in self._cancelling_youtube
+            ):
+                info["status"] = "paused"
+                info["speed"] = ""
+                info["downloadSpeed"] = 0
 
     def _update_open_youtube_dialog(
         self,
