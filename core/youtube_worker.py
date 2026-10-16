@@ -599,7 +599,7 @@ class YouTubeWorker(QThread):
                 # any MITM'd response.
                 *(
                     ["--no-check-certificate"]
-                    if not verify_ssl
+                    if not self.verify_ssl
                     else []
                 ),
                 "--print-to-file",

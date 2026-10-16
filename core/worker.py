@@ -876,12 +876,20 @@ class BackendWorker(QThread):
                 total_size = merged.get("total_size", 0)
                 status = merged.get("status", "paused")
 
-            # An explicit start request always means "run this now".
-            if status == "downloading":
-                if total_size > 0:
+            # Always resolve the size so the table can display it. Whether the
+            # download then *starts* is decided in _on_youtube_size_fetched(),
+            # which only auto-starts when the status is "downloading" -- so a
+            # queued (paused) item gets its size without starting, and a Start
+            # request begins as soon as the size is known.
+            #
+            # Gating this on `status == "downloading"` (as an earlier version
+            # did) meant an item added to a paused queue never had its size
+            # fetched at all, leaving "Getting size..." forever.
+            if total_size > 0:
+                if status == "downloading":
                     self._start_youtube_download(download_id)
-                else:
-                    self._fetch_youtube_size(download_id)
+            else:
+                self._fetch_youtube_size(download_id)
             return download_id
 
         download_item = {
@@ -915,6 +923,15 @@ class BackendWorker(QThread):
             item = self.youtube_downloads[download_id]
             if item.get("total_size", 0) > 0:
                 return
+
+            # One size fetch per download. Without this guard a second
+            # request (e.g. add-to-paused-queue then Start) started another
+            # yt-dlp metadata process and orphaned the first worker.
+            existing_worker = self._size_workers.get(download_id)
+            if existing_worker is not None and existing_worker.isRunning():
+                print(f"⏭️ [SIZE] Already fetching size for {download_id}")
+                return
+
             url = item["url"]
             save_path = item["save_path"]
             format_type = item.get("yt_options", {}).get("format", "mp4")

@@ -480,41 +480,46 @@ class DownloadTableModel(QAbstractTableModel):
     # ─────────────────────────────────────────────────────────────
 
     def update_rows(self, new_rows):
-        """Update the model with new runtime data."""
+        """Update the model with new runtime data.
+
+        The steady-state path (a periodic stats refresh where the same
+        downloads are present) must emit only dataChanged. Any model reset
+        clears the view's selection, and this is called several times a
+        second, so resetting here made the table impossible to select from.
+        """
         if len(self.rows) == 0 and len(new_rows) == 0:
             return
 
-        sort_col = self.sort_column
-        sort_order = self.sort_order
+        # Apply the active sort to the incoming data *before* touching the
+        # model, so ordering stays correct without going through sort().
+        new_rows = self._sorted_copy(new_rows)
 
-        # Reset whenever the row *set* changed, not just its length. Same
-        # count with different downloads must invalidate every index.
         old_ids = [self._row_identity(r) for r in self.rows]
         new_ids = [self._row_identity(r) for r in new_rows]
 
         if old_ids != new_ids:
+            # A different set of downloads (add/remove/filter/reorder):
+            # indexes genuinely change, so a reset is required.
             self.beginResetModel()
             self.rows = new_rows
             self.endResetModel()
-        else:
-            self.rows = new_rows
-            if len(self.rows) > 0:
-                top_left = self.index(0, 0)
-                bottom_right = self.index(len(self.rows) - 1, len(self.COLS) - 1)
-                self.dataChanged.emit(
-                    top_left,
-                    bottom_right,
-                    [
-                        Qt.ItemDataRole.DisplayRole,
-                        Qt.ItemDataRole.DecorationRole,
-                        Qt.ItemDataRole.ForegroundRole,
-                        Qt.ItemDataRole.ToolTipRole,
-                        Qt.ItemDataRole.TextAlignmentRole,
-                    ],
-                )
+            return
 
-        if sort_col >= 0:
-            self.sort(sort_col, sort_order)
+        self.rows = new_rows
+        if len(self.rows) > 0:
+            top_left = self.index(0, 0)
+            bottom_right = self.index(len(self.rows) - 1, len(self.COLS) - 1)
+            self.dataChanged.emit(
+                top_left,
+                bottom_right,
+                [
+                    Qt.ItemDataRole.DisplayRole,
+                    Qt.ItemDataRole.DecorationRole,
+                    Qt.ItemDataRole.ForegroundRole,
+                    Qt.ItemDataRole.ToolTipRole,
+                    Qt.ItemDataRole.TextAlignmentRole,
+                ],
+            )
 
     # ─────────────────────────────────────────────────────────────
     # Accessors
@@ -537,14 +542,8 @@ class DownloadTableModel(QAbstractTableModel):
     # Sorting
     # ─────────────────────────────────────────────────────────────
 
-    def sort(self, column, order=Qt.SortOrder.AscendingOrder):
-        """Sort rows by the specified column."""
-        if column < 0 or column >= len(self.COLS):
-            return
-
-        self.sort_column = column
-        self.sort_order = order
-
+    def _sort_key(self, column):
+        """Comparison key for one column."""
         sort_keys = {
             self.COL_NAME: lambda x: x.get("name", "").lower(),
             self.COL_SIZE: lambda x: self._to_int(x.get("totalLength", 0)),
@@ -555,15 +554,32 @@ class DownloadTableModel(QAbstractTableModel):
             self.COL_STATUS: lambda x: x.get("status", ""),
             self.COL_CATEGORY: lambda x: x.get("category", ""),
         }
+        return sort_keys.get(column, lambda x: x.get("name", "").lower())
 
-        key_func = sort_keys.get(column, lambda x: x.get("name", "").lower())
+    def _sorted_copy(self, rows):
+        """Return `rows` ordered by the active sort, without emitting signals."""
+        if self.sort_column < 0:
+            return list(rows)
+        return sorted(
+            rows,
+            key=self._sort_key(self.sort_column),
+            reverse=(self.sort_order == Qt.SortOrder.DescendingOrder),
+        )
 
-        # Reordering rows invalidates every persistent index, so the view has
-        # to be told the layout changed. Wrapping the reorder in a model reset
-        # is the reliable way to do that: emitting only dataChanged/
-        # layoutChanged left selections pointing at the wrong download.
+    def sort(self, column, order=Qt.SortOrder.AscendingOrder):
+        """Re-sort the model (invoked when the user clicks a column header)."""
+        if column < 0 or column >= len(self.COLS):
+            return
+
+        self.sort_column = column
+        self.sort_order = order
+
+        # Reordering invalidates persistent indexes, so tell the view via a
+        # reset. This only happens on an explicit user action, where losing
+        # the selection is expected; the periodic refresh path does not come
+        # through here (see update_rows).
         self.beginResetModel()
-        self.rows.sort(key=key_func, reverse=(order == Qt.SortOrder.DescendingOrder))
+        self.rows = self._sorted_copy(self.rows)
         self.endResetModel()
 
     def _get_progress_value(self, row):

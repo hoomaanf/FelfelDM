@@ -1525,7 +1525,7 @@ class MainWindow(QMainWindow):
     def _refresh_table(self) -> None:
         q = self._current_queue()
         if not q:
-            self.model.update_rows([])
+            self._apply_table_rows([])
             return
 
         rows = []
@@ -1572,7 +1572,49 @@ class MainWindow(QMainWindow):
 
             rows.append(display_row)
 
+        self._apply_table_rows(rows)
+
+    def _apply_table_rows(self, rows: List[Dict[str, Any]]) -> None:
+        """Push new rows into the table model, preserving the selection.
+
+        The table is refreshed several times a second and any model reset
+        clears the view's selection, so the selected downloads are captured
+        by id and re-selected afterwards. This keeps the selection stable
+        across refreshes, row insertions and re-sorting.
+        """
+        selection = self.table.selectionModel()
+        selected_ids: List[str] = []
+        if selection is not None:
+            for idx in selection.selectedRows():
+                gid = self.model.get_gid(idx.row())
+                if gid:
+                    selected_ids.append(gid)
+
         self.model.update_rows(rows)
+
+        if not selected_ids or self.table.selectionModel() is None:
+            return
+
+        wanted = set(selected_ids)
+        new_selection = QItemSelection()
+        for row_idx, row in enumerate(self.model.rows):
+            row_id = row.get("id") or row.get("gid")
+            if row_id in wanted:
+                new_selection.select(
+                    self.model.index(row_idx, 0),
+                    self.model.index(row_idx, self.model.columnCount() - 1),
+                )
+
+        if new_selection.isEmpty():
+            return
+
+        # Replace the (now empty) selection without emitting a user-edit
+        # signal storm; ScrollHint.EnsureVisible keeps the anchor row visible.
+        self.table.selectionModel().select(
+            new_selection,
+            QItemSelectionModel.SelectionFlag.ClearAndSelect
+            | QItemSelectionModel.SelectionFlag.Rows,
+        )
 
     def _refresh_queue_list(self) -> None:
         """Refresh the queue list with proper status indicators"""
@@ -2919,7 +2961,7 @@ class MainWindow(QMainWindow):
     def _filter_downloads(self, text: str) -> None:
         q = self._current_queue()
         if not q:
-            self.model.update_rows([])
+            self._apply_table_rows([])
             return
 
         if not text.strip():
@@ -2933,7 +2975,7 @@ class MainWindow(QMainWindow):
                 if text.lower() in row.get("name", "").lower():
                     filtered.append(row)
 
-        self.model.update_rows(filtered)
+        self._apply_table_rows(filtered)
 
     def _show_singleton_dialog(self, key: str, dlg: QDialog, on_accepted=None) -> None:
         existing = self._open_dialogs.get(key)
