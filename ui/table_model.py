@@ -114,6 +114,19 @@ class DownloadTableModel(QAbstractTableModel):
         self.sort_column = -1
         self.sort_order = Qt.SortOrder.AscendingOrder
 
+    @staticmethod
+    def _row_identity(row):
+        """Stable identity for a row, used to detect a changed row set.
+
+        Length alone is not enough: filtering can swap every row while the
+        count stays the same, and the previous code only emitted
+        dataChanged in that case. Any surviving selection or open progress
+        dialog would then point at a different download.
+        """
+        if not isinstance(row, dict):
+            return None
+        return row.get("id") or row.get("gid")
+
     # ─────────────────────────────────────────────────────────────
     # Qt model interface
     # ─────────────────────────────────────────────────────────────
@@ -474,7 +487,12 @@ class DownloadTableModel(QAbstractTableModel):
         sort_col = self.sort_column
         sort_order = self.sort_order
 
-        if len(self.rows) != len(new_rows):
+        # Reset whenever the row *set* changed, not just its length. Same
+        # count with different downloads must invalidate every index.
+        old_ids = [self._row_identity(r) for r in self.rows]
+        new_ids = [self._row_identity(r) for r in new_rows]
+
+        if old_ids != new_ids:
             self.beginResetModel()
             self.rows = new_rows
             self.endResetModel()
@@ -539,13 +557,14 @@ class DownloadTableModel(QAbstractTableModel):
         }
 
         key_func = sort_keys.get(column, lambda x: x.get("name", "").lower())
-        self.rows.sort(key=key_func, reverse=(order == Qt.SortOrder.DescendingOrder))
 
-        self.dataChanged.emit(
-            self.index(0, 0),
-            self.index(max(0, len(self.rows) - 1), len(self.COLS) - 1),
-        )
-        self.layoutChanged.emit()
+        # Reordering rows invalidates every persistent index, so the view has
+        # to be told the layout changed. Wrapping the reorder in a model reset
+        # is the reliable way to do that: emitting only dataChanged/
+        # layoutChanged left selections pointing at the wrong download.
+        self.beginResetModel()
+        self.rows.sort(key=key_func, reverse=(order == Qt.SortOrder.DescendingOrder))
+        self.endResetModel()
 
     def _get_progress_value(self, row):
         """Get progress value (0–100) for sorting."""

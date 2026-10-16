@@ -701,14 +701,11 @@ FelfelDM/
     │   ├── file_size_fetcher.py       # File size fetcher (HEAD → RANGE → STREAM → yt-dlp)
     │   ├── local_server.py            # Local HTTP server for extension
     │   ├── proxy_manager.py           # Proxy configuration
-    │   ├── queue_model.py             # Queue data model
     │   ├── queue_worker.py            # Queue operation worker
     │   ├── schedule_manager.py        # Schedule thread
     │   ├── rule_engine.py             # Download rules engine
     │   ├── size_fetcher_worker.py     # Parallel size fetcher (5 threads)
-    │   ├── temp_db.py                 # Temporary in-memory database
     │   ├── worker.py                  # Background download worker
-    │   ├── youtube_downloader.py      # YouTube download core
     │   └── youtube_worker.py          # YouTube download worker
     ├── ui/                            # UI components
     │   ├── __init__.py
@@ -733,7 +730,6 @@ FelfelDM/
     │   └── style.py                   # Theme styles
     ├── FelfelDM-extension/            # Browser extension
     │   ├── background.js
-    │   ├── content.js
     │   ├── icons/
     │   ├── popup.html
     │   ├── popup.js

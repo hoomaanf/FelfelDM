@@ -41,6 +41,11 @@ class YouTubeWorker(QThread):
     resumed = pyqtSignal()
     size_fetched = pyqtSignal(int)
 
+    # Upper bound for the short-lived metadata calls (size / info fetch).
+    FETCH_TIMEOUT = 120
+    # Upper bound for the cooperative stop in request_stop().
+    STOP_TIMEOUT_MS = 3000
+
     def __init__(
         self,
         url,
@@ -53,6 +58,7 @@ class YouTubeWorker(QThread):
         format_spec=None,
         title=None,
         download_id=None,
+        verify_ssl=True,
     ):
         super().__init__()
         self.url = url
@@ -60,6 +66,7 @@ class YouTubeWorker(QThread):
         self.format_type = format_type
         self.cookie_file = cookie_file
         self.proxy_url = proxy_url
+        self.verify_ssl = verify_ssl
         self.is_fetching_info = False
         self.is_fetching_size = False
         self.process = None
@@ -138,6 +145,34 @@ class YouTubeWorker(QThread):
             self._download()
         self._is_running = False
 
+    def stop_for_removal(self, timeout_ms: int = None) -> None:
+        """Stop a worker that is being removed from the list.
+
+        Prefer a cooperative cancel (kills any yt-dlp child); otherwise,
+        for a short metadata fetch, just wait for the bounded subprocess
+        timeout to expire. Never calls terminate() on a thread that may be
+        inside subprocess/SSL machinery.
+
+        This exists because quit() is a no-op on this class: run() is
+        overridden and there is no event loop for quit() to signal.
+        """
+        timeout_ms = self.STOP_TIMEOUT_MS if timeout_ms is None else timeout_ms
+
+        if self.process is not None:
+            try:
+                self.cancel()
+                return
+            except Exception as e:
+                print(f"⚠️ [YouTubeWorker] cancel during removal failed: {e}")
+
+        # Metadata fetch (or already finishing): nothing to kill, just wait
+        # for it to unwind within its own bounded timeout.
+        if not self.wait(timeout_ms):
+            print(
+                "⚠️ [YouTubeWorker] worker still busy after "
+                f"{timeout_ms}ms; leaving it to finish on its own"
+            )
+
     def is_running(self):
         return self._is_running or self.isRunning()
 
@@ -189,7 +224,13 @@ class YouTubeWorker(QThread):
 
             print(f"📏 Fetching size with: {' '.join(cmd)}")
 
-            result = subprocess.run(cmd, capture_output=True, text=True)
+            # Bounded: without a timeout a stalled network call or a wedged
+            # yt-dlp process would keep this QThread alive forever, and the
+            # thread cannot be interrupted (quit()/terminate() don't work on
+            # a thread blocked in subprocess.run).
+            result = subprocess.run(
+                cmd, capture_output=True, text=True, timeout=self.FETCH_TIMEOUT
+            )
 
             if result.returncode != 0:
                 error_msg = result.stderr.strip()
@@ -467,7 +508,10 @@ class YouTubeWorker(QThread):
 
             print(f"🔍 Running: {' '.join(cmd)}")
 
-            result = subprocess.run(cmd, capture_output=True, text=True)
+            # Bounded for the same reason as _fetch_size above.
+            result = subprocess.run(
+                cmd, capture_output=True, text=True, timeout=self.FETCH_TIMEOUT
+            )
 
             if result.returncode != 0:
                 error_msg = result.stderr.strip()
@@ -549,7 +593,15 @@ class YouTubeWorker(QThread):
                 "--no-warnings",
                 "--socket-timeout",
                 "60",
-                "--no-check-certificate",
+                # Certificate verification follows the user's setting rather
+                # than being disabled unconditionally: a corrupted CA store
+                # or no CA bundle at all otherwise means silently accepting
+                # any MITM'd response.
+                *(
+                    ["--no-check-certificate"]
+                    if not verify_ssl
+                    else []
+                ),
                 "--print-to-file",
                 "before_dl:filename",
                 str(produced_list_path),

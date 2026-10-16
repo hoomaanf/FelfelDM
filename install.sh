@@ -220,14 +220,20 @@ echo -e "${GREEN}📁 Installing application...${NC}"
 $SUDO rm -rf "$INSTALL_DIR"
 $SUDO mkdir -p "$INSTALL_DIR"
 
-# Copy all necessary files
-$SUDO cp -r \
-    "$SOURCE_DIR"/core \
-    "$SOURCE_DIR"/ui \
-    "$SOURCE_DIR"/utils \
-    "$SOURCE_DIR"/logo \
-    "$SOURCE_DIR"/FelfelDM-extension \
-    "$INSTALL_DIR" 2>/dev/null || true
+# Copy all necessary files.
+# Each directory is checked explicitly: hiding cp failures behind
+# `|| true` (as before) meant a partial copy still printed a success
+# banner, and the app then failed at import with a confusing traceback.
+for src_dir in core ui utils logo FelfelDM-extension; do
+    if [ ! -d "$SOURCE_DIR/$src_dir" ]; then
+        echo -e "${RED}❌ Missing required directory: $src_dir${NC}" >&2
+        exit 1
+    fi
+    if ! $SUDO cp -r "$SOURCE_DIR/$src_dir" "$INSTALL_DIR/"; then
+        echo -e "${RED}❌ Failed to copy $src_dir${NC}" >&2
+        exit 1
+    fi
+done
 
 # Copy main files
 [ -f "$SOURCE_DIR/main.py" ] && $SUDO cp "$SOURCE_DIR/main.py" "$INSTALL_DIR"

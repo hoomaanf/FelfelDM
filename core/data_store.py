@@ -220,21 +220,17 @@ class Queue:
         return q
 
     def is_scheduled_now(self) -> bool:
-        if not self.schedule_enabled:
-            return True
-        now = datetime.now()
-        weekday = now.weekday()
-        t = now.time().replace(second=0, microsecond=0)
-        start, end = self.schedule_start, self.schedule_end
+        # Same shared definition the scheduler thread uses, so the sidebar
+        # and the actual scheduling can never disagree.
+        from core.schedule_manager import is_within_window
 
-        if start <= end:
-            return weekday in self.days and start <= t <= end
-
-        if t >= start:
-            return weekday in self.days
-        if t <= end:
-            return (weekday - 1) % 7 in self.days
-        return False
+        return is_within_window(
+            self.schedule_start,
+            self.schedule_end,
+            self.days,
+            datetime.now(),
+            enabled=self.schedule_enabled,
+        )
 
     def get_next_schedule_time(self) -> Optional[datetime]:
         if not self.schedule_enabled:
@@ -271,8 +267,10 @@ class DataStore:
         self.backup_dir.mkdir(exist_ok=True)
         self.youtube_downloads_file = self.config_dir / "youtube_downloads.json"
 
-        self._lock = threading.Lock()
-        self._yt_lock = threading.Lock()
+        # RLock: _mark_main_dirty() is called from inside `with self._lock:`
+        # blocks (see load()), so a plain Lock would deadlock the same thread.
+        self._lock = threading.RLock()
+        self._yt_lock = threading.RLock()
 
         self.queues: List[Queue] = []
         self.settings = self._get_default_settings()

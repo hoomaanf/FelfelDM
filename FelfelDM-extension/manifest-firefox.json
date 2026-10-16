@@ -1,12 +1,25 @@
 {
   "manifest_version": 3,
   "name": "FelfelDM",
-  "version": "1.0.0",
   "description": "FelfelDM Integration for Firefox",
+  "version": "1.0.1",
 
-  "permissions": ["contextMenus", "activeTab", "downloads", "storage"],
+  "permissions": [
+    "contextMenus",
+    "activeTab",
+    "notifications",
+    "downloads",
+    "storage",
+    "scripting",
+    "alarms"
+  ],
 
-  "host_permissions": ["<all_urls>"],
+  "host_permissions": [
+    "http://localhost:8765/*",
+    "http://127.0.0.1:8765/*",
+    "http://localhost:8766/*",
+    "http://127.0.0.1:8766/*"
+  ],
 
   "icons": {
     "16": "icons/icon16.png",
@@ -24,12 +37,6 @@
     "default_popup": "popup.html"
   },
 
-  "content_scripts": [
-    {
-      "matches": ["<all_urls>"],
-      "js": ["content.js"]
-    }
-  ],
   "browser_specific_settings": {
     "gecko": {
       "id": "hoomaanfelfeli@gmail.com",

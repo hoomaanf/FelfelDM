@@ -17,6 +17,23 @@ from core.youtube_worker import YouTubeWorker
 from core.data_store import DataStore
 
 
+def _redact_proxy_url(url: str) -> str:
+    """Strip credentials from a proxy URL before it reaches the log.
+
+    A proxy URL can embed user:password@, and the log is both written to
+    disk and displayed in the log viewer.
+    """
+    if not url or "@" not in url:
+        return url
+    try:
+        scheme, rest = url.split("://", 1) if "://" in url else ("", url)
+        _creds, host = rest.rsplit("@", 1)
+        prefix = f"{scheme}://" if scheme else ""
+        return f"{prefix}***:***@{host}"
+    except Exception:
+        return "***"
+
+
 class BackendWorker(QThread):
 
     stats_updated = pyqtSignal(dict)
@@ -103,6 +120,17 @@ class BackendWorker(QThread):
         )
 
         self._load_youtube_downloads()
+
+    def _yt_verify_ssl(self) -> bool:
+        """Certificate verification for yt-dlp, following the user setting.
+
+        Defaults to verifying; only the explicit "disable SSL verify"
+        setting turns it off.
+        """
+        try:
+            return not self.store.settings.get("disable_ssl_verify", False)
+        except Exception:
+            return True
 
     def _load_youtube_downloads(self):
         """Load YouTube downloads from datastore"""
@@ -764,7 +792,11 @@ class BackendWorker(QThread):
                     proxy_url = proxy_dict.get("https") or proxy_dict.get("http")
                     if proxy_url:
                         options["all-proxy"] = proxy_url
-                        print(f"🌐 [Worker] Re-add with proxy: {proxy_url}")
+                        # Never log verbatim: may embed user:password@.
+                        print(
+                            "🌐 [Worker] Re-add with proxy: "
+                            f"{_redact_proxy_url(proxy_url)}"
+                        )
                 else:
                     print(
                         f"🌐 [Worker] Re-add without proxy for "
@@ -826,15 +858,30 @@ class BackendWorker(QThread):
         download_id = download_data.get("id") or str(uuid.uuid4())
         existing = self.store.get_youtube_download(download_id)
         if existing:
+            requested_status = download_data.get("status")
+
             print(f"📦 [ADD] Download already exists: {download_id}")
             with self.youtube_lock:
-                self.youtube_downloads[download_id] = existing
+                # Merge the persisted record into memory, but never let a
+                # stale persisted status override an explicit one from the
+                # caller. A queue Start re-adds an item that the store still
+                # has marked "paused" (it was only flipped in the UI), so
+                # copying that status verbatim made _start_youtube_download
+                # bail out and the download never actually began.
+                merged = dict(existing)
+                if requested_status:
+                    merged["status"] = requested_status
+                self.youtube_downloads[download_id] = merged
                 self.youtube_gids.add(download_id)
-                total_size = existing.get("total_size", 0)
-            if total_size > 0:
-                self._start_youtube_download(download_id)
-            else:
-                self._fetch_youtube_size(download_id)
+                total_size = merged.get("total_size", 0)
+                status = merged.get("status", "paused")
+
+            # An explicit start request always means "run this now".
+            if status == "downloading":
+                if total_size > 0:
+                    self._start_youtube_download(download_id)
+                else:
+                    self._fetch_youtube_size(download_id)
             return download_id
 
         download_item = {
@@ -888,6 +935,7 @@ class BackendWorker(QThread):
             format_spec=yt_opts.get("format_spec"),
             title=yt_opts.get("title"),
             download_id=download_id,
+            verify_ssl=self._yt_verify_ssl(),
         )
 
         size_worker.size_fetched.connect(
@@ -933,11 +981,12 @@ class BackendWorker(QThread):
             try:
                 worker = self._size_workers[download_id]
                 if worker.isRunning():
-                    worker.quit()
-                    worker.wait(1000)
-            except:
-                pass
-            del self._size_workers[download_id]
+                    # quit() is a no-op on YouTubeWorker (custom run());
+                    # use its cooperative stop instead.
+                    worker.stop_for_removal()
+            except Exception as e:
+                print(f"⚠️ [Worker] Could not stop size worker: {e}")
+            self._size_workers.pop(download_id, None)
 
     def _start_youtube_download(self, download_id: str):
         with self.youtube_lock:
@@ -987,6 +1036,7 @@ class BackendWorker(QThread):
             format_spec=yt_opts.get("format_spec"),
             title=yt_opts.get("title"),
             download_id=download_id,
+            verify_ssl=self._yt_verify_ssl(),
         )
         worker.progress.connect(lambda p: self._on_youtube_progress(download_id, p))
         worker.status.connect(lambda s: self._on_youtube_status(download_id, s))
@@ -1018,6 +1068,7 @@ class BackendWorker(QThread):
             format_spec=yt_options.get("format_spec"),
             title=yt_options.get("title"),
             download_id=download_id,
+            verify_ssl=self._yt_verify_ssl(),
         )
         worker.progress.connect(lambda p: self._on_youtube_progress(download_id, p))
         worker.status.connect(lambda s: self._on_youtube_status(download_id, s))
@@ -1131,13 +1182,11 @@ class BackendWorker(QThread):
             self.youtube_gids.discard(download_id)
             if download_id in self._size_workers:
                 try:
-                    size_worker = self._size_workers[download_id]
-                    if size_worker.isRunning():
-                        size_worker.quit()
-                        size_worker.wait(1000)
-                except Exception:
-                    pass
-                del self._size_workers[download_id]
+                    size_worker = self._size_workers.pop(download_id, None)
+                    if size_worker is not None and size_worker.isRunning():
+                        size_worker.stop_for_removal()
+                except Exception as e:
+                    print(f"⚠️ [Worker] Could not stop size worker: {e}")
 
         print(
             f"🗑️ [Worker] YouTube download cancelled and its files deleted: "
@@ -1213,13 +1262,11 @@ class BackendWorker(QThread):
             self.youtube_gids.discard(download_id)
             if download_id in self._size_workers:
                 try:
-                    size_worker = self._size_workers[download_id]
-                    if size_worker.isRunning():
-                        size_worker.quit()
-                        size_worker.wait(1000)
-                except:
-                    pass
-                del self._size_workers[download_id]
+                    size_worker = self._size_workers.pop(download_id, None)
+                    if size_worker is not None and size_worker.isRunning():
+                        size_worker.stop_for_removal()
+                except Exception as e:
+                    print(f"⚠️ [Worker] Could not stop size worker: {e}")
 
         print(f"🗑️ [Worker] YouTube download cancelled (files kept): {download_id}")
 
@@ -1297,8 +1344,7 @@ class BackendWorker(QThread):
         for download_id, worker in list(self._size_workers.items()):
             try:
                 if worker.isRunning():
-                    worker.quit()
-                    worker.wait(1000)
-            except:
-                pass
+                    worker.stop_for_removal()
+            except Exception as e:
+                print(f"⚠️ [Worker] Could not stop size worker {download_id[:8]}: {e}")
         self._size_workers.clear()

@@ -18,6 +18,50 @@ class ScheduleConfig:
         self.enabled = enabled
 
 
+def is_within_window(start, end, days, now, enabled=True) -> bool:
+    """Canonical "is this schedule active right now?" test.
+
+    Single source of truth shared by the scheduler thread and the queue
+    model. They previously each had their own version that disagreed for
+    windows crossing midnight, so the sidebar could claim a queue was
+    "active" while the scheduler considered it inactive (or vice versa).
+
+    `days` holds the weekday numbers the window *starts* on. For an
+    overnight window (start > end) the tail that runs past midnight
+    belongs to the previous day, e.g. a Sunday 22:00-06:00 window is still
+    running at Monday 03:00.
+
+    The interval is half-open: [start, end). A download scheduled to end
+    at 06:00 is not active at exactly 06:00.
+    """
+    if not enabled:
+        return False
+    if start == end:
+        return False
+
+    weekday = now.weekday()
+    t = now.time()
+
+    try:
+        days = set(days)
+    except TypeError:
+        return False
+    if not days:
+        return False
+
+    if start < end:
+        return weekday in days and start <= t < end
+
+    # Window crosses midnight.
+    if t >= start:
+        # Before midnight: today must be a start day.
+        return weekday in days
+    if t < end:
+        # After midnight: the window was started by the previous day.
+        return ((weekday - 1) % 7) in days
+    return False
+
+
 class ScheduleManagerThread(QThread):
     """Background scheduler.
 
@@ -84,18 +128,11 @@ class ScheduleManagerThread(QThread):
         self.wait(3000)
 
     def _is_within_window(self, cfg: ScheduleConfig, now: datetime) -> bool:
-        if not cfg.enabled:
-            return False
-        if now.weekday() not in cfg.days:
-            return False
-
-        current = now.time()
-        start, end = cfg.start, cfg.end
-
-        if start <= end:
-            return start <= current < end
-        else:
-            return current >= start or current < end
+        # Delegates to the shared helper so the scheduler and the queue
+        # model can never disagree about what "active now" means.
+        return is_within_window(
+            cfg.start, cfg.end, cfg.days, now, enabled=cfg.enabled
+        )
 
     # ─────────────────────────────────────────────────────────────
     #  Direct queue control (runs in this worker thread)
@@ -260,6 +297,11 @@ class ScheduleManagerThread(QThread):
         while not self._stop_requested:
             now = datetime.now()
 
+            # Decide under the lock, but perform the work outside it.
+            # _start_queue_direct/_pause_queue_direct do network RPC and
+            # fsync a store save; holding the mutex across them blocked
+            # set_schedules() (called from the UI thread) for the whole
+            # duration, freezing the interface.
             with QMutexLocker(self._mutex):
                 schedules = list(self._schedules.values())
                 currently_should_run = set()
@@ -268,20 +310,21 @@ class ScheduleManagerThread(QThread):
                     if self._is_within_window(cfg, now):
                         currently_should_run.add(cfg.queue_name)
 
-                to_start = currently_should_run - self._running_queues
-                to_pause = self._running_queues - currently_should_run
+                to_start = sorted(currently_should_run - self._running_queues)
+                to_pause = sorted(self._running_queues - currently_should_run)
 
-                for queue_name in to_start:
-                    self._running_queues.add(queue_name)
-                    # Do the real work here, in this thread.
-                    self._start_queue_direct(queue_name)
-                    # Then notify the UI (may be delayed on Wayland lock).
-                    self.start_queue.emit(queue_name)
+                self._running_queues |= set(to_start)
+                self._running_queues -= set(to_pause)
 
-                for queue_name in to_pause:
-                    self._running_queues.discard(queue_name)
-                    self._pause_queue_direct(queue_name)
-                    self.pause_queue.emit(queue_name)
+            for queue_name in to_start:
+                # Do the real work here, in this thread.
+                self._start_queue_direct(queue_name)
+                # Then notify the UI (may be delayed on Wayland lock).
+                self.start_queue.emit(queue_name)
+
+            for queue_name in to_pause:
+                self._pause_queue_direct(queue_name)
+                self.pause_queue.emit(queue_name)
 
             slept = 0.0
             while slept < self._check_interval and not self._stop_requested:

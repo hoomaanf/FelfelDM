@@ -21,7 +21,6 @@ from PyQt6.QtCore import QPointF, QRectF
 from utils.helpers import get_icon
 from utils.style import make_primary
 from utils.helpers import format_size
-from core.queue_model import Queue
 from datetime import datetime, time as dtime
 from core.proxy_manager import ProxyType, ProxyConfig
 from core.size_fetcher_worker import SizeFetcherWorker
@@ -1812,7 +1811,9 @@ class YouTubeDownloadDialog(QDialog):
 
 
 class QueueSettingsDialog(QDialog):
-    def __init__(self, queue: Queue, parent=None):
+    # `queue` is a core.data_store.Queue; the annotations on the methods below
+    # are strings so this module does not need to import the dataclass model.
+    def __init__(self, queue: "Queue", parent=None):
         super().__init__(None)
         self._main_window = parent
         self.setWindowTitle(f"Queue Settings — {queue.name}")
@@ -2645,6 +2646,13 @@ WantedBy=default.target
             self.run_as_service.setChecked(True)
 
     def _free_port(self, port):
+        """Release `port` for the daemon, but only if FelfelDM owns it.
+
+        The previous version SIGKILLed every PID listening on the port, so
+        an unrelated service that happened to use it was silently killed.
+        Now the process command line must look like FelfelDM before it is
+        touched, and the user is asked first.
+        """
         try:
             sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             sock.settimeout(1)
@@ -2661,21 +2669,68 @@ WantedBy=default.target
                     text=True,
                     timeout=2,
                 )
-                pids = result.stdout.strip().split("\n")
-                current_pid = str(os.getpid())
-
-                for pid in pids:
-                    if pid and pid.isdigit() and pid != current_pid:
-                        subprocess.Popen(
-                            ["kill", "-9", pid],
-                            stdout=subprocess.DEVNULL,
-                            stderr=subprocess.DEVNULL,
-                        )
-
-                time.sleep(1)
-                return True
             except Exception:
                 return False
+
+            pids = [p for p in result.stdout.strip().split("\n") if p.isdigit()]
+            current_pid = str(os.getpid())
+
+            ours = []
+            foreign = []
+            for pid in pids:
+                if pid == current_pid:
+                    continue
+                try:
+                    with open(f"/proc/{pid}/cmdline", "rb") as f:
+                        cmdline = (
+                            f.read().decode("utf-8", "replace").replace("\0", " ")
+                        )
+                except OSError:
+                    continue
+                if "felfeldm" in cmdline.lower():
+                    ours.append(pid)
+                else:
+                    foreign.append(pid)
+
+            if foreign:
+                QMessageBox.warning(
+                    self,
+                    "Port In Use",
+                    f"Port {port} is used by another application "
+                    f"(PID {', '.join(foreign)}).\n\n"
+                    "FelfelDM will not stop it. Free the port manually or "
+                    "pick a different one.",
+                )
+                return False
+
+            if not ours:
+                return True
+
+            reply = QMessageBox.question(
+                self,
+                "Stop Running Instance",
+                f"A FelfelDM instance (PID {', '.join(ours)}) is using port "
+                f"{port}.\n\nStop it so the service can start?",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.Yes,
+            )
+            if reply != QMessageBox.StandardButton.Yes:
+                return False
+
+            for pid in ours:
+                try:
+                    # SIGTERM lets the instance save its session cleanly.
+                    subprocess.run(
+                        ["kill", "-TERM", pid],
+                        stdout=subprocess.DEVNULL,
+                        stderr=subprocess.DEVNULL,
+                        timeout=2,
+                    )
+                except Exception:
+                    pass
+
+            time.sleep(1)
+            return True
         except Exception:
             return False
 

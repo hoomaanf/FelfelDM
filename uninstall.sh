@@ -20,13 +20,31 @@ if [[ ! "$confirm" =~ ^[Yy]$ ]]; then
 fi
 
 # ============================================
-# 0. Kill all processes
+# 0. Stop FelfelDM processes
 # ============================================
-echo -e "${YELLOW}🛑 Killing all FelfelDM processes...${NC}"
-pkill -9 -f "FelfelDM" 2>/dev/null || true
-pkill -9 -f "main.py" 2>/dev/null || true
-pkill -9 -f "felfeldm" 2>/dev/null || true
-pkill -9 -f "python.*FelfelDM" 2>/dev/null || true
+# Match only the installed entry points. A bare `pkill -f "main.py"` (the
+# previous behaviour) SIGKILLs ANY python program whose script happens to
+# be named main.py - e.g. an unrelated local web server - which loses the
+# user's unsaved work.
+echo -e "${YELLOW}🛑 Stopping FelfelDM processes...${NC}"
+for pattern in \
+    "/usr/share/felfeldm/main.py" \
+    "/usr/local/share/felfeldm/main.py" \
+    "/usr/bin/FelfelDM" \
+    "/usr/local/bin/FelfelDM"
+do
+    pkill -f "$pattern" 2>/dev/null || true
+done
+# SIGTERM first; only force-kill FelfelDM's own aria2 if it lingers.
+sleep 1
+for pattern in \
+    "/usr/share/felfeldm/main.py" \
+    "/usr/local/share/felfeldm/main.py" \
+    "/usr/bin/FelfelDM" \
+    "/usr/local/bin/FelfelDM"
+do
+    pkill -9 -f "$pattern" 2>/dev/null || true
+done
 echo -e "${GREEN}✅ Done${NC}"
 echo ""
 
@@ -128,23 +146,26 @@ echo ""
 # ============================================
 # 7. Remove configuration and data
 # ============================================
-echo -e "${YELLOW}🗑️  Removing configuration and data...${NC}"
+# The queue list and download history live here, so this is the one step
+# that destroys user data. Ask explicitly and default to keeping it.
+echo -e "${YELLOW}🗑️  Configuration and data${NC}"
+echo "  Location: ~/.config/felfelDM (queues, rules, proxies, history)"
+read -p "Delete your FelfelDM settings and download history? (y/N): " remove_config
 
-# Config directory
-rm -rf ~/.config/felfelDM
+if [[ "$remove_config" =~ ^[Yy]$ ]]; then
+    rm -rf ~/.config/felfelDM
+    echo -e "${GREEN}✅ Configuration and data removed${NC}"
+else
+    rm -rf ~/.cache/felfelDM
+    rm -rf ~/.cache/yay/felfeldm-git
+    rm -rf ~/.local/share/felfelDM
+    echo -e "${YELLOW}⏭️  Configuration kept at ~/.config/felfelDM${NC}"
+fi
 
-# Cache directory
-rm -rf ~/.cache/felfelDM
-rm -rf ~/.cache/yay/felfeldm-git
+# Stale temp files from the updater, always safe to drop.
+rm -f /tmp/felfeldm_install.sh
+rm -f /tmp/felfeldm_update.sh
 
-# Local data
-rm -rf ~/.local/share/felfelDM
-
-# Any temp files
-rm -rf /tmp/felfeldm_install.sh
-rm -rf /tmp/felfeldm_update.sh
-
-echo -e "${GREEN}✅ Configuration and data removed${NC}"
 echo ""
 
 # ============================================
@@ -178,20 +199,29 @@ echo ""
 # ============================================
 # 9. Optional: Remove Python packages
 # ============================================
-echo -e "${YELLOW}📦 Remove Python packages installed by FelfelDM?${NC}"
+# PyQt6, requests, cryptography and keyring are general-purpose libraries
+# that other applications depend on. Removing them (and especially
+# `pacman -Rsn`, which also deletes their dependency chain) can break
+# unrelated software, so this is opt-in, non-recursive, and only touches
+# the packages FelfelDM itself needs.
+echo -e "${YELLOW}📦 Remove Python packages that FelfelDM depends on?${NC}"
+echo -e "${RED}⚠️  PyQt6, requests, cryptography and keyring may be used by other${NC}"
+echo -e "${RED}    applications on this system. Only do this if you are sure.${NC}"
 read -p "Remove PyQt6, requests, yt-dlp, keyring, appdirs? (y/N): " remove_packages
 
 if [[ "$remove_packages" =~ ^[Yy]$ ]]; then
     echo -e "${YELLOW}Removing packages...${NC}"
-    
-    # Remove packages (both pip and pacman)
-    pip3 uninstall -y PyQt6 requests yt-dlp keyring appdirs cryptography packaging 2>/dev/null || true
-    pip uninstall -y PyQt6 requests yt-dlp keyring appdirs cryptography packaging 2>/dev/null || true
-    
-    # Also remove from pacman (if installed)
-    sudo pacman -Rsn python-pyqt6 python-requests python-appdirs python-keyring yt-dlp 2>/dev/null || true
-    
+
+    # --user only: never touch system site-packages from an uninstaller.
+    pip3 uninstall -y --user PyQt6 requests yt-dlp keyring appdirs 2>/dev/null || true
+
+    if command -v pacman >/dev/null 2>&1; then
+        # -R without -s: no cascading removal of shared dependencies.
+        sudo pacman -R --noconfirm python-pyqt6 python-requests yt-dlp 2>/dev/null || true
+    fi
+
     echo -e "${GREEN}✅ Packages removed${NC}"
+    echo -e "${YELLOW}ℹ️  aria2 was left installed (it is a standalone tool).${NC}"
 else
     echo -e "${YELLOW}⏭️  Packages kept${NC}"
 fi
@@ -207,7 +237,7 @@ echo -e "${GREEN}╚════════════════════
 echo ""
 echo -e "${YELLOW}📝 Note:${NC}"
 echo "  - Your downloads folder (~/Downloads) is untouched"
-echo "  - aria2 is still installed (if you want to remove it: sudo pacman -R aria2)"
-echo "  - All FelfelDM files, configs, and caches have been removed"
+echo "  - aria2 is still installed (it is a standalone tool, not bundled here)"
+echo "  - FelfelDM application files, caches and desktop entries were removed"
 echo ""
 echo -e "${GREEN}Thanks for using FelfelDM! 🌶️${NC}"

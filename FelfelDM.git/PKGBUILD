@@ -13,14 +13,10 @@ depends=(
     aria2
     python-pyqt6
     python-requests
-    python-appdirs
     python-keyring
-    python-cryptography
-    python-packaging
-    python-jaraco.context
-    python-jaraco.classes
-    python-jaraco.functools
+    python-platformdirs
     yt-dlp
+    ffmpeg
     papirus-icon-theme
 )
 makedepends=('git')
@@ -50,14 +46,16 @@ package() {
 
     install -dm755 "$pkgdir/usr/share/felfeldm"
 
+    # No `|| true`: a failed copy must abort the build instead of shipping an
+    # install that is missing core/ or ui/ behind a green "success".
+    # ("icons" was never a top-level directory; logo/ is copied below.)
     cp -a \
         core \
         ui \
         utils \
-        icons \
         logo \
         FelfelDM-extension \
-        "$pkgdir/usr/share/felfeldm/" 2>/dev/null || true
+        "$pkgdir/usr/share/felfeldm/"
 
     install -Dm755 main.py \
         "$pkgdir/usr/share/felfeldm/main.py"

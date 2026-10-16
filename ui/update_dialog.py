@@ -101,9 +101,23 @@ class UpdateDialog(QDialog):
                 mode="w", suffix=".sh", delete=False
             )
             self._temp_script.write("""#!/bin/bash
+set -euo pipefail
 echo "10% - Downloading install.sh..."
-curl -s -o /tmp/felfeldm_install.sh https://raw.githubusercontent.com/hoomaanf/FelfelDM/main/install.sh
+# -f: fail on HTTP errors instead of piping an error page into bash.
+# --proto/--proto-redir: only allow HTTPS, and refuse a redirect to http.
+if ! curl -fsSL --proto '=https' --proto-redir '=https' \\
+        -o /tmp/felfeldm_install.sh \\
+        https://raw.githubusercontent.com/hoomaanf/FelfelDM/main/install.sh; then
+  echo "0% - Download failed"
+  exit 1
+fi
 echo "30% - Preparing script..."
+# A truncated or error-page download must not be executed.
+if ! bash -n /tmp/felfeldm_install.sh; then
+  echo "0% - Downloaded script failed syntax check"
+  rm -f /tmp/felfeldm_install.sh
+  exit 1
+fi
 chmod +x /tmp/felfeldm_install.sh
 echo "50% - Installing (running install.sh)..."
 bash /tmp/felfeldm_install.sh
@@ -196,24 +210,17 @@ echo "100% - Done!"
         except Exception as e:
             print(f"⚠️ [UpdateDialog] Kill error: {e}")
 
-        # ===== پاک‌سازی پروسه‌های باقی‌مانده =====
+        # Only target the installer this dialog started. A bare
+        # `pkill -9 -f pkexec` would also kill an unrelated pkexec the user
+        # is running (another privileged operation in progress).
         try:
-            print("🔄 [UpdateDialog] Running pkill for felfeldm_install.sh...")
-            subprocess.run(
-                ["pkill", "-9", "-f", "felfeldm_install.sh"],
-                capture_output=True,
-                stderr=subprocess.DEVNULL,
-            )
-        except Exception:
-            pass
-
-        try:
-            print("🔄 [UpdateDialog] Running pkill for pkexec...")
-            subprocess.run(
-                ["pkill", "-9", "-f", "pkexec"],
-                capture_output=True,
-                stderr=subprocess.DEVNULL,
-            )
+            print("🔄 [UpdateDialog] Stopping the installer script...")
+            if self._temp_script and self._temp_script.name:
+                subprocess.run(
+                    ["pkill", "-9", "-f", self._temp_script.name],
+                    capture_output=True,
+                    stderr=subprocess.DEVNULL,
+                )
         except Exception:
             pass
 

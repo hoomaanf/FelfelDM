@@ -733,6 +733,15 @@ class RulesDialog(QDialog):
         dlg = RuleEditDialog(rule=None, queues=self.queues, parent=self)
         if dlg.exec() == QDialog.DialogCode.Accepted:
             new_rule = dlg.get_rule()
+            # Rule names are shown to the user to explain which rule matched,
+            # so a duplicate makes the UI ambiguous.
+            if any(r.name == new_rule.name for r in self.rule_engine.rules):
+                QMessageBox.warning(
+                    self,
+                    "Error",
+                    f"A rule named '{new_rule.name}' already exists.",
+                )
+                return
             self.rule_engine.add(new_rule)
             self._refresh_list()
             for i in range(self.list_widget.count()):

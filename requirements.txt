@@ -1,6 +1,10 @@
-PyQt6==6.11.0
-requests==2.34.2
-keyring==25.7.0
-appdirs==1.4.4
-yt-dlp==2026.6.9
+# Runtime dependencies.
+#
+# Ranges rather than exact pins: the distro installers (install.sh,
+# PKGBUILD) resolve these from the system package manager, so an exact
+# pin here only made the two install paths install different versions.
+PyQt6>=6.6,<7
+requests>=2.31,<3
+keyring>=24,<26
 platformdirs>=3.0.0
+yt-dlp>=2024.1.1

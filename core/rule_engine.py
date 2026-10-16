@@ -173,8 +173,13 @@ class Rule:
             if not self._domain_matches(host, self.domain):
                 return False
 
-        # size (only evaluated if size is provided)
-        if size is not None and size > 0:
+        # size (a declared size range must actually be satisfiable)
+        if self.size_min > 0 or self.size_max > 0:
+            # An unknown size cannot satisfy a size constraint. Failing open
+            # here meant a size-only rule matched *every* download whenever
+            # the size could not be determined.
+            if size is None or size <= 0:
+                return False
             if self.size_min > 0 and size < self.size_min:
                 return False
             if self.size_max > 0 and size > self.size_max:

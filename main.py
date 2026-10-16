@@ -38,7 +38,8 @@ local_server = None
 
 APP_ID = f"FelfelDM_{os.getenv('USER', 'default')}"
 
-os.environ.setdefault("DISPLAY", ":0")
+# Do not force DISPLAY: hard-defaulting it to :0 breaks multi-seat, remote
+# and `ssh -X` sessions. Qt falls back to the ambient DISPLAY/WAYLAND_DISPLAY.
 
 
 def signal_handler(sig, frame):
@@ -182,7 +183,11 @@ def main():
     QApplication.setHighDpiScaleFactorRoundingPolicy(
         Qt.HighDpiScaleFactorRoundingPolicy.PassThrough
     )
-    os.environ.setdefault("QT_QPA_PLATFORM", "wayland")
+    # Prefer the Wayland plugin only when a Wayland session actually exists;
+# otherwise Qt would fail to open a window on an X11-only system instead
+# of falling back to xcb.
+    if os.environ.get("WAYLAND_DISPLAY"):
+        os.environ.setdefault("QT_QPA_PLATFORM", "wayland")
     os.environ.setdefault("QT_QPA_PLATFORMTHEME", "kde")
 
     app = QApplication(sys.argv)

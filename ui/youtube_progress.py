@@ -757,6 +757,16 @@ class YouTubeProgressDialog(QDialog):
     # Worker
     # ═══════════════════════════════════════════════════════════
 
+    def _verify_ssl(self) -> bool:
+        """Follow the app-wide certificate setting for yt-dlp runs."""
+        parent = self.parent()
+        try:
+            if parent is not None and hasattr(parent, "store"):
+                return not parent.store.settings.get("disable_ssl_verify", False)
+        except Exception:
+            pass
+        return True
+
     def _create_worker(self):
         self._worker = YouTubeWorker(
             url=self.url,
@@ -764,6 +774,7 @@ class YouTubeProgressDialog(QDialog):
             format_type=self.format_type,
             cookie_file=self.cookie_file,
             proxy_url=self.proxy_url,
+            verify_ssl=self._verify_ssl(),
         )
         self._worker.progress.connect(self._on_progress)
         self._worker.status.connect(self._on_status)
@@ -1057,7 +1068,10 @@ class YouTubeProgressDialog(QDialog):
             )
             if reply == QMessageBox.StandardButton.Yes:
                 self._worker.cancel()
-                self._worker.wait()
+                # cancel() already waits internally (bounded, 3s) and kills
+                # the process group. A bare wait() with no timeout would
+                # freeze the UI thread for as long as the child takes.
+                self._worker.wait(3000)
                 event.accept()
             else:
                 event.ignore()

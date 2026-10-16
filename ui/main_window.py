@@ -17,7 +17,6 @@ from core import (
     DataStore,
     Queue,
     BackendWorker,
-    TempDB,
     QueueOperationWorker,
     ScheduleManagerThread,
     ScheduleConfig,
@@ -79,18 +78,14 @@ class MainWindow(QMainWindow):
 
     def _init_variables(self) -> None:
         self.store = DataStore()
-        self.temp_db = TempDB()
         self._all_downloads: Dict[str, Dict[str, Any]] = {}
         self._current_queue_idx: int = 0
-        self._pending_size_fetch: Dict[str, float] = {}
         self._retrying_gids: Set[str] = set()
         self._retry_timers: Dict[str, QTimer] = {}
         self._retry_state: Dict[str, dict] = {}
         # download_id -> (time healthy streak began, completedLength at that time)
         self._healthy_since: Dict[str, tuple] = {}
         self._countdown_timer: Optional[QTimer] = None
-        self._schedule_timer: Optional[QTimer] = None
-        self._cleared_gids: Set[str] = set()
         self._pending_pause: Set[str] = set()
         self._shutdown_dialog_shown: bool = False
         self._progress_dialogs: Dict[str, DownloadProgressDialog] = {}
@@ -107,7 +102,6 @@ class MainWindow(QMainWindow):
         self._queue_worker: Optional[QueueOperationWorker] = None
         self.local_server: Optional[LocalServer] = None
         self.speed_update_timer: Optional[QTimer] = None
-        self._shutdown_timer: Optional[QTimer] = None
         self.splash = None
         self._details_visible = False
         self.details_panel = None
@@ -1599,10 +1593,8 @@ class MainWindow(QMainWindow):
                     something_changed = True
                 q.paused = True
                 q.manually_paused = False
-                self._cleared_gids.clear()
                 for gid in q.downloads[:]:
-                    if gid in self._all_downloads:
-                        del self._all_downloads[gid]
+                    self._all_downloads.pop(gid, None)
                 q.downloads.clear()
 
             if q.name == "__direct__":
@@ -2327,13 +2319,6 @@ class MainWindow(QMainWindow):
 
         self._update_downloads_from_stats(downloads_list)
 
-        for dl in downloads_list:
-            if isinstance(dl, dict):
-                gid = dl.get("gid")
-                status = dl.get("status")
-                speed = dl.get("downloadSpeed")
-                completed = dl.get("completedLength")
-
         for download_id, error_msg in new_errors:
             self._on_download_error(download_id, error_msg)
 
@@ -2991,6 +2976,40 @@ class MainWindow(QMainWindow):
         dlg.raise_()
         dlg.activateWindow()
 
+    def _rules_with_size_conditions(self) -> bool:
+        """True when at least one enabled rule constrains file size.
+
+        Only then is it worth paying for an extra HEAD request when adding
+        a download.
+        """
+        try:
+            for rule in self.store.rule_engine.rules:
+                if rule.enabled and (rule.size_min > 0 or rule.size_max > 0):
+                    return True
+        except Exception:
+            pass
+        return False
+
+    def _probe_size_for_rules(self, url: str, proxy_dict=None) -> Optional[int]:
+        """Best-effort file size lookup used only to evaluate size rules.
+
+        Fully optional: a bounded HEAD request, and any failure means the
+        size conditions are simply not evaluated for this URL.
+        """
+        try:
+            from core.file_size_fetcher import FileSizeFetcher
+
+            fetcher = FileSizeFetcher(timeout=5, proxy=proxy_dict)
+            try:
+                size = fetcher.get_size(url)
+            finally:
+                fetcher.close()
+            if size and size > 0:
+                return int(size)
+        except Exception as e:
+            print(f"⚠️ [Rules] Size probe failed for {url[:60]}: {e}")
+        return None
+
     def _process_add_download_common(self, dlg: "AddDownloadDialog") -> None:
         """Unified handler for both Quick Download and Add to Queue."""
         d = dlg.get_data()
@@ -3050,6 +3069,10 @@ class MainWindow(QMainWindow):
                 if u:
                     existing_urls[u] = q.name
 
+        # Size-conditional rules can only be evaluated with a known file
+        # size, so only probe when such a rule exists at all.
+        rules_need_size = self._rules_with_size_conditions()
+
         for url in d["urls"]:
 
             # ── Duplicate check (C5 follow-up) ──
@@ -3060,7 +3083,20 @@ class MainWindow(QMainWindow):
                 )
                 continue
 
-            rule = self.store.rule_engine.find_match(url)
+            # Size-based rules need the file size, which is unknown until the
+            # server is asked. Probing costs a request, so it only happens
+            # when a rule actually constrains size; otherwise this is a
+            # plain URL match as before.
+            rule_size = None
+            if rules_need_size:
+                rule_size = self._probe_size_for_rules(
+                    url, options.get("all-proxy") and {
+                        "http": options["all-proxy"],
+                        "https": options["all-proxy"],
+                    }
+                )
+
+            rule = self.store.rule_engine.find_match(url, rule_size)
 
             url_options = options.copy()
             url_queue = target_queue
@@ -3115,9 +3151,6 @@ class MainWindow(QMainWindow):
             existing_urls[url] = url_queue.name
 
             download_id = uuid.uuid4().hex[:16]
-
-            if gid in self._cleared_gids:
-                self._cleared_gids.remove(gid)
 
             url_queue.downloads.append(download_id)
 
@@ -3608,13 +3641,24 @@ class MainWindow(QMainWindow):
             self.detail_copy_btn.setEnabled(True)
 
     def _setup_shortcuts(self) -> None:
-        """Set up keyboard shortcuts"""
+        """Set up keyboard shortcuts.
 
-        QShortcut(QKeySequence("Space"), self, self._toggle_pause_resume)
+        Table-local keys (Space/Delete) are scoped to the widget so they
+        don't fire while the user is typing in the search box or
+        interacting with the details panel.
+        """
+        table_context = Qt.ShortcutContext.WidgetWithChildrenShortcut
+
+        for key, slot in (
+            ("Space", self._toggle_pause_resume),
+            ("Delete", self._remove_selected),
+            ("Shift+Delete", self._remove_with_files),
+        ):
+            shortcut = QShortcut(QKeySequence(key), self.table, slot)
+            shortcut.setContext(table_context)
+
         QShortcut(QKeySequence("Ctrl+P"), self, self._pause_selected)
         QShortcut(QKeySequence("Ctrl+R"), self, self._resume_selected)
-        QShortcut(QKeySequence("Delete"), self, self._remove_selected)
-        QShortcut(QKeySequence("Shift+Delete"), self, self._remove_with_files)
 
         QShortcut(QKeySequence("Ctrl+D"), self, self._toggle_details_panel)
         QShortcut(QKeySequence("Ctrl+F"), self, self._focus_search)
@@ -3775,6 +3819,9 @@ class MainWindow(QMainWindow):
 
         # ── STEP 5: Remove from UI + store ──
         self._close_progress_dialogs_for(gids_to_remove)
+        # This action is explicitly "remove AND delete files", so the
+        # yt-dlp worker is asked to clean up whatever it produced.
+        self._cancel_youtube_workers_for(gids_to_remove, delete_files=True)
 
         for gid in gids_to_remove:
             for q in self.store.queues:
@@ -3868,6 +3915,14 @@ class MainWindow(QMainWindow):
         # Close any progress dialogs for these downloads first.
         self._close_progress_dialogs_for(gids_to_remove)
 
+        # YouTube downloads are handled by a yt-dlp subprocess, not aria2.
+        # Removing them from the list without cancelling the worker left the
+        # process running (it is started in its own session) while the store
+        # record was gone, so it kept writing files and -- because the
+        # youtube store was never flushed -- the entry reappeared on restart.
+        raw_gids = [self._get_aria2_gid(g) or g for g in gids_to_remove]
+        self._cancel_youtube_workers_for(gids_to_remove, delete_files=delete_files)
+
         # Now remove from UI + aria2
         for gid in gids_to_remove:
             for q in self.store.queues:
@@ -3875,13 +3930,12 @@ class MainWindow(QMainWindow):
                     q.downloads.remove(gid)
                 if gid in q.downloads_info:
                     del q.downloads_info[gid]
-            if gid in self._all_downloads:
-                del self._all_downloads[gid]
-            if gid in self._retrying_gids:
-                self._retrying_gids.discard(gid)
+            self._all_downloads.pop(gid, None)
+            self._retrying_gids.discard(gid)
+            self._cancelling_youtube.discard(gid)
 
         try:
-            self._worker_remove_multi(gids_to_remove)
+            self._worker_remove_multi([g for g in raw_gids if g])
         except Exception as e:
             print(f"⚠️ Batch remove failed: {e}")
             for gid in gids_to_remove:
@@ -3897,6 +3951,60 @@ class MainWindow(QMainWindow):
         self._refresh_queue_list()
         self._update_queue_buttons()
 
+    def _cancel_youtube_workers_for(
+        self, gids: List[str], delete_files: bool = False
+    ) -> None:
+        """Stop the yt-dlp worker behind any YouTube download in `gids`.
+
+        aria2 removal does nothing for YouTube items (there is no aria2 gid),
+        so without this the subprocess keeps running in the background.
+        `delete_files` decides whether the worker also removes what it
+        produced.
+        """
+        if not hasattr(self, "worker") or not self.worker:
+            return
+
+        for gid in gids:
+            data = self._all_downloads.get(gid)
+            if data is None:
+                # Fall back to the persisted record: a queued YouTube item
+                # may not be in the runtime dict yet.
+                try:
+                    if self.store.get_youtube_download(gid):
+                        data = {"download_type": "youtube"}
+                except Exception:
+                    data = None
+            if data.get("download_type") != "youtube":
+                continue
+
+            # Suppress the stats-snapshot handler from resurrecting this
+            # item while the worker is still winding down.
+            self._cancelling_youtube.add(gid)
+
+            if gid in self._youtube_dialogs:
+                try:
+                    self._youtube_dialogs[gid].close()
+                except Exception:
+                    pass
+                self._youtube_dialogs.pop(gid, None)
+
+            try:
+                if delete_files:
+                    self.worker.cancel_youtube_download(gid)
+                else:
+                    self.worker.cancel_youtube_download_without_delete(gid)
+            except Exception as e:
+                print(f"⚠️ [Remove] Could not cancel YouTube worker {gid[:12]}: {e}")
+
+            # Drop the persisted YouTube record so it cannot come back after
+            # a restart.
+            try:
+                self.store.delete_youtube_download(gid)
+            except Exception as e:
+                print(f"⚠️ [Remove] Could not delete YouTube record {gid[:12]}: {e}")
+
+            self._cancelling_youtube.discard(gid)
+
     def _reset_speed_if_idle(self) -> None:
         has_active = any(
             self._all_downloads.get(g, {}).get("status") in ("active", "downloading")
@@ -3908,6 +4016,19 @@ class MainWindow(QMainWindow):
             self._last_calculated_global_speed = 0
             if hasattr(self, "speed_status_label"):
                 self.speed_status_label.setText("0 B/s")
+
+    def _download_has_started(self, info: dict) -> bool:
+        """True when a download actually began, so it may have written files.
+
+        A download that is only queued (or errored before any byte moved)
+        must never have files attributed to it.
+        """
+        if not info:
+            return False
+        status = info.get("status", "")
+        if status in ("active", "downloading", "complete", "completed"):
+            return True
+        return self._to_int(info.get("completedLength", 0)) > 0
 
     def _collect_files_for_gids(self, gids: List[str]) -> List[Dict[str, Any]]:
         """Build a list of files that WOULD be deleted for the given gids.
@@ -3928,38 +4049,48 @@ class MainWindow(QMainWindow):
         for gid in gids:
             file_paths: List[str] = []
 
-            # ── 1. Collect the file paths aria2 reported ──
-            # Prefer downloads_info (persisted), fall back to the live
-            # runtime dict. Either way, only entries with a non-empty
-            # "path" field are accepted.
             info = None
             for q in self.store.queues:
                 if gid in q.downloads_info:
                     info = q.downloads_info[gid]
                     break
 
-            if info is None and gid in self._all_downloads:
-                info = self._all_downloads[gid]
-
+            runtime = self._all_downloads.get(gid)
+            if info is None:
+                info = runtime
             if info is None:
                 continue
 
+            # ── 1. Collect the file paths aria2 actually reported ──
+            # A download that was only queued has a *predicted* path here
+            # (built from the URL) but no file on disk yet, and it keeps
+            # that path even after aria2 starts reporting it. So a path is
+            # only treated as deletable when the download has actually
+            # started AND the file exists. Without both checks a
+            # never-started download could claim a pre-existing same-named
+            # file in the user's folder and offer to delete it.
+            started = self._download_has_started(info)
+            candidate_paths: List[str] = []
+
             for f in info.get("files", []) or []:
                 p = f.get("path")
-                if not p:
-                    continue
-                if p in file_paths:
-                    continue
-                file_paths.append(p)
+                if p and p not in candidate_paths:
+                    candidate_paths.append(p)
 
-            # Also consider the runtime dict if it has additional paths
-            # not present in downloads_info (rare, but possible right
-            # after a re-add).
-            if gid in self._all_downloads:
-                for f in self._all_downloads[gid].get("files", []) or []:
+            # Also consider the runtime dict if it has additional paths not
+            # present in downloads_info (rare, but possible right after a
+            # re-add).
+            runtime_info = self._all_downloads.get(gid)
+            if runtime_info is not None:
+                for f in runtime_info.get("files", []) or []:
                     p = f.get("path")
-                    if p and p not in file_paths:
-                        file_paths.append(p)
+                    if p and p not in candidate_paths:
+                        candidate_paths.append(p)
+
+            if started:
+                file_paths = [p for p in candidate_paths if os.path.isfile(p)]
+            else:
+                file_paths = []
 
             # ── 2. Add .aria2 sidecars for the known main files ──
             # aria2 always writes "<target>.aria2" next to the target
@@ -4233,6 +4364,9 @@ class MainWindow(QMainWindow):
                 "yt_options": data.get("yt_options", {}),
                 "proxy": data.get("proxy"),
                 "queue_id": data.get("queue_id"),
+                # Explicit intent: this is a start request, so the worker
+                # must not inherit a stale "paused" status from the store.
+                "status": "downloading",
             }
         )
 
@@ -4282,6 +4416,8 @@ class MainWindow(QMainWindow):
                     "yt_options": data.get("yt_options", {}),
                     "proxy": data.get("proxy"),
                     "queue_id": data.get("queue_id"),
+                    # Resume is also an explicit "run now" request.
+                    "status": "downloading",
                 }
             )
 
@@ -5479,16 +5615,31 @@ class MainWindow(QMainWindow):
 
     def _add_queue(self) -> None:
         name, ok = QInputDialog.getText(self, "New Queue", "Queue name:")
-        if ok and name.strip():
-            if name.strip() == "Default":
-                QMessageBox.warning(self, "Error", "Queue name 'Default' is reserved.")
-                return
-            new_queue = Queue(name.strip(), paused=True)
-            self.store.queues.append(new_queue)
-            self.store.save()
-            self._queue_list_dirty = True
-            self._refresh_queue_list()
-            self._update_queue_buttons()
+        if not ok:
+            return
+
+        name = (name or "").strip()
+        if not name:
+            return
+
+        if name == "Default":
+            QMessageBox.warning(self, "Error", "Queue name 'Default' is reserved.")
+            return
+
+        # A queue name is used as a dictionary key for schedules and proxies,
+        # so duplicates would silently shadow each other.
+        if any(q.name == name for q in self.store.queues):
+            QMessageBox.warning(
+                self, "Error", f"A queue named '{name}' already exists."
+            )
+            return
+
+        new_queue = Queue(name, paused=True)
+        self.store.queues.append(new_queue)
+        self.store.save()
+        self._queue_list_dirty = True
+        self._refresh_queue_list()
+        self._update_queue_buttons()
 
     def _edit_queue(self) -> None:
         q = self._current_queue()
@@ -5507,7 +5658,25 @@ class MainWindow(QMainWindow):
         if not d:
             return
 
-        q.name = d["name"]
+        new_name = (d.get("name") or "").strip()
+        if not new_name:
+            QMessageBox.warning(self, "Error", "Queue name is required.")
+            return
+        if new_name == "Default":
+            QMessageBox.warning(self, "Error", "Queue name 'Default' is reserved.")
+            return
+        # Renaming onto an existing queue name would make the two share a
+        # schedule/proxy key and shadow each other.
+        if new_name != q.name and any(
+            other.name == new_name for other in self.store.queues
+        ):
+            QMessageBox.warning(
+                self, "Error", f"A queue named '{new_name}' already exists."
+            )
+            return
+
+        old_name = q.name
+        q.name = new_name
         q.save_path = d["save_path"]
         q.max_concurrent = d["max_concurrent"]
         self.store.settings["max_concurrent"] = d["max_concurrent"]
@@ -5523,6 +5692,11 @@ class MainWindow(QMainWindow):
             self.proxy_manager.set_queue_proxy(q.name, q.proxy_config)
         else:
             self.proxy_manager.remove_queue_proxy(q.name)
+
+        # Drop the old name's proxy entry, otherwise a rename leaves a stale
+        # key behind that can be handed out for the previous name.
+        if old_name != q.name:
+            self.proxy_manager.remove_queue_proxy(old_name)
 
         self.store.save()
         self._queue_list_dirty = True
@@ -5856,9 +6030,13 @@ class MainWindow(QMainWindow):
                 if data.get("status") not in ("complete", "error", "removed"):
                     data["status"] = "paused"
 
+                    # Short TTL: this only needs to cover the gap until the
+                    # first stats poll arrives. The previous 999999s value
+                    # pinned every restored download to "Paused" in the UI
+                    # for ~11.5 days, even while aria2 reported it active.
                     self._pending_status[download_id] = (
                         "paused",
-                        time.time() + 999999,
+                        time.time() + 10.0,
                     )
 
             for q in self.store.queues:
@@ -6308,8 +6486,6 @@ class MainWindow(QMainWindow):
         # ── 2. Stop retry timers ──
         if self._countdown_timer:
             self._countdown_timer.stop()
-        if self._schedule_timer:
-            self._schedule_timer.stop()
         for t in self._retry_timers.values():
             try:
                 t.stop()
@@ -6409,6 +6585,18 @@ class MainWindow(QMainWindow):
                 self.store.shutdown()
             except Exception as e:
                 print(f"⚠️ Error closing datastore: {e}")
+
+        # ── 10. Stop the local extension server ──
+        # Never stopped before: the port stayed bound until the process was
+        # reaped, so a quick restart could hit "address already in use" and
+        # the extension saw a dead server it still believed was up.
+        shutdown_dialog.update_status("Stopping local server...", 92)
+        if getattr(self, "local_server", None) is not None:
+            try:
+                self.local_server.stop()
+            except Exception as e:
+                print(f"⚠️ Error stopping local server: {e}")
+            self.local_server = None
 
         shutdown_dialog.update_status("👋 Goodbye...", 100)
         if hasattr(self, "tray"):
