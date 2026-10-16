@@ -1363,7 +1363,7 @@ class YouTubeDownloadDialog(QDialog):
         self._main_window = parent
         self.setWindowTitle("YouTube Download")
         self.setMinimumWidth(600)
-        self.setMinimumHeight(200)
+        self.setMinimumHeight(340)
         self.setSizeGripEnabled(True)
 
         self.queues = queues or []
@@ -1378,8 +1378,14 @@ class YouTubeDownloadDialog(QDialog):
         main_layout.setSpacing(8)
         main_layout.setContentsMargins(16, 12, 16, 16)
 
-        video_acc = AccordionGroup("Video")
-        video_acc.set_expanded(True)
+        self.tabs = QTabWidget()
+        main_layout.addWidget(self.tabs, 1)
+
+        # ── Tab 1: Video ──
+        video_page = QWidget()
+        video_layout = QVBoxLayout(video_page)
+        video_layout.setContentsMargins(12, 12, 12, 12)
+        video_layout.setSpacing(8)
 
         url_row = QHBoxLayout()
         url_row.setSpacing(6)
@@ -1391,7 +1397,7 @@ class YouTubeDownloadDialog(QDialog):
         self.fetch_btn.setFixedHeight(32)
         self.fetch_btn.clicked.connect(self._fetch_info)
         url_row.addWidget(self.fetch_btn)
-        video_acc.addLayout(url_row)
+        video_layout.addLayout(url_row)
 
         info_group = QGroupBox("Video Info")
         self.info_layout = QFormLayout(info_group)
@@ -1401,16 +1407,22 @@ class YouTubeDownloadDialog(QDialog):
         self.info_placeholder.setStyleSheet("color: #95a5a6; font-size: 11px;")
         self.info_layout.addRow(self.info_placeholder)
 
-        video_acc.addWidget(info_group)
-
-        main_layout.addWidget(video_acc)
-
-        opts_acc = AccordionGroup("Options")
-        opts_acc.set_expanded(True)
+        video_layout.addWidget(info_group)
 
         self.format_combo = QComboBox()
         self.format_combo.setEnabled(False)
-        opts_acc.addWidget(self.format_combo)
+        format_form = QFormLayout()
+        format_form.addRow("Format:", self.format_combo)
+        video_layout.addLayout(format_form)
+        video_layout.addStretch(1)
+
+        self.tabs.addTab(video_page, "Video")
+
+        # ── Tab 2: Options ──
+        opts_page = QWidget()
+        opts_form = QFormLayout(opts_page)
+        opts_form.setContentsMargins(12, 12, 12, 12)
+        opts_form.setSpacing(10)
 
         path_row = QHBoxLayout()
         path_row.setSpacing(6)
@@ -1422,7 +1434,17 @@ class YouTubeDownloadDialog(QDialog):
         self.browse_btn.setFixedSize(28, 28)
         self.browse_btn.clicked.connect(self._browse)
         path_row.addWidget(self.browse_btn)
-        opts_acc.addLayout(path_row)
+        opts_form.addRow("Save to:", path_row)
+
+        self.queue_combo = QComboBox()
+        self.queue_combo.addItem("Direct Downloads", "__direct__")
+        for i, q in enumerate(self.queues):
+            if q.name != "__direct__":
+                self.queue_combo.addItem(q.name, q.name)
+        if self.default_queue < self.queue_combo.count():
+            self.queue_combo.setCurrentIndex(self.default_queue)
+        self.queue_combo.currentIndexChanged.connect(self._on_queue_selection_changed)
+        opts_form.addRow("Queue:", self.queue_combo)
 
         cookie_row = QHBoxLayout()
         cookie_row.setSpacing(6)
@@ -1434,30 +1456,31 @@ class YouTubeDownloadDialog(QDialog):
         self.cookie_browse.setFixedSize(28, 28)
         self.cookie_browse.clicked.connect(self._browse_cookie)
         cookie_row.addWidget(self.cookie_browse)
-        opts_acc.addLayout(cookie_row)
+        opts_form.addRow("Cookies file:", cookie_row)
 
-        self.queue_combo = QComboBox()
-        self.queue_combo.addItem("Direct Downloads", "__direct__")
-        for i, q in enumerate(self.queues):
-            if q.name != "__direct__":
-                self.queue_combo.addItem(q.name, q.name)
-        if self.default_queue < self.queue_combo.count():
-            self.queue_combo.setCurrentIndex(self.default_queue)
-        self.queue_combo.currentIndexChanged.connect(self._on_queue_selection_changed)
-        opts_acc.addWidget(self.queue_combo)
+        cookie_note = QLabel(
+            "Needed when YouTube asks you to sign in (bot check, age-restricted "
+            "or private videos)."
+        )
+        cookie_note.setWordWrap(True)
+        cookie_note.setStyleSheet("color: #95a5a6; font-size: 11px;")
+        opts_form.addRow("", cookie_note)
 
         self._on_queue_selection_changed(self.queue_combo.currentIndex())
         self._path_user_edited = False
 
-        main_layout.addWidget(opts_acc)
+        self.tabs.addTab(opts_page, "Options")
 
-        proxy_acc = AccordionGroup("Proxy Settings")
-        proxy_acc.set_expanded(False)
+        # ── Tab 3: Proxy ──
+        proxy_page = QWidget()
+        proxy_layout = QVBoxLayout(proxy_page)
+        proxy_layout.setContentsMargins(12, 12, 12, 12)
+        proxy_layout.setSpacing(8)
 
         self.proxy_combo = QComboBox()
         self.proxy_combo.addItems(["Use Global Proxy", "Custom Proxy", "No Proxy"])
         self.proxy_combo.currentIndexChanged.connect(self._on_proxy_mode_changed)
-        proxy_acc.addWidget(self.proxy_combo)
+        proxy_layout.addWidget(self.proxy_combo)
 
         proxy_btn_row = QHBoxLayout()
         proxy_btn_row.setSpacing(6)
@@ -1473,14 +1496,15 @@ class YouTubeDownloadDialog(QDialog):
         proxy_btn_row.addWidget(self.proxy_clear_btn)
 
         proxy_btn_row.addStretch()
-        proxy_acc.addLayout(proxy_btn_row)
+        proxy_layout.addLayout(proxy_btn_row)
 
         self.proxy_status_label = QLabel("")
         self.proxy_status_label.setWordWrap(True)
         self.proxy_status_label.setStyleSheet("font-size: 11px; padding: 2px;")
-        proxy_acc.addWidget(self.proxy_status_label)
+        proxy_layout.addWidget(self.proxy_status_label)
+        proxy_layout.addStretch(1)
 
-        main_layout.addWidget(proxy_acc)
+        self.tabs.addTab(proxy_page, "Proxy")
 
         self.btn_box = QDialogButtonBox()
         self.download_btn = self.btn_box.addButton(
@@ -1721,15 +1745,56 @@ class YouTubeDownloadDialog(QDialog):
     def _on_info_fetch_finished(self, success, message):
         if not success:
             self.clear_info_layout()
-            self.info_placeholder = QLabel(f"Error: {message}")
-            self.info_placeholder.setStyleSheet("color: #e74c3c; font-size: 11px;")
-            self.info_layout.addRow(self.info_placeholder)
             self.download_btn.setEnabled(False)
+
+            from core.youtube_worker import cookie_hint
+
+            hint = cookie_hint(message, self.cookie_edit.text().strip() or None)
+            if hint:
+                self._show_cookie_hint(hint, message)
+            else:
+                self.info_placeholder = QLabel(f"Error: {message}")
+                self.info_placeholder.setWordWrap(True)
+                self.info_placeholder.setStyleSheet(
+                    "color: #e74c3c; font-size: 11px;"
+                )
+                self.info_layout.addRow(self.info_placeholder)
 
         self.fetch_btn.setEnabled(True)
         self.fetch_btn.setText("Get Info")
 
         QTimer.singleShot(100, self.adjustSize)
+
+    def _show_cookie_hint(self, hint: str, raw_error: str) -> None:
+        """Explain that cookies are needed and offer to pick the file now."""
+        hint_label = QLabel(hint)
+        hint_label.setWordWrap(True)
+        hint_label.setStyleSheet("color: #f39c12; font-size: 12px; font-weight: 600;")
+        self.info_layout.addRow(hint_label)
+
+        use_cookies_btn = QPushButton(get_icon("folder-open"), " Select cookies file…")
+        use_cookies_btn.clicked.connect(self._pick_cookies_and_retry)
+        self.info_layout.addRow(use_cookies_btn)
+
+        # Keep the original yt-dlp message, trimmed, for reference.
+        details = raw_error.strip()[-300:]
+        if details:
+            details_label = QLabel(details)
+            details_label.setWordWrap(True)
+            details_label.setTextInteractionFlags(
+                Qt.TextInteractionFlag.TextSelectableByMouse
+            )
+            details_label.setStyleSheet("color: #95a5a6; font-size: 10px;")
+            self.info_layout.addRow(details_label)
+
+    def _pick_cookies_and_retry(self):
+        self.tabs.setCurrentIndex(1)
+        before = self.cookie_edit.text().strip()
+        self._browse_cookie()
+        after = self.cookie_edit.text().strip()
+        if after and after != before:
+            self.tabs.setCurrentIndex(0)
+            self._fetch_info()
 
     def _on_add_to_queue(self):
         data = self.get_data()

@@ -15,6 +15,49 @@ from pathlib import Path
 from PyQt6.QtCore import QThread, pyqtSignal
 
 
+# yt-dlp phrases that mean "YouTube wants you to be signed in".
+_COOKIE_ERROR_MARKERS = (
+    "sign in",
+    "not a bot",
+    "cookie",
+    "login required",
+    "log in",
+    "confirm your age",
+    "age-restricted",
+    "age restricted",
+    "members-only",
+    "members only",
+    "private video",
+)
+
+
+def is_cookie_error(text: Optional[str]) -> bool:
+    """True when a yt-dlp error is the kind that cookies usually fix."""
+    if not text:
+        return False
+    low = text.lower()
+    return any(marker in low for marker in _COOKIE_ERROR_MARKERS)
+
+
+def cookie_hint(text: Optional[str], cookie_file: Optional[str] = None) -> str:
+    """User-facing advice for yt-dlp errors that call for cookies ("" if n/a)."""
+    if not is_cookie_error(text):
+        return ""
+    if cookie_file:
+        return (
+            "YouTube still asks for authentication. The cookies file you "
+            "selected may be expired or exported from a logged-out session. "
+            "Export a fresh cookies.txt from a browser where you are signed "
+            "in to YouTube and select it again."
+        )
+    return (
+        "YouTube is asking you to sign in (bot check, age restriction or a "
+        "private/members-only video). Use cookies: export a cookies.txt "
+        "from a browser where you are signed in to YouTube and select it "
+        "under Options \u2192 Cookies file."
+    )
+
+
 def _is_safe_path(path: Path, output_dir: Path) -> bool:
     """Reject anything that escapes output_dir via "..", symlinks, or
     is a directory."""
@@ -726,11 +769,14 @@ class YouTubeWorker(QThread):
                 error_text = (
                     "\n".join(error_lines[-30:]) if error_lines else "Unknown error"
                 )
-                self.finished.emit(
-                    False,
+                message = (
                     f"Download failed! (code {self.process.returncode})\n\n"
-                    f"{error_text[-800:]}",
+                    f"{error_text[-800:]}"
                 )
+                hint = cookie_hint(error_text, self.cookie_file)
+                if hint:
+                    message += f"\n\n{hint}"
+                self.finished.emit(False, message)
 
         except Exception as e:
             self.finished.emit(False, f"Error: {str(e)}")

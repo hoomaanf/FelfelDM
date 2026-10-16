@@ -39,6 +39,9 @@ class BackendWorker(QThread):
     stats_updated = pyqtSignal(dict)
     aria2_error = pyqtSignal(str)
     size_fetched = pyqtSignal(str, object, str)
+    # Emitted when a size fetch finished without a usable size, so the UI can
+    # show "Unknown" instead of "Getting size..." forever.
+    size_failed = pyqtSignal(str)
     remove_multi_requested = pyqtSignal(list)
 
     resume_requested = pyqtSignal(str)
@@ -579,12 +582,14 @@ class BackendWorker(QThread):
             else:
                 print(f"⚠️ [Worker] Could not fetch size for {gid}")
                 self._failed_sizes[gid] = time.time()
+                self.size_failed.emit(gid)
 
         except Exception as e:
             import traceback
 
             traceback.print_exc()
             self._failed_sizes[gid] = time.time()
+            self.size_failed.emit(gid)
         finally:
             self._fetching_sizes.discard(gid)
 
@@ -965,6 +970,12 @@ class BackendWorker(QThread):
 
     def _on_youtube_size_fetched(self, download_id: str, size: int):
         print(f"📏 [SIZE] Received size for {download_id}: {size} bytes")
+
+        # The size fetcher reports 0 on failure and 1 when yt-dlp answered
+        # but gave no size. Neither is a real size: normalise to 0 so the UI
+        # shows "Unknown" instead of "1 B".
+        if size <= 1:
+            size = 0
 
         should_auto_start = False
         with self.youtube_lock:

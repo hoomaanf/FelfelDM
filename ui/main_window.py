@@ -107,6 +107,9 @@ class MainWindow(QMainWindow):
         self.details_panel = None
         self._completed_gids: Set[str] = set()
         self._cancelling_youtube: Set[str] = set()
+        # Downloads whose size fetch finished without a result (shown as
+        # "Unknown"; they must not block starting a queue).
+        self._size_unknown: Set[str] = set()
         self._queue_list_dirty = True
         self._open_dialogs: Dict[str, QDialog] = {}
         self._pending_status: Dict[str, tuple] = {}
@@ -951,7 +954,7 @@ class MainWindow(QMainWindow):
         self.tray.setContextMenu(menu)
         self.tray.activated.connect(self._on_tray_activated)
         self.tray.show()
-    
+
     def _on_tray_activated(self, reason) -> None:
         """Toggle window visibility when the tray icon is clicked.
 
@@ -990,6 +993,7 @@ class MainWindow(QMainWindow):
         self.worker.stats_updated.connect(self._on_stats_received)
         self.worker.aria2_error.connect(self._on_aria2_error)
         self.worker.size_fetched.connect(self._on_size_fetched)
+        self.worker.size_failed.connect(self._on_size_failed)
 
         self.worker.youtube_progress.connect(self._on_youtube_progress)
         self.worker.youtube_status.connect(self._on_youtube_status)
@@ -1012,9 +1016,6 @@ class MainWindow(QMainWindow):
 
         if q.schedule_enabled and not q.is_scheduled_now():
             self._show_schedule_info(q)
-            return
-
-        if not self._validate_queue_start(q):
             return
 
         error_gids = []
@@ -1284,22 +1285,6 @@ class MainWindow(QMainWindow):
         )
         self._queue_worker.finished.connect(self._on_queue_operation_finished)
 
-    def _validate_queue_start(self, q: Queue) -> bool:
-        for gid in q.downloads:
-            if gid in self._all_downloads:
-                total = self._all_downloads[gid].get("totalLength", 0)
-                status = self._all_downloads[gid].get("status", "")
-                if total == 0 and status in ["waiting", "paused"]:
-                    QMessageBox.warning(
-                        self,
-                        "Getting Size",
-                        "Some downloads are still fetching file size.\n"
-                        "Please wait until size is fetched before starting.",
-                        QMessageBox.StandardButton.Ok,
-                    )
-                    return False
-        return True
-
     def _show_schedule_info(self, q: Queue) -> None:
         next_time = q.get_next_schedule_time()
         if next_time:
@@ -1558,6 +1543,8 @@ class MainWindow(QMainWindow):
                     "connections": info.get("connections", 0),
                 }
                 self._all_downloads[download_id] = row.copy()
+
+            row["sizeUnknown"] = download_id in self._size_unknown
 
             display_name = row.get("name", "Unknown")
             matched_rule = row.get("matched_rule")
@@ -2074,7 +2061,7 @@ class MainWindow(QMainWindow):
             self.schedule_status_icon.clear()
             self.schedule_status_lbl.setText("")
             self.status_label.setText("Running")
-    
+
     def _update_progress_bar(self) -> None:
         q = self._current_queue()
         total_size = 0
@@ -2657,6 +2644,7 @@ class MainWindow(QMainWindow):
         if current_size > 0 and current_size == size:
             return
 
+        self._size_unknown.discard(download_id)
         self._all_downloads[download_id]["totalLength"] = size
         self._all_downloads[download_id]["category"] = category
 
@@ -2669,6 +2657,23 @@ class MainWindow(QMainWindow):
         self.store.save()
         self._refresh_table()
         self._update_progress_bar()
+
+    def _on_size_failed(self, gid: str) -> None:
+        """A size fetch ended without a size: show "Unknown", stop waiting."""
+        download_id = None
+        if gid in self._all_downloads:
+            download_id = gid
+        else:
+            for did, ddata in self._all_downloads.items():
+                if ddata.get("aria2_gid") == gid:
+                    download_id = did
+                    break
+        if not download_id:
+            return
+        if self._to_int(self._all_downloads[download_id].get("totalLength", 0)) > 0:
+            return
+        self._size_unknown.add(download_id)
+        self._refresh_table()
 
     def _on_table_double_click(self, index: QModelIndex) -> None:
         gid = self.model.get_gid(index.row())
@@ -3132,10 +3137,12 @@ class MainWindow(QMainWindow):
             rule_size = None
             if rules_need_size:
                 rule_size = self._probe_size_for_rules(
-                    url, options.get("all-proxy") and {
+                    url,
+                    options.get("all-proxy")
+                    and {
                         "http": options["all-proxy"],
                         "https": options["all-proxy"],
-                    }
+                    },
                 )
 
             rule = self.store.rule_engine.find_match(url, rule_size)
@@ -3974,6 +3981,7 @@ class MainWindow(QMainWindow):
                     del q.downloads_info[gid]
             self._all_downloads.pop(gid, None)
             self._retrying_gids.discard(gid)
+            self._size_unknown.discard(gid)
 
         try:
             self._worker_remove_multi([g for g in raw_gids if g])
@@ -4048,9 +4056,7 @@ class MainWindow(QMainWindow):
             # cancel can still arrive and would re-create the row as
             # "downloading" -- a ghost nothing ever updates, which keeps the
             # tray icon green forever.
-            QTimer.singleShot(
-                5000, lambda g=gid: self._cancelling_youtube.discard(g)
-            )
+            QTimer.singleShot(5000, lambda g=gid: self._cancelling_youtube.discard(g))
 
     def _reset_speed_if_idle(self) -> None:
         has_active = any(
@@ -4552,8 +4558,12 @@ class MainWindow(QMainWindow):
             self._refresh_table()
 
     def _on_youtube_size_fetched(self, download_id: str, size: int) -> None:
+        if size <= 0:
+            self._size_unknown.add(download_id)
+        else:
+            self._size_unknown.discard(download_id)
         if download_id in self._all_downloads:
-            self._all_downloads[download_id]["totalLength"] = size
+            self._all_downloads[download_id]["totalLength"] = max(size, 0)
             self._refresh_table()
 
     def _on_youtube_finished(
@@ -6268,9 +6278,7 @@ class MainWindow(QMainWindow):
         # Self-heal: a YouTube row that still claims to be active although
         # the worker no longer knows it can never finish, and it would keep
         # the tray icon green. Mark it paused so the user can resume/remove.
-        reported = {
-            d.get("id") for d in youtube_downloads if isinstance(d, dict)
-        }
+        reported = {d.get("id") for d in youtube_downloads if isinstance(d, dict)}
         for did, info in self._all_downloads.items():
             if (
                 info.get("download_type") == "youtube"

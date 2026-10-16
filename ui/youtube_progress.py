@@ -662,6 +662,12 @@ class YouTubeProgressDialog(QDialog):
         if self.proxy_url:
             lines.append(f"  Proxy            {self.proxy_url}")
 
+        if getattr(self, "_error_message", ""):
+            lines.append("")
+            lines.append("Error")
+            for ln in self._error_message.splitlines():
+                lines.append(f"  {ln}")
+
         if self._file_path:
             lines.append("")
             lines.append("File")
@@ -1038,7 +1044,33 @@ class YouTubeProgressDialog(QDialog):
                 pass
             self.cancel_btn.clicked.connect(self.reject)
 
+            self._error_message = message or ""
+            self._maybe_show_cookie_hint(message)
+
         self._update_technical()
+
+    def _maybe_show_cookie_hint(self, message) -> None:
+        """Tell the user to use cookies when yt-dlp's error calls for it.
+
+        update_finished() can be called again on every stats poll while the
+        row stays in the error state, so this only ever fires once.
+        """
+        if getattr(self, "_cookie_hint_shown", False):
+            return
+
+        from core.youtube_worker import cookie_hint
+
+        hint = cookie_hint(message, self.cookie_file)
+        if not hint:
+            return
+
+        self._cookie_hint_shown = True
+        self.info_labels["status"].setText("Failed — cookies needed")
+        QTimer.singleShot(
+            0,
+            lambda: QMessageBox.warning(self, "Sign-in required", hint),
+        )
+
     # ═══════════════════════════════════════════════════════════
     # Misc
     # ═══════════════════════════════════════════════════════════

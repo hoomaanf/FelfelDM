@@ -236,6 +236,8 @@ class DownloadTableModel(QAbstractTableModel):
         total = self._to_int(row.get("totalLength", 0))
 
         if total == 0:
+            if row.get("sizeUnknown") and status not in ("complete", "completed"):
+                return "Unknown"
             if download_type == "youtube" and status in (
                 "downloading",
                 "pending",
@@ -433,6 +435,8 @@ class DownloadTableModel(QAbstractTableModel):
                 f"Total: {format_size(total)}\n"
                 f"{pct}% completed"
             )
+        if row.get("sizeUnknown"):
+            return "Size unknown: the server did not report it or the fetch failed"
         return "Getting size from server..."
 
     def _tooltip_connections(self, row):
