@@ -82,6 +82,7 @@ async function init() {
       toggleCatch();
     }
   });
+  
 
   await ping();
   setInterval(ping, 5000);

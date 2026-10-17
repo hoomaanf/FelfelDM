@@ -60,7 +60,7 @@ rm -rf "$BUILD_DIR"
 mkdir -p "$BUILD_DIR"
 
 cp "$SCRIPT_DIR/$SOURCE_MANIFEST" "$BUILD_DIR/manifest.json"
-for asset in background.js popup.html popup.js icons; do
+for asset in background.js content.js popup.html popup.js icons; do
   if [ -e "$SCRIPT_DIR/$asset" ]; then
     cp -r "$SCRIPT_DIR/$asset" "$BUILD_DIR/"
   else

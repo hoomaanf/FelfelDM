@@ -1,5 +1,7 @@
 # utils/helpers.py
 
+import subprocess
+
 from PyQt6.QtGui import QIcon
 import sys
 import os
@@ -321,3 +323,18 @@ def get_retry_status(download: dict) -> str:
         return "Retriable" if ce.retriable else "Not retryable"
 
     return "—"
+
+def is_ytdlp_supported(url: str) -> bool:
+    """Check if yt-dlp can handle this URL (simulate mode, no download)."""
+    import subprocess
+    if not url or not url.startswith(("http://", "https://")):
+        return False
+    try:
+        result = subprocess.run(
+            ["yt-dlp", "--simulate", "--quiet", "--no-warnings", url],
+            capture_output=True,
+            timeout=15,
+        )
+        return result.returncode == 0
+    except (subprocess.TimeoutExpired, FileNotFoundError):
+        return False

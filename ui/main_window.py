@@ -38,6 +38,7 @@ from utils.helpers import (
     format_speed,
     get_icon,
     get_resource_path,
+    is_ytdlp_supported,
 )
 from core.local_server import LocalServer
 from utils.style import setup_style, make_primary
@@ -4237,6 +4238,50 @@ class MainWindow(QMainWindow):
         print(f"✅ Deleted {deleted} file(s)")
         return True
 
+    def _open_youtube_dialog_with_url(self, url: str) -> None:
+        """Open the download dialog for a media URL (YouTube or any yt-dlp site)."""
+        existing = self._open_dialogs.get("youtube_download")
+        if existing is not None:
+            try:
+                if existing.isVisible():
+                    existing.close()
+            except RuntimeError:
+                pass
+            self._open_dialogs.pop("youtube_download", None)
+
+        queues = [q for q in self.store.queues if q.name != "__direct__"]
+        default_idx = 0
+        current_q = self._current_queue()
+        if current_q and current_q.name != "__direct__":
+            for i, q in enumerate(queues):
+                if q.name == current_q.name:
+                    default_idx = i
+                    break
+
+        dlg = YouTubeDownloadDialog(
+            parent=self, queues=queues, default_queue=default_idx
+        )
+        dlg.youtube_download_requested.connect(self._add_youtube_to_queue)
+
+        dlg.url_edit.setText(url)
+        # Do NOT auto-fetch — user clicks "Get Info" manually.
+
+        # Set a meaningful title based on the domain.
+        try:
+            from urllib.parse import urlparse
+
+            host = urlparse(url).hostname or ""
+        except Exception:
+            host = ""
+        if "youtube" in host or "youtu.be" in host:
+            dlg.setWindowTitle("YouTube Download")
+        elif host:
+            dlg.setWindowTitle(f"Download from {host}")
+        else:
+            dlg.setWindowTitle("Download Media")
+
+        self._show_singleton_dialog("youtube_download", dlg)
+
     def _youtube_download(self) -> None:
         queues = [q for q in self.store.queues if q.name != "__direct__"]
         default_idx = 0
@@ -6762,6 +6807,47 @@ class MainWindow(QMainWindow):
             return
         self._open_or_update_add_dialog(urls)
 
+    @pyqtSlot(str, str)
+    def _open_dialog_from_extension(self, url: str, kind: str = "") -> None:
+        if not url:
+            return
+
+        lower = url.lower()
+        if lower.startswith("magnet:") or lower.endswith(".torrent"):
+            QMessageBox.warning(
+                self,
+                "Not Supported",
+                "BitTorrent downloads are not supported in this version.",
+            )
+            return
+
+        if kind == "youtube":
+            self._open_youtube_dialog_with_url(url)
+            return
+
+        try:
+            from urllib.parse import urlparse
+
+            host = urlparse(url).hostname or ""
+            host = host.lower()
+            if (
+                host == "youtu.be"
+                or host.endswith(".youtube.com")
+                or host == "youtube.com"
+                or host.endswith(".youtube-nocookie.com")
+                or host == "music.youtube.com"
+            ):
+                self._open_youtube_dialog_with_url(url)
+                return
+        except Exception:
+            pass
+
+        if is_ytdlp_supported(url):
+            self._open_youtube_dialog_with_url(url)
+            return
+
+        self._open_or_update_add_dialog([url])
+
     def _is_retriable_error(self, error_msg: str, error_code=None) -> bool:
         return classify(error_msg or "", error_code).retriable
 
@@ -6840,8 +6926,7 @@ class MainWindow(QMainWindow):
 
         if not aria2_gid or not self.aria2:
             print(
-                f"⚠️ [Retry] No aria2_gid for {download_id[:12]} — "
-                f"scheduling retry"
+                f"⚠️ [Retry] No aria2_gid for {download_id[:12]} — " f"scheduling retry"
             )
             self._retrying_gids.add(download_id)
             if error_msg:

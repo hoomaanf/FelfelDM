@@ -14,13 +14,27 @@
     "http://localhost:8765/*",
     "http://127.0.0.1:8765/*",
     "http://localhost:8766/*",
-    "http://127.0.0.1:8766/*"
+    "http://127.0.0.1:8766/*",
+    "<all_urls>"
   ],
 
   "background": {
     "service_worker": "background.js"
   },
-
+  "content_scripts": [
+    {
+      "matches": ["<all_urls>"],
+      "js": ["content.js"],
+      "run_at": "document_idle",
+      "all_frames": true
+    }
+  ],
+  "web_accessible_resources": [
+    {
+      "resources": ["icons/icon48.png", "icons/icon128.png"],
+      "matches": ["<all_urls>"]
+    }
+  ],
   "permissions": [
     "contextMenus",
     "activeTab",
@@ -28,7 +42,8 @@
     "downloads",
     "storage",
     "scripting",
-    "alarms"
+    "alarms",
+    "webRequest"
   ],
 
   "action": {

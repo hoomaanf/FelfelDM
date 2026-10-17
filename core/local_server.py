@@ -284,6 +284,9 @@ class Handler(BaseHTTPRequestHandler):
             self._send_json(404, {"status": "error", "message": "not found"})
 
     def do_POST(self):
+        if self.path == "/open":
+            self._handle_open()
+            return
         if self.path != "/add":
             try:
                 pending = int(self.headers.get("Content-Length", 0))
@@ -357,6 +360,83 @@ class Handler(BaseHTTPRequestHandler):
 
         self._send_json(200, {"status": "success", "accepted": len(urls)})
 
+    def _handle_open(self):
+        """Handle POST /open: {url, kind}.
+
+        kind is optional; when missing, MainWindow decides based on the URL.
+        """
+        origin_header = self.headers.get("Origin")
+        if origin_header and not origin_header.startswith(ALLOWED_ORIGIN_PREFIXES):
+            print(f"🚫 Rejected /open from disallowed origin: {origin_header}")
+            try:
+                pending = int(self.headers.get("Content-Length", 0))
+            except (TypeError, ValueError):
+                pending = 0
+            self._drain_or_close(pending)
+            self._send_json(
+                403,
+                {"status": "error", "message": "forbidden origin"},
+                close=self.close_connection,
+            )
+            return
+
+        data = self._read_json_body()
+        if data is None:
+            return
+
+        url = data.get("url", "")
+        if not isinstance(url, str) or not url.strip():
+            self._send_json(400, {"status": "error", "message": "url required"})
+            return
+
+        kind = data.get("kind", "")
+        if kind not in ("youtube", "download", ""):
+            kind = ""
+
+        print(f"📥 Received /open: url={url[:80]!r}, kind={kind!r}")
+
+        thread = getattr(self.server, "server_thread", None)
+        if thread is not None and thread.main_window:
+            from PyQt6.QtCore import QMetaObject, Qt, Q_ARG
+
+            QMetaObject.invokeMethod(
+                thread.main_window,
+                "_open_dialog_from_extension",
+                Qt.ConnectionType.QueuedConnection,
+                Q_ARG(str, url),
+                Q_ARG(str, kind),
+            )
+            self._send_json(200, {"status": "success"})
+        elif thread is not None:
+            # Daemon mode: no GUI to open a dialog in.
+            if kind == "youtube":
+                print(f"🚀 Daemon mode: launching YouTube dialog for {url!r}")
+                self._launch_youtube_dialog(url)
+            else:
+                print(f"🚀 Daemon mode: queuing {url!r} via --add")
+                self._launch_with_urls([url])
+            self._send_json(200, {"status": "queued"})
+            
+    def _launch_youtube_dialog(self, url):
+        """Launch FelfelDM with --youtube-url so the YouTube dialog opens."""
+        try:
+            exe_path = "/usr/local/bin/FelfelDM"
+            if not os.path.exists(exe_path):
+                exe_path = "/usr/bin/FelfelDM"
+            if not os.path.exists(exe_path):
+                exe_path = "FelfelDM"
+
+            cmd = [exe_path, "--youtube-url", url]
+            subprocess.Popen(
+                cmd,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                start_new_session=True,
+            )
+            print(f"✅ Launched YouTube dialog: {' '.join(cmd)}")
+        except Exception as e:
+            print(f"❌ Failed to launch YouTube dialog: {e}")
+    
     def _launch_with_urls(self, urls):
         """Launch FelfelDM with URLs in daemon mode"""
         try:

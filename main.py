@@ -22,6 +22,7 @@ from utils.logger import setup_logging
 setup_logging()
 import traceback as _traceback
 
+
 def _global_excepthook(exc_type, exc_value, exc_tb):
     print("\n" + "=" * 70, flush=True)
     print("🚨 UNHANDLED PYTHON EXCEPTION", flush=True)
@@ -29,6 +30,7 @@ def _global_excepthook(exc_type, exc_value, exc_tb):
     _traceback.print_exception(exc_type, exc_value, exc_tb)
     print("=" * 70 + "\n", flush=True)
     sys.__excepthook__(exc_type, exc_value, exc_tb)
+
 
 sys.excepthook = _global_excepthook
 # Global reference for cleanup
@@ -123,6 +125,7 @@ def main():
     parser.add_argument(
         "--update", action="store_true", help="Update FelfelDM from GitHub"
     )
+    parser.add_argument("--youtube-url", type=str, default=None)
     args = parser.parse_args()
 
     if args.update:
@@ -184,8 +187,8 @@ def main():
         Qt.HighDpiScaleFactorRoundingPolicy.PassThrough
     )
     # Prefer the Wayland plugin only when a Wayland session actually exists;
-# otherwise Qt would fail to open a window on an X11-only system instead
-# of falling back to xcb.
+    # otherwise Qt would fail to open a window on an X11-only system instead
+    # of falling back to xcb.
     if os.environ.get("WAYLAND_DISPLAY"):
         os.environ.setdefault("QT_QPA_PLATFORM", "wayland")
     os.environ.setdefault("QT_QPA_PLATFORMTHEME", "kde")
@@ -255,6 +258,21 @@ def main():
         urls = args.add
         print(f"📥 Adding {len(urls)} URL(s)...")
         QTimer.singleShot(1000, lambda: win._add_from_extension(urls))
+
+    # ── Handle --youtube-url (from daemon / browser extension) ──
+    if getattr(args, "youtube_url", None):
+        yt_url = args.youtube_url
+        print(f"📥 Opening YouTube dialog for: {yt_url}")
+        # Show the window (since is_extension_launch is False, it was shown
+        # already, but ensure it is visible and on top).
+        win.show()
+        win.raise_()
+        win.activateWindow()
+        # Delay slightly so the window and its dialogs are fully initialised.
+        QTimer.singleShot(800, lambda: win._open_youtube_dialog_with_url(yt_url))
+
+        # Do NOT exit via sys.exit(app.exec()) twice — just let the event
+        # loop continue; the timer will fire and open the dialog.
 
     sys.exit(app.exec())
 
