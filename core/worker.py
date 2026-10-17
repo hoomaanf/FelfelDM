@@ -343,6 +343,7 @@ class BackendWorker(QThread):
                 "files": full_info.get("files", []),
                 "connections": full_info.get("connections", "0"),
                 "errorMessage": full_info.get("errorMessage", ""),
+                "errorCode": full_info.get("errorCode", None),
             }
             optional_fields = [
                 "uploadLength",
@@ -397,6 +398,7 @@ class BackendWorker(QThread):
                 "files": partial_info.get("files", []),
                 "connections": partial_info.get("connections", "0"),
                 "errorMessage": partial_info.get("errorMessage", ""),
+                "errorCode": partial_info.get("errorCode", None),
             }
 
     def _get_youtube_status(self) -> List[dict]:

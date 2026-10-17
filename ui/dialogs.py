@@ -16,15 +16,16 @@ from PyQt6.QtGui import (
 )
 import tempfile
 from PyQt6.QtCore import *
-from PyQt6.QtCore import QPointF, QRectF
+from PyQt6.QtCore import QRectF
 
 from core.data_store import Queue
 from utils.helpers import get_icon
 from utils.style import make_primary
 from utils.helpers import format_size
-from datetime import datetime, time as dtime
+from datetime import time as dtime
 from core.proxy_manager import ProxyType, ProxyConfig
 from core.size_fetcher_worker import SizeFetcherWorker
+from core.error_classifier import summarize_detailed
 
 # ═══════════════════════════════════════════════════════════════════
 # Base / reusable widgets
@@ -789,7 +790,7 @@ class AddDownloadDialog(QDialog):
         if not urls:
             self._clear_table()
             self._hide_fetch_chip()
-            self.fetch_btn.setEnabled(True)  
+            self.fetch_btn.setEnabled(True)
             return
 
         self._cancel_fetcher()
@@ -805,12 +806,12 @@ class AddDownloadDialog(QDialog):
         self.files_container.setVisible(show_table)
 
         self._show_fetch_chip(f"🔄  0/{len(urls)}", "#89b4fa")
-        
-        self.fetch_btn.setEnabled(False)      
-        self.fetch_btn.setText("Fetching…") 
-        
+
+        self.fetch_btn.setEnabled(False)
+        self.fetch_btn.setText("Fetching…")
+
         proxy = self._get_proxy_dict_for_fetch()
-        
+
         self.fetch_btn.setEnabled(False)
         self._fetcher = SizeFetcherWorker(urls, proxy=proxy)
         self._fetcher.size_fetched.connect(self._on_size_fetched)
@@ -1110,7 +1111,7 @@ class AddDownloadDialog(QDialog):
         self.fetch_btn.setEnabled(True)
         self.fetch_btn.setIcon(get_icon("view-refresh"))
         self.fetch_btn.setText(" Fetch sizes")
-        
+
         # Hide the chip shortly after so it doesn't stay there forever
         QTimer.singleShot(1800, self._hide_fetch_chip)
 
@@ -1241,11 +1242,11 @@ class AddDownloadDialog(QDialog):
             new_icon = get_icon("download")
             new_text = "Download"
         else:
-           new_icon = get_icon("list-add")
-           new_text = "Add to Queue"
-           self._ok_btn.setIconSize(QSize(14, 14)) 
-           self._ok_btn.setText(new_text)
-           self._ok_btn.setIcon(new_icon)
+            new_icon = get_icon("list-add")
+            new_text = "Add to Queue"
+            self._ok_btn.setIconSize(QSize(14, 14))
+            self._ok_btn.setText(new_text)
+            self._ok_btn.setIcon(new_icon)
 
         btn = self._ok_btn
 
@@ -1257,6 +1258,7 @@ class AddDownloadDialog(QDialog):
             btn.setIcon(new_icon)
 
         QTimer.singleShot(0, _apply)
+
     def _import_from_txt(self):
         file_path, _ = QFileDialog.getOpenFileName(
             self, "Open Links File", "", "Text Files (*.txt);;All Files (*)"
@@ -1755,9 +1757,7 @@ class YouTubeDownloadDialog(QDialog):
             else:
                 self.info_placeholder = QLabel(f"Error: {message}")
                 self.info_placeholder.setWordWrap(True)
-                self.info_placeholder.setStyleSheet(
-                    "color: #e74c3c; font-size: 11px;"
-                )
+                self.info_placeholder.setStyleSheet("color: #e74c3c; font-size: 11px;")
                 self.info_layout.addRow(self.info_placeholder)
 
         self.fetch_btn.setEnabled(True)
@@ -2748,9 +2748,7 @@ WantedBy=default.target
                     continue
                 try:
                     with open(f"/proc/{pid}/cmdline", "rb") as f:
-                        cmdline = (
-                            f.read().decode("utf-8", "replace").replace("\0", " ")
-                        )
+                        cmdline = f.read().decode("utf-8", "replace").replace("\0", " ")
                 except OSError:
                     continue
                 if "felfeldm" in cmdline.lower():
@@ -2962,7 +2960,7 @@ class DownloadProgressDialog(QDialog):
         main_layout.setSpacing(0)
         main_layout.setContentsMargins(0, 0, 0, 0)
 
-        # Tabs  
+        # Tabs
         self.tabs = QTabWidget()
         self.tabs.setDocumentMode(False)
         self.tabs.setUsesScrollButtons(False)
@@ -3071,6 +3069,12 @@ class DownloadProgressDialog(QDialog):
         err_layout.setContentsMargins(10, 8, 10, 8)
         err_layout.setSpacing(2)
 
+        # Let the banner grow as the wrapped reason grows.
+        self.error_banner.setSizePolicy(
+            QSizePolicy.Policy.Preferred,
+            QSizePolicy.Policy.MinimumExpanding,
+        )
+
         err_header = QHBoxLayout()
         err_header.setSpacing(6)
         err_icon = QLabel()
@@ -3086,6 +3090,15 @@ class DownloadProgressDialog(QDialog):
 
         self.error_reason_lbl = QLabel("")
         self.error_reason_lbl.setWordWrap(True)
+
+        self.error_reason_lbl.setSizePolicy(
+            QSizePolicy.Policy.Preferred,
+            QSizePolicy.Policy.Preferred,
+        )
+        self.error_reason_lbl.setTextInteractionFlags(
+            Qt.TextInteractionFlag.TextSelectableByMouse
+        )
+        self.error_reason_lbl.setContentsMargins(0, 2, 0, 2)
         err_layout.addWidget(self.error_reason_lbl)
 
         self.error_retry_lbl = QLabel("")
@@ -3178,7 +3191,6 @@ class DownloadProgressDialog(QDialog):
             speed_hint.setStyleSheet("color: #4a4a5a;")
         speed_tab_layout.addWidget(speed_hint)
 
-
         self.tabs.addTab(speed_tab, "Speed Limit")
 
         # ── Tab 3: Technical ──
@@ -3255,8 +3267,6 @@ class DownloadProgressDialog(QDialog):
                 self._file_path = files[0]["path"]
             self.update_data(dl_data)
 
-        
-        
     def _apply_styles(self):
         self.details_card.setStyleSheet("""
             QFrame#details_card {
@@ -3520,9 +3530,16 @@ class DownloadProgressDialog(QDialog):
         from utils.helpers import get_error_reason, get_retry_status
 
         if status in ("error", "retrying"):
-            reason = get_error_reason(dl_data.get("errorMessage", ""))
+            hist = dl_data.get("error_history") or []
+            detailed = summarize_detailed(hist)
+            reason = (
+                detailed
+                if detailed
+                else get_error_reason(dl_data.get("errorMessage", ""))
+            )
             retry = get_retry_status(dl_data)
             self.error_reason_lbl.setText(reason)
+            self.error_banner.adjustSize()
             self.error_retry_lbl.setText(f"Retry: {retry}")
             self.error_banner.setVisible(True)
         else:

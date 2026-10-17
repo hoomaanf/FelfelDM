@@ -64,6 +64,7 @@ _PERSISTED_DOWNLOAD_FIELDS = (
     "download_type",
     "error_count",
     "errorMessage",
+    "error_history",
     "size_fetch_attempts",
     "real_path",
     "yt_options",

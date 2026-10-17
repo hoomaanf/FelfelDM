@@ -8,7 +8,7 @@ from utils.helpers import (
     get_category_from_filename,
     get_icon,
 )
-
+from core.error_classifier import summarize, summarize_detailed
 
 # ─────────────────────────────────────────────────────────────────────
 # Category → icon-theme name.
@@ -17,71 +17,71 @@ from utils.helpers import (
 # working against the emoji-prefixed form.
 # ─────────────────────────────────────────────────────────────────────
 CATEGORY_ICON_NAMES = {
-    "🎬 Video":     "video-x-generic",
-    "🎵 Audio":     "audio-x-generic",
-    "📦 Archive":   "package-x-generic",
-    "📄 Document":  "x-office-document",
-    "🖼️ Image":     "image-x-generic",
-    "⚙️ Program":   "application-x-executable",
-    "💻 Code":      "text-x-script",
-    "📚 Ebook":     "application-epub+zip",
-    "🔤 Font":      "font-x-generic",
-    "🗄️ Database":  "application-x-sqlite2",
-    "💿 Disk":      "drive-harddisk",
-    "🧲 Torrent":   "application-x-bittorrent",
-    "📝 Subtitle":  "text-x-generic-template",
-    "📋 Playlist":  "audio-x-playlist",
-    "📁 Other":     "folder",
-    "🎬 YouTube":   "applications-multimedia",
+    "🎬 Video": "video-x-generic",
+    "🎵 Audio": "audio-x-generic",
+    "📦 Archive": "package-x-generic",
+    "📄 Document": "x-office-document",
+    "🖼️ Image": "image-x-generic",
+    "⚙️ Program": "application-x-executable",
+    "💻 Code": "text-x-script",
+    "📚 Ebook": "application-epub+zip",
+    "🔤 Font": "font-x-generic",
+    "🗄️ Database": "application-x-sqlite2",
+    "💿 Disk": "drive-harddisk",
+    "🧲 Torrent": "application-x-bittorrent",
+    "📝 Subtitle": "text-x-generic-template",
+    "📋 Playlist": "audio-x-playlist",
+    "📁 Other": "folder",
+    "🎬 YouTube": "applications-multimedia",
 }
 
 CATEGORY_DISPLAY = {
-    "🎬 Video":     "Video",
-    "🎵 Audio":     "Audio",
-    "📦 Archive":   "Archive",
-    "📄 Document":  "Document",
-    "🖼️ Image":     "Image",
-    "⚙️ Program":   "Program",
-    "💻 Code":      "Code",
-    "📚 Ebook":     "Ebook",
-    "🔤 Font":      "Font",
-    "🗄️ Database":  "Database",
-    "💿 Disk":      "Disk",
-    "🧲 Torrent":   "Torrent",
-    "📝 Subtitle":  "Subtitle",
-    "📋 Playlist":  "Playlist",
-    "📁 Other":     "Other",
-    "🎬 YouTube":   "YouTube",
+    "🎬 Video": "Video",
+    "🎵 Audio": "Audio",
+    "📦 Archive": "Archive",
+    "📄 Document": "Document",
+    "🖼️ Image": "Image",
+    "⚙️ Program": "Program",
+    "💻 Code": "Code",
+    "📚 Ebook": "Ebook",
+    "🔤 Font": "Font",
+    "🗄️ Database": "Database",
+    "💿 Disk": "Disk",
+    "🧲 Torrent": "Torrent",
+    "📝 Subtitle": "Subtitle",
+    "📋 Playlist": "Playlist",
+    "📁 Other": "Other",
+    "🎬 YouTube": "YouTube",
 }
 
 STATUS_ICON_NAMES = {
-    "active":       "go-down",
-    "downloading":  "go-down",
-    "waiting":      "appointment-soon",
-    "paused":       "media-playback-pause",
-    "complete":     "emblem-default",
-    "completed":    "emblem-default",
-    "error":        "dialog-error",
-    "removed":      "edit-delete",
-    "pending":      "appointment-soon",
-    "cancelled":    "edit-delete",
-    "stopped":      "media-playback-pause",
-    "retrying":     "view-refresh",
+    "active": "go-down",
+    "downloading": "go-down",
+    "waiting": "appointment-soon",
+    "paused": "media-playback-pause",
+    "complete": "emblem-default",
+    "completed": "emblem-default",
+    "error": "dialog-error",
+    "removed": "edit-delete",
+    "pending": "appointment-soon",
+    "cancelled": "edit-delete",
+    "stopped": "media-playback-pause",
+    "retrying": "view-refresh",
 }
 
 STATUS_DISPLAY = {
-    "active":       "Downloading",
-    "downloading":  "Downloading",
-    "waiting":      "Waiting",
-    "paused":       "Paused",
-    "complete":     "Complete",
-    "completed":    "Complete",
-    "error":        "Error",
-    "removed":      "Removed",
-    "pending":      "Pending",
-    "cancelled":    "Cancelled",
-    "stopped":      "Stopped",
-    "retrying":     "Retrying...",
+    "active": "Downloading",
+    "downloading": "Downloading",
+    "waiting": "Waiting",
+    "paused": "Paused",
+    "complete": "Complete",
+    "completed": "Complete",
+    "error": "Error",
+    "removed": "Removed",
+    "pending": "Pending",
+    "cancelled": "Cancelled",
+    "stopped": "Stopped",
+    "retrying": "Retrying...",
 }
 
 
@@ -156,9 +156,7 @@ class DownloadTableModel(QAbstractTableModel):
         # ── Text alignment ──
         if role == Qt.ItemDataRole.TextAlignmentRole:
             if col == self.COL_NAME:
-                return int(
-                    Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter
-                )
+                return int(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
             return int(Qt.AlignmentFlag.AlignCenter)
 
         download_type = row.get("download_type", "normal")
@@ -206,6 +204,11 @@ class DownloadTableModel(QAbstractTableModel):
                 return self._tooltip_connections(row)
             if col == self.COL_CATEGORY:
                 return self._display_category(row, download_type)
+            if col == self.COL_STATUS:
+                hist = row.get("error_history") or []
+                detailed = summarize_detailed(hist)
+                if detailed:
+                    return detailed
 
         # ── Foreground (only Status is colored) ──
         if role == Qt.ItemDataRole.ForegroundRole and col == self.COL_STATUS:
@@ -305,6 +308,14 @@ class DownloadTableModel(QAbstractTableModel):
         return format_eta(total, completed, speed)
 
     def _display_status(self, row, download_type, status):
+        # Errored downloads show a compact summary of the error history
+        # (e.g. "Error: DNS ×3, Timeout ×2"). Falls back to plain "Error"
+        # when there is no history yet.
+        if status == "error":
+            hist = row.get("error_history") or []
+            short = summarize(hist)
+            return f"Error: {short}" if short else "Error"
+
         # Retrying has a countdown detail string that replaces the label.
         if status == "retrying":
             detail = row.get("status_detail")
@@ -316,11 +327,11 @@ class DownloadTableModel(QAbstractTableModel):
         if download_type == "youtube":
             yt_map = {
                 "downloading": "Downloading (yt-dlp)",
-                "pending":     "Pending",
-                "paused":      "Paused",
-                "completed":   "Complete",
-                "error":       "Error",
-                "cancelled":   "Cancelled",
+                "pending": "Pending",
+                "paused": "Paused",
+                "completed": "Complete",
+                "error": "Error",
+                "cancelled": "Cancelled",
             }
             if status in yt_map:
                 return yt_map[status]
@@ -329,18 +340,18 @@ class DownloadTableModel(QAbstractTableModel):
             status = str(status)
 
         status_map = {
-            "active":      "Downloading",
+            "active": "Downloading",
             "downloading": "Downloading",
-            "waiting":     "Waiting",
-            "paused":      "Paused",
-            "complete":    "Complete",
-            "completed":   "Complete",
-            "error":       "Error",
-            "removed":     "Removed",
-            "pending":     "Pending",
-            "cancelled":   "Cancelled",
-            "stopped":     "Stopped",
-            "retrying":    "Retrying...",
+            "waiting": "Waiting",
+            "paused": "Paused",
+            "complete": "Complete",
+            "completed": "Complete",
+            "error": "Error",
+            "removed": "Removed",
+            "pending": "Pending",
+            "cancelled": "Cancelled",
+            "stopped": "Stopped",
+            "retrying": "Retrying...",
         }
 
         result = status_map.get(status)
@@ -350,6 +361,7 @@ class DownloadTableModel(QAbstractTableModel):
             except AttributeError:
                 result = str(status)
         return result
+
     def _display_category(self, row, download_type):
         """Category as plain text (no emoji) — the icon is drawn by
         the DecorationRole branch of data()."""
@@ -608,11 +620,7 @@ class DownloadTableModel(QAbstractTableModel):
                     if len(parts) == 2:
                         return int(parts[0]) * 60 + int(parts[1])
                     if len(parts) == 3:
-                        return (
-                            int(parts[0]) * 3600
-                            + int(parts[1]) * 60
-                            + int(parts[2])
-                        )
+                        return int(parts[0]) * 3600 + int(parts[1]) * 60 + int(parts[2])
                 except Exception:
                     pass
             return 999999999

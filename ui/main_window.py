@@ -3,7 +3,6 @@ import time
 import subprocess
 import re
 import uuid
-import shutil
 import signal
 from datetime import datetime
 from typing import Dict, List, Optional, Any, Set
@@ -11,6 +10,10 @@ from typing import Dict, List, Optional, Any, Set
 from PyQt6.QtWidgets import *
 from PyQt6.QtCore import *
 from PyQt6.QtGui import *
+from core.error_classifier import make_entry
+from core.error_classifier import summarize_detailed
+from core.error_classifier import classify
+
 
 from core import (
     Aria2RPC,
@@ -45,24 +48,6 @@ from core.rule_engine import expand_path
 
 class MainWindow(QMainWindow):
     _aria2_error_signal = pyqtSignal(str)
-
-    _PERMANENT_ERROR_PATTERNS = (
-        "403",
-        "401",
-        "404",
-        "410",
-        "451",
-        "unauthorized",
-        "forbidden",
-        "not found",
-        "gone",
-        "certificate",
-        "cert verify",
-        "unsupported",
-        "invalid url",
-        "malformed",
-        "bad request",
-    )
 
     def __init__(self) -> None:
         super().__init__()
@@ -3611,7 +3596,16 @@ class MainWindow(QMainWindow):
             from utils.helpers import get_error_reason
 
             if status in ("error", "retrying"):
-                reason_text = get_error_reason(data.get("errorMessage", ""))
+                _hist = data.get("error_history") or []
+                _detailed = summarize_detailed(_hist)
+                if _detailed:
+                    # The details panel label is single-line; flatten
+                    # the multi-line summary into " | " separators.
+                    reason_text = _detailed.replace("\n    last: ", " | ").replace(
+                        "\n", " | "
+                    )
+                else:
+                    reason_text = get_error_reason(data.get("errorMessage", ""))
             else:
                 reason_text = "—"
 
@@ -6768,11 +6762,8 @@ class MainWindow(QMainWindow):
             return
         self._open_or_update_add_dialog(urls)
 
-    def _is_retriable_error(self, error_msg: str) -> bool:
-        if not error_msg:
-            return True
-        msg = error_msg.lower()
-        return not any(p in msg for p in self._PERMANENT_ERROR_PATTERNS)
+    def _is_retriable_error(self, error_msg: str, error_code=None) -> bool:
+        return classify(error_msg or "", error_code).retriable
 
     def _on_download_error(self, download_id: str, error_msg: str) -> None:
         data = self._all_downloads.get(download_id)
@@ -6803,45 +6794,34 @@ class MainWindow(QMainWindow):
             )
             return
 
-        error_lower = error_msg.lower()
-        transient_errors = [
-            "timeout",
-            "connection",
-            "network",
-            "temporary",
-            "reset by peer",
-            "timed out",
-            "no route",
-            "unreachable",
-            "no uri available",
-            "name resolution",
-            "could not contact dns",
-            "dns servers",
-            "could not resolve",
-            "unable to resolve",
-            "resource temporarily",
-            "try again",
-            "service unavailable",
-            "bad gateway",
-            "gateway timeout",
-            "internal server error",
-            "tls packet",
-            "error decoding",
-            "eof from the server",
-            "got eof",
-            "ssl/tls handshake failure",
-            "handshake failure",
-            "error in the pull function",
-            "pull function",
-        ]
+            # ── Record this error in the history (bounded to 10) ──
+        try:
+            entry = make_entry(
+                error_msg,
+                error_code=data.get("errorCode"),
+            )
+            hist = data.setdefault("error_history", [])
+            hist.append(entry)
+            if len(hist) > 10:
+                del hist[:-10]
+            # Mirror into the persistent store so it survives restarts.
+            # We save explicitly here (not via mark_dirty) because errors
+            # are rare, and we want the history on disk immediately.
+            for _q in self.store.queues:
+                if download_id in _q.downloads_info:
+                    _q.downloads_info[download_id]["error_history"] = list(hist)
+                    break
+            self.store.save()
+        except Exception as e:
+            print(f"⚠️ [Error] Could not record error history: {e}")
 
-        if not any(t in error_lower for t in transient_errors):
-            # Permanent-looking error: still schedule a retry, but let
-            # _schedule_retry's _is_retriable_error() decide whether to
-            # actually reschedule.
+        ce = classify(error_msg, data.get("errorCode"))
+
+        # ── Permanent error path ──
+        if not ce.retriable:
             print(
-                f"🔴 [Retry] Permanent error for {download_id[:12]} — "
-                f"scheduling retry"
+                f"🔴 [Retry] Permanent error for {download_id[:12]} "
+                f"({ce.category.value}): {error_msg[:60]}"
             )
             self._retrying_gids.add(download_id)
             if error_msg:
@@ -6852,17 +6832,16 @@ class MainWindow(QMainWindow):
 
         # ── Transient error path ──
         print(
-            f"⏭️ [Retry] Transient error for {download_id[:12]} — "
-            f"will retry: {error_msg[:60]}"
+            f"⏭️ [Retry] Transient error for {download_id[:12]} "
+            f"({ce.category.value}) — will retry: {error_msg[:60]}"
         )
 
         aria2_gid = data.get("aria2_gid")
 
-        # If we don't even know the aria2 gid, we can't query status —
-        # go straight to scheduling a retry.
         if not aria2_gid or not self.aria2:
             print(
-                f"⚠️ [Retry] No aria2_gid for {download_id[:12]} — " f"scheduling retry"
+                f"⚠️ [Retry] No aria2_gid for {download_id[:12]} — "
+                f"scheduling retry"
             )
             self._retrying_gids.add(download_id)
             if error_msg:
@@ -6871,17 +6850,12 @@ class MainWindow(QMainWindow):
             self._schedule_retry(download_id, error_count)
             return
 
-        # Query aria2 status to see what it actually thinks.
         status_data = None
         try:
             status_data = self.aria2.get_status(aria2_gid)
         except Exception as e:
             print(f"⚠️ [Retry] Could not check status for {aria2_gid[:12]}: {e}")
 
-        # C1 fix: if the RPC failed (status_data is None) or returned an
-        # unexpected status, do NOT silently return — schedule a retry.
-        # Previously this fell through to a bare `return`, leaving the
-        # download stuck in 'error' forever.
         if not status_data:
             print(
                 f"⚠️ [Retry] aria2 status unavailable for "
@@ -6944,7 +6918,7 @@ class MainWindow(QMainWindow):
 
         error_msg = data.get("errorMessage", "")
 
-        if not self._is_retriable_error(error_msg):
+        if not self._is_retriable_error(error_msg, data.get("errorCode")):
             print(
                 f"⛔ [Retry] Permanent error for {download_id[:12]}: {error_msg[:60]}"
             )
