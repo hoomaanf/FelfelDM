@@ -296,7 +296,7 @@ async function notify(message, priority) {
     await browser.notifications.create({
       type: "basic",
       iconUrl: ICON_URL,
-      title: "🌶️ FelfelDM",
+      title: "FelfelDM",
       message,
       ...(priority ? { priority } : {}),
     });
@@ -333,7 +333,7 @@ async function send(urls) {
   if (!urls || urls.length === 0) return false;
   const { connected, server } = await checkConnection(true);
   if (!connected || !server) {
-    await notify("⚠️ FelfelDM is not running!", 2);
+    await notify("FelfelDM is not running!", 2);
     return false;
   }
   try {
@@ -347,7 +347,6 @@ async function send(urls) {
     });
     clearTimeout(timeoutId);
     if (r.ok) {
-      notify(`✅ Added ${urls.length} download(s)`);
       return true;
     }
     return false;
@@ -362,7 +361,7 @@ async function sendOpenDialog(url, kind) {
   if (!url) return false;
   const { connected, server } = await checkConnection(true);
   if (!connected || !server) {
-    await notify("⚠️ FelfelDM is not running!", 2);
+    await notify("FelfelDM is not running!", 2);
     return false;
   }
   try {
@@ -377,7 +376,7 @@ async function sendOpenDialog(url, kind) {
     clearTimeout(timeoutId);
     if (r.ok) {
       notify(
-        `✅ Opening ${kind === "youtube" ? "YouTube" : "download"} dialog`,
+        `Opening ${kind === "youtube" ? "YouTube" : "download"} dialog`,
       );
       return true;
     }
@@ -403,7 +402,7 @@ browser.downloads.onCreated.addListener(async (item) => {
   const accepted = await send([item.url]);
   if (!accepted) {
     await notify(
-      "⚠️ FelfelDM did not accept the download.\nThe browser will handle it instead.",
+      "FelfelDM did not accept the download.\nThe browser will handle it instead.",
     );
     return;
   }
@@ -495,12 +494,12 @@ async function getSelectedLinks(tabId) {
 
 browser.contextMenus.onClicked.addListener(async (info, tab) => {
   if (!(await isCatchEnabled())) {
-    await notify("⛔ Download catching is disabled. Enable it from the popup.");
+    await notify("Download catching is disabled. Enable it from the popup.");
     return;
   }
   const { connected } = await checkConnection(false);
   if (!connected) {
-    await notify("⚠️ FelfelDM is not running!", 2);
+    await notify("FelfelDM is not running!", 2);
     return;
   }
   try {
