@@ -297,6 +297,9 @@ class AddDownloadDialog(QDialog):
         self._custom_proxy = None
         self._path_user_edited = False
 
+        self._queue_user_edited = False
+        self._auto_selecting_queue = False
+
         self._url_to_row: dict = {}
         self._url_to_size: dict = {}
         self._url_to_status: dict = {}
@@ -320,6 +323,8 @@ class AddDownloadDialog(QDialog):
         self._build_ui()
         self._update_ok_button_label()
         self._setup_tab_order()
+
+        self._on_queue_selection_changed(self.queue_cb.currentIndex())
 
     # ─────────────────────────────────────────────────────────────
     # Small helpers
@@ -514,12 +519,11 @@ class AddDownloadDialog(QDialog):
 
         self.queue_cb = QComboBox()
         self.queue_cb.addItem("📥 Direct Downloads", "__direct__")
-
         for q in self._visible_queues:
             self.queue_cb.addItem(q.name, q.name)
-        if 0 <= self.default_queue < self.queue_cb.count():
-            self.queue_cb.setCurrentIndex(self.default_queue)
-        self.queue_cb.currentIndexChanged.connect(self._on_queue_selection_changed)
+
+        self.queue_cb.setCurrentIndex(0)
+        self.queue_cb.currentIndexChanged.connect(self._on_queue_index_changed)
         queue_row.addWidget(self.queue_cb, 1)
 
         basic_layout.addLayout(queue_row)
@@ -547,8 +551,7 @@ class AddDownloadDialog(QDialog):
         save_label.setFixedWidth(60)
         save_row.addWidget(save_label)
 
-        default_path = self._default_path_for_index(self.default_queue)
-        self.path_edit = QLineEdit(default_path)
+        self.path_edit = QLineEdit("")
         self.path_edit.textEdited.connect(self._on_path_manually_edited)
         save_row.addWidget(self.path_edit, 1)
 
@@ -727,43 +730,15 @@ class AddDownloadDialog(QDialog):
 
     def _on_urls_changed(self):
         urls = self._get_urls()
-        show_table = len(urls) > 1
 
-        self.files_container.setVisible(show_table)
+        if not urls:
+            self._queue_user_edited = False
 
-        # Direct Downloads is only valid for a single URL. For a batch,
-        # grey it out so the user sees it exists but can't select it,
-        # and move the selection to the first real queue if needed.
-        model = self.queue_cb.model()
-        direct_item = model.item(0) if hasattr(model, "item") else None
-        if direct_item is not None:
-            allow_direct = not show_table
-            direct_item.setEnabled(allow_direct)
+        self._sync_direct_item(urls)
+        self._auto_select_queue_for_urls(urls)
 
-            if allow_direct:
-                direct_item.setToolTip("")
-            else:
-                direct_item.setToolTip(
-                    "Direct Downloads is only available for a single URL.\n"
-                    "For batch downloads, choose a queue."
-                )
-
-            if not allow_direct and self.queue_cb.currentData() == "__direct__":
-                for i in range(1, self.queue_cb.count()):
-                    other = model.item(i) if hasattr(model, "item") else None
-                    if other is None or other.isEnabled():
-                        self.queue_cb.setCurrentIndex(i)
-                        break
-
-        # Show the "why is Direct greyed out" hint for multi-URL batches
-        if show_table:
-            self.queue_help_label.setText(
-                "💡 Multiple URLs — Direct Downloads is disabled. "
-                "Pick a queue to batch these downloads."
-            )
-            self.queue_help_label.setVisible(True)
-        else:
-            self.queue_help_label.setVisible(False)
+        self.files_container.setVisible(len(urls) > 1)
+        self.queue_help_label.setVisible(False)
 
         self._fetch_timer.start(self.FETCH_DEBOUNCE_MS)
 
@@ -1233,6 +1208,53 @@ class AddDownloadDialog(QDialog):
                     break
         self._update_ok_button_label()
 
+    def _on_queue_index_changed(self, index: int) -> None:
+        if not self._auto_selecting_queue:
+            self._queue_user_edited = True
+        self._on_queue_selection_changed(index)
+
+    def _sync_direct_item(self, urls: list) -> None:
+        needs_direct = len(urls) <= 1
+        direct_idx = self.queue_cb.findData("__direct__")
+        has_direct = direct_idx >= 0
+
+        if needs_direct and not has_direct:
+            self._auto_selecting_queue = True
+            try:
+                self.queue_cb.insertItem(0, "📥 Direct Downloads", "__direct__")
+            finally:
+                self._auto_selecting_queue = False
+
+        elif not needs_direct and has_direct:
+            was_selected = self.queue_cb.currentIndex() == direct_idx
+            self._auto_selecting_queue = True
+            try:
+                self.queue_cb.removeItem(direct_idx)
+                if was_selected and self.queue_cb.count() > 0:
+                    self.queue_cb.setCurrentIndex(0)
+            finally:
+                self._auto_selecting_queue = False
+            if was_selected:
+                self._on_queue_selection_changed(self.queue_cb.currentIndex())
+
+    def _auto_select_queue_for_urls(self, urls: list) -> None:
+        if self._queue_user_edited:
+            return
+
+        if len(urls) <= 1:
+            target = self.queue_cb.findData("__direct__")
+        else:
+            target = 0 if self.queue_cb.count() > 0 else -1
+
+        if target < 0 or self.queue_cb.currentIndex() == target:
+            return
+
+        self._auto_selecting_queue = True
+        try:
+            self.queue_cb.setCurrentIndex(target)
+        finally:
+            self._auto_selecting_queue = False
+
     def _update_ok_button_label(self):
         if not hasattr(self, "_ok_btn"):
             return
@@ -1443,8 +1465,10 @@ class YouTubeDownloadDialog(QDialog):
         for i, q in enumerate(self.queues):
             if q.name != "__direct__":
                 self.queue_combo.addItem(q.name, q.name)
-        if self.default_queue < self.queue_combo.count():
-            self.queue_combo.setCurrentIndex(self.default_queue)
+        if 0 <= self.default_queue < len(self.queues):
+            self.queue_combo.setCurrentIndex(self.default_queue + 1)
+        else:
+            self.queue_combo.setCurrentIndex(0)
         self.queue_combo.currentIndexChanged.connect(self._on_queue_selection_changed)
         opts_form.addRow("Queue:", self.queue_combo)
 

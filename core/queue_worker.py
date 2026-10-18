@@ -21,7 +21,6 @@ class QueueOperationWorker(QThread):
         self._all_downloads = main_window._all_downloads
 
     def _get_aria2_gid(self, download_id: str) -> str:
-        """دریافت aria2_gid از download_id (UUID)."""
         data = self._all_downloads.get(download_id)
         if not data:
             return None
@@ -107,12 +106,11 @@ class QueueOperationWorker(QThread):
 
                 real_status = status_data.get("status", "unknown")
 
+                # Status is never announced from here: aria2 reports it.
                 if real_status in ["paused", "waiting"]:
                     to_resume_gids.append(aria2_gid)
-                    self.download_status_changed.emit(download_id, "active")
                     resumed_count += 1
                 elif real_status == "active":
-                    self.download_status_changed.emit(download_id, "active")
                     resumed_count += 1
                 else:
                     self.status_update.emit(
@@ -201,7 +199,6 @@ class QueueOperationWorker(QThread):
 
                     if real_status in ["active", "waiting"]:
                         self.worker.pause_requested.emit(aria2_gid)
-                        self.download_status_changed.emit(download_id, "paused")
                         paused_count += 1
                         self.status_update.emit(f"Pausing: {download_id[:8]}...")
                     elif real_status == "paused":

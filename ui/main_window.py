@@ -97,9 +97,6 @@ class MainWindow(QMainWindow):
         # Downloads whose size fetch finished without a result (shown as
         # "Unknown"; they must not block starting a queue).
         self._size_unknown: Set[str] = set()
-        # When aria2 starts reporting a download as running while its queue
-        # is paused: first time we noticed the mismatch (see
-        # _update_downloads_from_stats).
         self._queue_list_dirty = True
         self._open_dialogs: Dict[str, QDialog] = {}
         self._last_speed_limit_active_count: Optional[int] = None
@@ -227,7 +224,7 @@ class MainWindow(QMainWindow):
                     "FelfelDM",
                     "Started minimized to system tray.",
                     QSystemTrayIcon.MessageIcon.Information,
-                    2000,
+                    5000,
                 ),
             )
 
@@ -393,12 +390,6 @@ class MainWindow(QMainWindow):
                     dl["status"] = "paused"
                     info["status"] = "paused"
 
-                new_status = info.get("status", "")
-                if gid in self._all_downloads and new_status:
-                    self._all_downloads[gid]["status"] = new_status
-                    if new_status == "paused":
-                        self._all_downloads[gid]["downloadSpeed"] = 0
-
             self._queue_list_dirty = True
             self._refresh_queue_list()
             self._refresh_table()
@@ -453,7 +444,7 @@ class MainWindow(QMainWindow):
             print(f"⚠️ Error stopping aria2: {e}")
             return
         if stopped:
-            print(f"✅ aria2 stopped (PID: {', '.join(map(str, stopped))})")
+            print(f"aria2 stopped (PID: {', '.join(map(str, stopped))})")
         else:
             print("ℹ️ No FelfelDM-owned aria2 process was running")
 
@@ -983,7 +974,7 @@ class MainWindow(QMainWindow):
         self.worker.operation_result.connect(self._on_worker_operation_result)
 
         self.worker.start()
-        print("✅ BackendWorker started")
+        print("BackendWorker started")
 
     def _start_current_queue(self) -> None:
         """Start the entire queue"""
@@ -1032,9 +1023,6 @@ class MainWindow(QMainWindow):
             if gid in self._all_downloads:
                 self._all_downloads[gid]["error_count"] = 0
                 self._all_downloads[gid]["errorMessage"] = ""
-                self._all_downloads[gid]["status"] = "waiting"
-                if gid in q.downloads_info:
-                    q.downloads_info[gid]["status"] = "waiting"
 
         q.manually_paused = False
         self._apply_settings_to_aria2()
@@ -1131,14 +1119,6 @@ class MainWindow(QMainWindow):
             if real_status in ("active", "waiting", "paused"):
                 download_ids_to_pause.append(gid)
 
-            # Update our local view to match aria2.
-            if real_status in ("active", "waiting"):
-                if gid in self._all_downloads:
-                    self._all_downloads[gid]["status"] = "paused"
-                    self._all_downloads[gid]["downloadSpeed"] = 0
-                if gid in q.downloads_info:
-                    q.downloads_info[gid]["status"] = "paused"
-
         if download_ids_to_pause:
             print(
                 f"⏸️ [UI] Pausing queue '{q.name}': "
@@ -1160,7 +1140,7 @@ class MainWindow(QMainWindow):
             "FelfelDM",
             f"⏸️ Queue '{q.name}' paused",
             QSystemTrayIcon.MessageIcon.Information,
-            2000,
+            5000,
         )
 
     def _header_context_menu(self, pos) -> None:
@@ -1291,15 +1271,19 @@ class MainWindow(QMainWindow):
             )
 
     def _on_download_status_changed(self, gid: str, status: str) -> None:
-        if gid in self._all_downloads:
-            self._all_downloads[gid]["status"] = status
+        # Only YouTube downloads (managed by yt-dlp workers, not aria2)
+        # announce their status. For everything else aria2 is the single
+        # source of truth and the stats poll sets the status.
+        data = self._all_downloads.get(gid)
+        if data is not None and data.get("download_type") == "youtube":
+            data["status"] = status
             if status == "paused":
-                self._all_downloads[gid]["downloadSpeed"] = 0
+                data["downloadSpeed"] = 0
 
-        for q in self.store.queues:
-            if gid in q.downloads_info:
-                q.downloads_info[gid]["status"] = status
-                break
+            for q in self.store.queues:
+                if gid in q.downloads_info:
+                    q.downloads_info[gid]["status"] = status
+                    break
 
         QMetaObject.invokeMethod(
             self, "_delayed_ui_update", Qt.ConnectionType.QueuedConnection
@@ -1325,7 +1309,7 @@ class MainWindow(QMainWindow):
                 if success
                 else QSystemTrayIcon.MessageIcon.Warning
             ),
-            2000,
+            5000,
         )
 
         self._refresh_table()
@@ -2381,11 +2365,6 @@ class MainWindow(QMainWindow):
             aria2_gid = data.get("aria2_gid")
             if aria2_gid:
                 gid_to_download_id[aria2_gid] = download_id
-        download_to_queue: Dict[str, Queue] = {}
-        for q in self.store.queues:
-            for download_id in q.downloads:
-                download_to_queue[download_id] = q
-
         saved_data = {}
         for download_id, data in self._all_downloads.items():
             try:
@@ -2441,29 +2420,17 @@ class MainWindow(QMainWindow):
                     and saved_data[download_id]["totalLength"] > 0
                 ):
 
+                    # aria2 reported no size this tick: keep the sizes we
+                    # have, but status and speed are still aria2's, as-is.
                     if (
                         download_id not in self._retry_state
                         and download_id not in self._retrying_gids
                     ):
-
-                        parent_queue = download_to_queue.get(download_id)
-                        if (
-                            parent_queue
-                            and parent_queue.paused
-                            and dl.get("status") in ("waiting", "active")
-                        ):
-
-                            if "files" in dl:
-                                self._all_downloads[download_id]["files"] = dl["files"]
-                        else:
-                            for key in ["status", "downloadSpeed"]:
-                                if key in dl:
-                                    self._all_downloads[download_id][key] = dl[key]
-                            if "files" in dl:
-                                self._all_downloads[download_id]["files"] = dl["files"]
-                    else:
-                        if "files" in dl:
-                            self._all_downloads[download_id]["files"] = dl["files"]
+                        for key in ["status", "downloadSpeed"]:
+                            if key in dl:
+                                self._all_downloads[download_id][key] = dl[key]
+                    if "files" in dl:
+                        self._all_downloads[download_id]["files"] = dl["files"]
 
                     self._all_downloads[download_id]["totalLength"] = saved_data[
                         download_id
@@ -2476,25 +2443,15 @@ class MainWindow(QMainWindow):
                 old_status = self._all_downloads[download_id].get("status", "")
                 new_status = dl.get("status", "")
 
-                # Trust aria2's status directly. No overrides.
+                # aria2 is the single source of truth for a download's status
+                # and speed: they are copied from its report unchanged. The one
+                # exception is the app's own retry countdown ("retrying"),
+                # which shows until the retry finishes.
                 if download_id in self._retry_state:
                     dl = dict(dl)
                     dl.pop("status", None)
                     dl.pop("downloadSpeed", None)
                     new_status = old_status
-
-                if new_status == "stopped":
-                    parent_queue = download_to_queue.get(download_id)
-                    if parent_queue and parent_queue.paused:
-                        dl = dict(dl)
-                        dl["status"] = "paused"
-                        dl["downloadSpeed"] = "0"
-                        new_status = "paused"
-                    elif old_status == "paused":
-                        dl = dict(dl)
-                        dl["status"] = "paused"
-                        dl["downloadSpeed"] = "0"
-                        new_status = "paused"
 
                 if new_status in ["complete", "completed"] and old_status not in [
                     "complete",
@@ -3023,9 +2980,6 @@ class MainWindow(QMainWindow):
 
         self._apply_settings_to_aria2()
 
-        # ── Base options for this batch ──
-        # User's connection count from the dialog (which now defaults
-        # to settings["connections"]).
         user_connections = int(d.get("connections") or 8)
 
         options = {
@@ -3056,39 +3010,32 @@ class MainWindow(QMainWindow):
         is_direct = queue_name == "__direct__"
         added = 0
         new_gids = []
+        # Same-queue duplicates that were blocked.
+        skipped_duplicates: list = []  # [(url, queue_name)]
+        # Cross-queue duplicates that were ALLOWED but reported.
+        cross_queue_added: list = []  # [(url, existing_queue_names)]
+        failed_urls: list = []  # [(url, reason)]
 
         print(f"📂 [Add] Queue: {queue_name}")
         print(f"📂 [Add] Save path: {d['path']!r}")
         print(f"📂 [Add] URLs: {len(d['urls'])}")
 
-        # Snapshot of every URL currently tracked, so we can reject
-        # duplicates before aria2 does (aria2 returns result:null for
-        # duplicate URIs, which we used to misread as a failure).
-        existing_urls: Dict[str, str] = {}
+        # url → set of queue names it currently lives in.
+        # Per-queue duplicate policy:
+        #   - same queue      → block (cannot add twice to one queue)
+        #   - different queue → allow, but mention in notification
+        existing_urls: Dict[str, set] = {}
         for q in self.store.queues:
             for dl_id, dl_info in q.downloads_info.items():
                 u = dl_info.get("url")
                 if u:
-                    existing_urls[u] = q.name
+                    existing_urls.setdefault(u, set()).add(q.name)
 
-        # Size-conditional rules can only be evaluated with a known file
-        # size, so only probe when such a rule exists at all.
         rules_need_size = self._rules_with_size_conditions()
 
         for url in d["urls"]:
 
-            # ── Duplicate check (C5 follow-up) ──
-            if url in existing_urls:
-                print(
-                    f"⏭️ [Add] Skipping duplicate URL — already in "
-                    f"queue '{existing_urls[url]}': {url!r}"
-                )
-                continue
-
-            # Size-based rules need the file size, which is unknown until the
-            # server is asked. Probing costs a request, so it only happens
-            # when a rule actually constrains size; otherwise this is a
-            # plain URL match as before.
+            # ── Resolve rules first (they may redirect the queue) ──
             rule_size = None
             if rules_need_size:
                 rule_size = self._probe_size_for_rules(
@@ -3135,10 +3082,32 @@ class MainWindow(QMainWindow):
                 url_options["dir"] = url_path
 
                 print(
-                    f"🎯 [Rules] '{rule.name}' matched for {url[:50]}... "
-                    f"→ queue='{url_queue.name}', folder='{url_path}', "
+                    f"[Rules] '{rule.name}' matched for {url[:50]}... "
+                    f"queue='{url_queue.name}', folder='{url_path}', "
                     f"conn={url_connections}, speed={url_speed_limit}"
                 )
+
+            # ── Duplicate check (per-queue policy, no dialog) ──
+            # Runs AFTER url_queue is final.
+            #   same queue  → block silently
+            #   other queue → allow, remember for the final notification
+            existing_queues = existing_urls.get(url, set())
+
+            if url_queue.name in existing_queues:
+                print(
+                    f"[Add] Blocked same-queue duplicate in "
+                    f"'{url_queue.name}': {url!r}"
+                )
+                skipped_duplicates.append((url, url_queue.name))
+                continue
+
+            if existing_queues:
+                print(
+                    f"[Add] Cross-queue duplicate allowed: {url!r} "
+                    f"(already in {existing_queues}, adding to '{url_queue.name}')"
+                )
+                cross_queue_added.append((url, sorted(existing_queues)))
+                # Falls through — no continue, so it gets added.
 
             url_is_direct = url_queue.name == "__direct__"
             if not url_is_direct and url_queue.paused and not is_schedule_active:
@@ -3147,12 +3116,11 @@ class MainWindow(QMainWindow):
             # ── Submit to aria2 ──
             gid = self.aria2.add_url(url, url_options)
             if not gid:
-                print(f"❌ [Add] aria2.add_url returned None for URL: {url!r}")
+                print(f"[Add] aria2.add_url returned None for URL: {url!r}")
+                failed_urls.append((url, "aria2 rejected the URL"))
                 continue
 
-            # Register the URL so later URLs in this same batch are
-            # also deduplicated against it.
-            existing_urls[url] = url_queue.name
+            existing_urls.setdefault(url, set()).add(url_queue.name)
 
             download_id = uuid.uuid4().hex[:16]
 
@@ -3169,8 +3137,6 @@ class MainWindow(QMainWindow):
             else:
                 initial_status = "paused"
 
-            # Common per-download fields, shared by the persistent
-            # downloads_info and the runtime _all_downloads dict.
             common_fields = {
                 "id": download_id,
                 "aria2_gid": gid,
@@ -3189,7 +3155,6 @@ class MainWindow(QMainWindow):
                 ),
                 "speed_limit": 0,
                 "proxy_url": url_options.get("all-proxy", ""),
-                # C5 fix: persist every option a re-add would need.
                 "connections": url_connections,
                 "min_split_size": url_options.get("min-split-size", "1M"),
                 "stream_piece_selector": url_options.get(
@@ -3216,13 +3181,9 @@ class MainWindow(QMainWindow):
                     status = self.aria2.get_status(gid)
                     if status and status.get("status") in ("paused", "waiting"):
                         self.worker.resume_requested.emit(gid)
-                        self._all_downloads[download_id]["status"] = "active"
-                        if download_id in url_queue.downloads_info:
-                            url_queue.downloads_info[download_id]["status"] = "active"
                 except Exception as e:
-                    print(f"⚠️ Could not resume {download_id}: {e}")
+                    print(f"Could not resume {download_id}: {e}")
 
-            # Per-download speed limit (overrides queue + global)
             per_download_speed = self._to_int(d.get("per_download_speed", 0))
             if per_download_speed > 0:
                 self._all_downloads[download_id]["speed_limit"] = per_download_speed
@@ -3231,7 +3192,6 @@ class MainWindow(QMainWindow):
                 ] = per_download_speed
                 self._worker_set_speed_limit(download_id, per_download_speed)
             else:
-                # Fall back to queue speed limit
                 final_speed = url_speed_limit or getattr(url_queue, "speed_limit", 0)
                 if final_speed > 0:
                     self._worker_set_speed_limit(download_id, final_speed)
@@ -3257,11 +3217,6 @@ class MainWindow(QMainWindow):
                     status = self.aria2.get_status(aria2_gid)
                     if status and status.get("status") in ("waiting", "paused"):
                         self.worker.resume_requested.emit(aria2_gid)
-                        self._all_downloads[download_id]["status"] = "active"
-                        if download_id in target_queue.downloads_info:
-                            target_queue.downloads_info[download_id][
-                                "status"
-                            ] = "active"
                 except Exception as e:
                     print(f"⚠️ Could not resume {download_id}: {e}")
             self.store.save()
@@ -3272,16 +3227,76 @@ class MainWindow(QMainWindow):
                     lambda did=download_id: self._open_progress_dialog(did),
                 )
 
-        if is_direct:
-            msg = f"✅ Added {added} download(s) to Direct Downloads (started)"
-        elif target_queue.paused:
-            msg = f"✅ Added {added} download(s) to '{target_queue.name}' (paused)"
-        else:
-            msg = f"✅ Added {added} download(s) to '{target_queue.name}' (downloading)"
+        # ── Notification ──
+        n_same = len(skipped_duplicates)
+        n_cross = len(cross_queue_added)
+        n_failed = len(failed_urls)
 
-        self.tray.showMessage(
-            "FelfelDM", msg, QSystemTrayIcon.MessageIcon.Information, 2000
-        )
+        if added == 0:
+            if n_same > 0 and n_failed == 0:
+                if n_same == 1:
+                    qname = skipped_duplicates[0][1]
+                    msg = (
+                        f"⏭This URL is already in queue '{qname}'.\n"
+                        f"Nothing was added."
+                    )
+                else:
+                    msg = (
+                        f"⏭All {n_same} URL(s) are already in the "
+                        f"selected queue.\nNothing was added."
+                    )
+                icon = QSystemTrayIcon.MessageIcon.Warning
+
+            elif n_failed > 0 and n_same == 0:
+                msg = f"Could not add {n_failed} URL(s) — aria2 rejected them."
+                icon = QSystemTrayIcon.MessageIcon.Critical
+
+            else:
+                parts = []
+                if n_same:
+                    parts.append(f"{n_same} already in this queue")
+                if n_failed:
+                    parts.append(f"{n_failed} failed")
+                msg = f"Nothing added — {', '.join(parts)}."
+                icon = QSystemTrayIcon.MessageIcon.Warning
+
+        else:
+            if is_direct:
+                base = f"Added {added} download(s) to Direct Downloads (started)"
+            elif target_queue.paused:
+                base = f"Added {added} download(s) to '{target_queue.name}' (paused)"
+            else:
+                base = (
+                    f"Added {added} download(s) to '{target_queue.name}' (downloading)"
+                )
+
+            extras = []
+            if n_cross > 0:
+                # Show which queue(s) already had it, so the user knows
+                # a second copy is being downloaded.
+                if n_cross == 1:
+                    _, qlist = cross_queue_added[0]
+                    qstr = ", ".join(f"'{x}'" for x in qlist)
+                    extras.append(f"already existed in {qstr} — added anyway")
+                else:
+                    all_queues = sorted({q for _, ql in cross_queue_added for q in ql})
+                    qstr = ", ".join(f"'{x}'" for x in all_queues)
+                    extras.append(
+                        f"{n_cross} URL(s) already existed in {qstr} — added anyway"
+                    )
+            if n_same > 0:
+                extras.append(f"{n_same} already in this queue (skipped)")
+            if n_failed > 0:
+                extras.append(f"{n_failed} failed")
+
+            msg = base + ("\n" + "\n".join(extras) if extras else "")
+            icon = (
+                QSystemTrayIcon.MessageIcon.Information
+                if not extras
+                else QSystemTrayIcon.MessageIcon.Warning
+            )
+
+        self.tray.showMessage("FelfelDM", msg, icon, 10000)
 
         self._refresh_table()
 
@@ -3828,7 +3843,7 @@ class MainWindow(QMainWindow):
                     print(f"⚠️ Delete failed {path}: {e}")
                 except Exception as e:
                     print(f"⚠️ Unexpected error deleting {path}: {e}")
-            print(f"✅ Deleted {deleted} file(s)")
+            print(f"Deleted {deleted} file(s)")
 
         # ── STEP 5: Remove from UI + store ──
         self._close_progress_dialogs_for(gids_to_remove)
@@ -3946,7 +3961,6 @@ class MainWindow(QMainWindow):
             self._all_downloads.pop(gid, None)
             self._retrying_gids.discard(gid)
             self._size_unknown.discard(gid)
-            self._paused_override_since.pop(gid, None)
 
         try:
             self._worker_remove_multi([g for g in raw_gids if g])
@@ -4205,7 +4219,7 @@ class MainWindow(QMainWindow):
             except Exception as e:
                 print(f"⚠️ Unexpected error deleting {path}: {e}")
 
-        print(f"✅ Deleted {deleted} file(s)")
+        print(f"Deleted {deleted} file(s)")
         return True
 
     def _open_youtube_dialog_with_url(self, url: str) -> None:
@@ -4391,7 +4405,7 @@ class MainWindow(QMainWindow):
 
         self.tray.showMessage(
             "FelfelDM",
-            f"✅ Added YouTube download to '{queue_name}': {title[:50]}...",
+            f"Added YouTube download to '{queue_name}': {title[:50]}...",
             QSystemTrayIcon.MessageIcon.Information,
             3000,
         )
@@ -4590,7 +4604,7 @@ class MainWindow(QMainWindow):
         if success:
             self.tray.showMessage(
                 "FelfelDM",
-                "✅ YouTube download completed!",
+                "YouTube download completed!",
                 QSystemTrayIcon.MessageIcon.Information,
                 3000,
             )
@@ -4738,9 +4752,9 @@ class MainWindow(QMainWindow):
                 self.quit_app()
                 self.tray.showMessage(
                     "FelfelDM",
-                    "✅ aria2 restarted with new settings",
+                    "aria2 restarted with new settings",
                     QSystemTrayIcon.MessageIcon.Information,
-                    2000,
+                    5000,
                 )
             else:
                 self.tray.showMessage(
@@ -4768,7 +4782,7 @@ class MainWindow(QMainWindow):
                     "FelfelDM",
                     "Settings applied successfully",
                     QSystemTrayIcon.MessageIcon.Information,
-                    2000,
+                    5000,
                 )
 
         self._refresh_table()
@@ -4808,7 +4822,7 @@ class MainWindow(QMainWindow):
         aria_limit = f"{limit}K" if limit > 0 else "0"
         try:
             self.aria2.change_global_option({"max-overall-download-limit": aria_limit})
-            print(f"✅ [SpeedLimit] Global limit set to {aria_limit}")
+            print(f"[SpeedLimit] Global limit set to {aria_limit}")
         except Exception as e:
             print(f"⚠️ [SpeedLimit] Failed to set global limit: {e}")
 
@@ -4915,12 +4929,12 @@ class MainWindow(QMainWindow):
         proxy = self.proxy_manager.get_proxy_for_queue(None)
         if proxy and proxy.enabled and proxy.is_valid():
             if self.aria2.set_global_proxy(proxy) is not None:
-                print(f"✅ Global proxy applied")
+                print(f"Global proxy applied")
             else:
                 print("⚠️ Failed to apply proxy")
         else:
             self.aria2.change_global_option({"all-proxy": ""})
-            print("✅ Proxy disabled")
+            print("Proxy disabled")
 
     def _restart_aria2(self) -> None:
         # Only our own aria2 (pkill -f aria2c killed the user's others too).
@@ -4946,16 +4960,16 @@ class MainWindow(QMainWindow):
             self._shutdown_dialog_shown = False
             self.tray.showMessage(
                 "FelfelDM",
-                "✅ Shutdown cancelled.",
+                "Shutdown cancelled.",
                 QSystemTrayIcon.MessageIcon.Information,
-                2000,
+                5000,
             )
         elif checked:
             self.tray.showMessage(
                 "FelfelDM",
                 "🛑 Shutdown will trigger when all downloads complete.",
                 QSystemTrayIcon.MessageIcon.Information,
-                2000,
+                5000,
             )
             self._check_already_complete()
 
@@ -4988,7 +5002,7 @@ class MainWindow(QMainWindow):
                 self._shutdown_dialog_shown = True
                 self.tray.showMessage(
                     "🌶️ FelfelDM",
-                    "✅ All downloads completed!\n🛑 System will shut down in 20 seconds.",
+                    "All downloads completed!\n🛑 System will shut down in 20 seconds.",
                     QSystemTrayIcon.MessageIcon.Information,
                     5000,
                 )
@@ -5041,7 +5055,7 @@ class MainWindow(QMainWindow):
             if logind.isValid():
                 can = logind.call("CanPowerOff").arguments()
                 if can and can[0] == "yes":
-                    print("✅ [Shutdown] DBus PowerOff")
+                    print("[Shutdown] DBus PowerOff")
                     logind.call("PowerOff", False)
                     return
                 else:
@@ -5060,9 +5074,9 @@ class MainWindow(QMainWindow):
         self.store.save()
         self.tray.showMessage(
             "FelfelDM",
-            "✅ Shutdown cancelled.",
+            "Shutdown cancelled.",
             QSystemTrayIcon.MessageIcon.Information,
-            2000,
+            5000,
         )
 
     def _open_progress_dialog(self, gid: str) -> None:
@@ -5149,8 +5163,6 @@ class MainWindow(QMainWindow):
         real_status = self._all_downloads[gid].get("status", "")
         if real_status in ["active", "waiting", "downloading"]:
             self._worker_pause(gid)
-            self._all_downloads[gid]["status"] = "paused"
-            self._all_downloads[gid]["downloadSpeed"] = 0
             self.store.save()
             self._refresh_table()
             self._update_queue_buttons()
@@ -5173,7 +5185,6 @@ class MainWindow(QMainWindow):
 
         if real_status == "paused":
             self._worker_resume(gid)
-            self._all_downloads[gid]["status"] = "active"
 
             self.store.mark_dirty()
             self._refresh_table()
@@ -5182,7 +5193,6 @@ class MainWindow(QMainWindow):
 
         if real_status in ["waiting", "stopped"]:
             self._worker_resume(gid)
-            self._all_downloads[gid]["status"] = "active"
             self.store.mark_dirty()
             self._refresh_table()
             self._update_queue_buttons()
@@ -5271,7 +5281,7 @@ class MainWindow(QMainWindow):
                     print(f"🗑️ DELETED: {os.path.basename(path)}")
                 except OSError as e:
                     print(f"⚠️ Delete failed {path}: {e}")
-            print(f"✅ Deleted {deleted} file(s)")
+            print(f"Deleted {deleted} file(s)")
 
         QApplication.processEvents()
 
@@ -5327,10 +5337,6 @@ class MainWindow(QMainWindow):
         for gid in youtube_gids:
             self._pause_youtube_download(gid)
 
-        for gid in normal_gids:
-            self._all_downloads[gid]["status"] = "paused"
-            self._all_downloads[gid]["downloadSpeed"] = 0
-
         if normal_gids:
             self._worker_pause_multi(normal_gids)
 
@@ -5367,7 +5373,6 @@ class MainWindow(QMainWindow):
 
             if status == "paused":
                 self._worker_resume(gid)
-                self._all_downloads[gid]["status"] = "active"
 
         self.store.mark_dirty()
         self._refresh_table()
@@ -5429,7 +5434,6 @@ class MainWindow(QMainWindow):
 
         print(f"🔄 Retrying {gid} (attempt {error_count + 1}/{max_retries})")
 
-        self._all_downloads[gid]["status"] = "waiting"
         self._all_downloads[gid]["errorMessage"] = ""
         self._all_downloads[gid]["error_count"] = error_count + 1
 
@@ -5896,18 +5900,9 @@ class MainWindow(QMainWindow):
             if target_queue.paused:
                 if not was_paused:
                     self._worker_pause(gid)
-                if gid in self._all_downloads:
-                    self._all_downloads[gid]["status"] = "paused"
-                    self._all_downloads[gid]["downloadSpeed"] = 0
-                if gid in target_queue.downloads_info:
-                    target_queue.downloads_info[gid]["status"] = "paused"
             else:
                 if was_paused:
                     self._worker_resume(gid)
-                if gid in self._all_downloads:
-                    self._all_downloads[gid]["status"] = "active"
-                if gid in target_queue.downloads_info:
-                    target_queue.downloads_info[gid]["status"] = "active"
 
         self.store.save()
         self._queue_list_dirty = True
@@ -5929,7 +5924,7 @@ class MainWindow(QMainWindow):
                 for attempt in range(15):
                     time.sleep(0.5)
                     if self.aria2.is_connected():
-                        print(f"✅ aria2 connected after {attempt+1} attempts")
+                        print(f"aria2 connected after {attempt+1} attempts")
                         break
 
             active_gids = set()
@@ -6080,7 +6075,7 @@ class MainWindow(QMainWindow):
             if needs_save:
                 self.store.save()
 
-            print(f"✅ Loaded {restored_count} download(s)")
+            print(f"Loaded {restored_count} download(s)")
             print(f"📊 _all_downloads has {len(self._all_downloads)} entries")
 
             for download_id, data in self._all_downloads.items():
@@ -6141,7 +6136,7 @@ class MainWindow(QMainWindow):
             q.manually_paused = True
 
         self.store.save()
-        print(f"✅ Paused {paused_count} download(s) in aria2")
+        print(f"Paused {paused_count} download(s) in aria2")
 
     def _clear_completed_downloads(self) -> None:
         q = self._current_queue()
@@ -6363,12 +6358,10 @@ class MainWindow(QMainWindow):
         old_gid = self._all_downloads[download_id].get("aria2_gid")
 
         self._all_downloads[download_id]["aria2_gid"] = new_gid
-        self._all_downloads[download_id]["status"] = "active"
 
         for q in self.store.queues:
             if download_id in q.downloads_info:
                 q.downloads_info[download_id]["aria2_gid"] = new_gid
-                q.downloads_info[download_id]["status"] = "active"
                 break
 
         self.store.save()
@@ -6376,7 +6369,7 @@ class MainWindow(QMainWindow):
         self._retrying_gids.discard(download_id)
 
         print(
-            f"✅ [Retry] Complete: id={download_id[:12]} "
+            f"[Retry] Complete: id={download_id[:12]} "
             f"aria2_gid: {old_gid} -> {new_gid}"
         )
 
@@ -6396,7 +6389,7 @@ class MainWindow(QMainWindow):
             self._handle_re_add_result(result)
 
         elif operation == "add_url" and result is not None:
-            print(f"✅ Add URL result: {result}")
+            print(f"Add URL result: {result}")
         else:
             print(f"ℹ️ [Worker] Operation result: {operation} -> {result}")
 
@@ -6592,8 +6585,12 @@ class MainWindow(QMainWindow):
                         if status in ("active", "waiting", "downloading"):
                             if self.worker:
                                 self._worker_pause(gid)
-                            self._all_downloads[gid]["status"] = "paused"
-                            self._all_downloads[gid]["downloadSpeed"] = 0
+                            if (
+                                self._all_downloads[gid].get("download_type")
+                                == "youtube"
+                            ):
+                                self._all_downloads[gid]["status"] = "paused"
+                                self._all_downloads[gid]["downloadSpeed"] = 0
                 except Exception:
                     pass
             q.paused = True
@@ -6916,7 +6913,6 @@ class MainWindow(QMainWindow):
         if real_status in ("paused", "stopped", "waiting"):
             try:
                 self.aria2.resume(aria2_gid)
-                data["status"] = "active"
                 print(f"▶️ [Retry] Unpaused {aria2_gid[:12]}")
             except Exception as e:
                 print(f"⚠️ [Retry] Resume failed for {aria2_gid[:12]}: {e}")
@@ -7074,7 +7070,7 @@ class MainWindow(QMainWindow):
                 self._healthy_since.pop(download_id, None)
                 self.store.mark_dirty()
                 print(
-                    f"✅ [Retry] {download_id[:12]} healthy for {reset_after}s — "
+                    f"[Retry] {download_id[:12]} healthy for {reset_after}s — "
                     f"error_count reset {old_count} -> 0"
                 )
             else:
@@ -7193,7 +7189,7 @@ class MainWindow(QMainWindow):
             if success:
                 self.tray.showMessage(
                     "FelfelDM",
-                    f"✅ {message}",
+                    f"{message}",
                     QSystemTrayIcon.MessageIcon.Information,
                     3000,
                 )

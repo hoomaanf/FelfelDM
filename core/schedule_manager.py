@@ -178,7 +178,6 @@ class ScheduleManagerThread(QThread):
 
         # Collect gids that need to be unpaused in aria2.
         gids_to_resume = []
-        resumed_infos = []
         for gid in q.downloads:
             info = q.downloads_info.get(gid)
             if not info:
@@ -210,17 +209,14 @@ class ScheduleManagerThread(QThread):
             # waiting downloads can be resumed here.
             if real_status in ("paused", "waiting"):
                 gids_to_resume.append(aria2_gid)
-                resumed_infos.append(info)
 
         if gids_to_resume:
             try:
                 # Use the bulk API to keep it to one round trip.
                 ok = self._aria2.resume_multi(gids_to_resume)
                 if ok:
-                    # Only now are they really running; the status used to
-                    # be set to "active" before the call, even when it failed.
-                    for info in resumed_infos:
-                        info["status"] = "active"
+                    # No status written here: aria2 is the only source of a
+                    # download's status and the next poll reports it.
                     print(
                         f"▶️ [Scheduler] Resumed {len(gids_to_resume)} "
                         f"download(s) in queue '{queue_name}'"
@@ -278,8 +274,6 @@ class ScheduleManagerThread(QThread):
             real_status = st.get("status", "")
             if real_status in ("active", "waiting"):
                 gids_to_pause.append(aria2_gid)
-                info["status"] = "paused"
-                info["downloadSpeed"] = 0
 
         if gids_to_pause:
             try:

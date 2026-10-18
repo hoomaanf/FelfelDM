@@ -308,20 +308,18 @@ class Aria2RPC:
     def add_url(self, url: str, options: Dict = None) -> Optional[str]:
         if not url:
             return None
-
         if options is None:
             options = {}
 
-        pause_after_add = options.pop("pause", False)
-
+        want_pause = options.get("pause") in ("true", True)
         options = {k: v for k, v in options.items() if v is not None and v != ""}
 
-        params = [[url], options]
+        result = self._call("aria2.addUri", [[url], options])
 
-        result = self._call("aria2.addUri", params)
-
-        if result and pause_after_add:
-            self.pause(result)
+        if result and want_pause:
+            status = self.get_status(result)
+            if status and status.get("status") in ("active", "waiting"):
+                self.pause(result)
         return result
 
     def add_uris(self, urls: List[str], options: Dict = None) -> List[Optional[str]]:
