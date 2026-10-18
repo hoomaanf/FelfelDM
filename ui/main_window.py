@@ -40,6 +40,7 @@ from utils.helpers import (
     get_resource_path,
     is_ytdlp_supported,
 )
+from core import aria2_process
 from core.local_server import LocalServer
 from utils.style import setup_style, make_primary
 from ui.splash import SplashScreen
@@ -96,9 +97,11 @@ class MainWindow(QMainWindow):
         # Downloads whose size fetch finished without a result (shown as
         # "Unknown"; they must not block starting a queue).
         self._size_unknown: Set[str] = set()
+        # When aria2 starts reporting a download as running while its queue
+        # is paused: first time we noticed the mismatch (see
+        # _update_downloads_from_stats).
         self._queue_list_dirty = True
         self._open_dialogs: Dict[str, QDialog] = {}
-        self._pending_status: Dict[str, tuple] = {}
         self._last_speed_limit_active_count: Optional[int] = None
         self._last_schedules_hash: Optional[int] = None
         self.tray_icon_normal = None
@@ -265,7 +268,6 @@ class MainWindow(QMainWindow):
 
             config_dir = os.path.expanduser("~/.config/felfelDM")
             session_file = os.path.join(config_dir, "aria2.session")
-            pid_file = os.path.join(config_dir, "aria2.pid")
             conf_path = os.path.join(config_dir, "aria2.conf")
 
             os.makedirs(config_dir, exist_ok=True)
@@ -289,7 +291,6 @@ class MainWindow(QMainWindow):
                 f"input-file={session_file}",
                 "save-session-interval=60",
                 "pause=true",
-                f"pid-file={pid_file}",
                 "check-certificate=" + ("false" if disable_ssl else "true"),
             ]
             if self.aria2.secret:
@@ -312,14 +313,10 @@ class MainWindow(QMainWindow):
             except OSError:
                 pass
 
-            cmd = [
-                "aria2c",
-                "--enable-rpc",
-                "--daemon",
-                f"--conf-path={conf_path}",
-            ]
-
-            subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            # Our own child process, not --daemon: aria2 has no pid-file
+            # option, so a daemonised aria2 could never be found again and
+            # kept running after the app quit.
+            aria2_process.spawn(conf_path)
             time.sleep(2.0)
 
         except FileNotFoundError:
@@ -341,25 +338,26 @@ class MainWindow(QMainWindow):
         """
         print(f"🔔 [UI] Scheduler started queue: {queue_name}")
 
-        # The store is the source of truth: re-read what the scheduler
-        # wrote. We also update the live runtime dicts to match.
         for i, q in enumerate(self.store.queues):
             if q.name != queue_name:
                 continue
 
-            # Re-read paused from the store.
-            # q.paused was already updated by the scheduler via the
-            # shared store object — but if the UI was frozen during
-            # the write, our local view may be stale. Force a refresh.
-            self._all_downloads  # touch to avoid lints
-            for gid in q.downloads:
-                info = q.downloads_info.get(gid)
-                if not info:
-                    continue
-                # Trust the store's "status" field.
-                new_status = info.get("status", "")
-                if gid in self._all_downloads and new_status:
-                    self._all_downloads[gid]["status"] = new_status
+            # The scheduler thread only unpauses downloads aria2 still
+            # knows. It cannot start YouTube downloads, retry errored or
+            # stopped ones, or re-add downloads aria2 has forgotten, so a
+            # scheduled queue could log "started" and download nothing.
+            # Run the same logic as the Start button for those.
+            #
+            # (The old code copied the scheduler's optimistic "active"
+            # status into the UI here, which showed downloads as running
+            # that had not been started at all.)
+            # The scheduler also emits this signal when it skipped a queue
+            # the user paused by hand; that must stay paused.
+            if q.name != "__direct__" and not getattr(q, "manually_paused", False):
+                try:
+                    self._start_queue_downloads(q)
+                except Exception as e:
+                    print(f"⚠️ [UI] Scheduled start of '{queue_name}' failed: {e}")
 
             self._queue_list_dirty = True
             self._refresh_queue_list()
@@ -381,6 +379,20 @@ class MainWindow(QMainWindow):
                 info = q.downloads_info.get(gid)
                 if not info:
                     continue
+
+                # The scheduler thread skips YouTube downloads (it cannot
+                # talk to the yt-dlp workers), so without this they kept
+                # downloading after the schedule window ended.
+                dl = self._all_downloads.get(gid)
+                if (
+                    dl is not None
+                    and dl.get("download_type") == "youtube"
+                    and dl.get("status") in ("downloading", "active", "waiting")
+                ):
+                    self._pause_youtube_download(gid)
+                    dl["status"] = "paused"
+                    info["status"] = "paused"
+
                 new_status = info.get("status", "")
                 if gid in self._all_downloads and new_status:
                     self._all_downloads[gid]["status"] = new_status
@@ -429,40 +441,21 @@ class MainWindow(QMainWindow):
         print(f"📅 [Schedule] Loaded {len(schedules)} schedule(s)")
 
     def _stop_own_aria2(self) -> None:
-        """Stop only the aria2 instance we started"""
-        pid_file = os.path.join(os.path.expanduser("~/.config/felfelDM"), "aria2.pid")
+        """Stop the aria2 instance(s) FelfelDM started, and only those.
 
-        if not os.path.exists(pid_file):
-            print("⚠️ No PID file found, skipping aria2 shutdown")
-            return
-
+        Covers the child we spawned, the PID in our file, and an orphan left
+        by an older version (found by our --conf-path). aria2 processes the
+        user runs themselves are left alone.
+        """
         try:
-            with open(pid_file, "r") as f:
-                pid = int(f.read().strip())
-
-            print(f"🛑 Stopping aria2 with PID: {pid}")
-
-            os.kill(pid, signal.SIGTERM)
-
-            for _ in range(10):
-                try:
-                    os.kill(pid, 0)
-                    time.sleep(0.2)
-                except OSError:
-                    break
-
-            if os.path.exists(pid_file):
-                os.remove(pid_file)
-            print(f"✅ aria2 (PID: {pid}) stopped successfully")
-
-        except FileNotFoundError:
-            print("⚠️ PID file not found")
-        except ProcessLookupError:
-            print("⚠️ Process already terminated")
-            if os.path.exists(pid_file):
-                os.remove(pid_file)
+            stopped = aria2_process.stop()
         except Exception as e:
             print(f"⚠️ Error stopping aria2: {e}")
+            return
+        if stopped:
+            print(f"✅ aria2 stopped (PID: {', '.join(map(str, stopped))})")
+        else:
+            print("ℹ️ No FelfelDM-owned aria2 process was running")
 
     def _build_ui(self) -> None:
         central = QWidget()
@@ -1004,6 +997,15 @@ class MainWindow(QMainWindow):
             self._show_schedule_info(q)
             return
 
+        self._start_queue_downloads(q)
+
+    def _start_queue_downloads(self, q) -> None:
+        """Start every download of `q` (also used by the scheduler).
+
+        Retries errored/stopped downloads, resumes the rest in aria2 and
+        starts the YouTube ones. Shared by the Start button and the
+        schedule so both behave the same.
+        """
         error_gids = []
         normal_gids = []
         youtube_gids = []
@@ -1033,8 +1035,6 @@ class MainWindow(QMainWindow):
                 self._all_downloads[gid]["status"] = "waiting"
                 if gid in q.downloads_info:
                     q.downloads_info[gid]["status"] = "waiting"
-
-                self._pending_status.pop(gid, None)
 
         q.manually_paused = False
         self._apply_settings_to_aria2()
@@ -1289,9 +1289,6 @@ class MainWindow(QMainWindow):
                 "This queue is scheduled but no upcoming time found.",
                 QMessageBox.StandardButton.Ok,
             )
-
-    def _mark_pending_status(self, gid: str, status: str, ttl: float = 3.0) -> None:
-        self._pending_status[gid] = (status, time.time() + ttl)
 
     def _on_download_status_changed(self, gid: str, status: str) -> None:
         if gid in self._all_downloads:
@@ -1685,7 +1682,6 @@ class MainWindow(QMainWindow):
             return
 
         has_active = False
-        has_waiting = False
         has_paused = False
         has_error = False
         has_getting_size = False
@@ -1700,8 +1696,6 @@ class MainWindow(QMainWindow):
 
                 if status in ["active", "downloading"]:
                     has_active = True
-                elif status == "waiting" and total > 0:
-                    has_waiting = True
                 elif status == "paused" and total > 0:
                     has_paused = True
                 elif status == "error":
@@ -1719,7 +1713,7 @@ class MainWindow(QMainWindow):
                 size=18,
             )
 
-            if has_active or has_waiting:
+            if has_active:
                 self.start_queue_btn.setEnabled(True)
                 self.pause_queue_btn.setEnabled(False)
             elif has_resumable:
@@ -1730,7 +1724,7 @@ class MainWindow(QMainWindow):
                 self.pause_queue_btn.setEnabled(False)
         else:
 
-            if has_active or has_waiting:
+            if has_active:
                 self._set_status_with_icon(
                     self.queue_status_lbl,
                     self.queue_status_icon,
@@ -2023,7 +2017,7 @@ class MainWindow(QMainWindow):
             has_active = any(
                 gid in self._all_downloads
                 and self._all_downloads[gid].get("status", "")
-                in ["active", "waiting", "downloading"]
+                in ["active", "downloading"]
                 for gid in q.downloads
             )
             if has_active:
@@ -2450,7 +2444,6 @@ class MainWindow(QMainWindow):
                     if (
                         download_id not in self._retry_state
                         and download_id not in self._retrying_gids
-                        and download_id not in self._pending_status
                     ):
 
                         parent_queue = download_to_queue.get(download_id)
@@ -2483,35 +2476,12 @@ class MainWindow(QMainWindow):
                 old_status = self._all_downloads[download_id].get("status", "")
                 new_status = dl.get("status", "")
 
-                parent_queue = download_to_queue.get(download_id)
-
-                if (
-                    parent_queue
-                    and parent_queue.paused
-                    and new_status in ("waiting", "active")
-                    and old_status == "paused"
-                ):
-                    dl = dict(dl)
-                    dl["status"] = "paused"
-                    dl["downloadSpeed"] = "0"
-                    new_status = "paused"
-
+                # Trust aria2's status directly. No overrides.
                 if download_id in self._retry_state:
                     dl = dict(dl)
                     dl.pop("status", None)
                     dl.pop("downloadSpeed", None)
                     new_status = old_status
-                else:
-                    pending = self._pending_status.get(download_id)
-                    if pending:
-                        expected_status, expires_at = pending
-                        if new_status == expected_status or time.time() > expires_at:
-                            del self._pending_status[download_id]
-                        else:
-                            dl = dict(dl)
-                            dl.pop("status", None)
-                            dl.pop("downloadSpeed", None)
-                            new_status = old_status
 
                 if new_status == "stopped":
                     parent_queue = download_to_queue.get(download_id)
@@ -2536,7 +2506,6 @@ class MainWindow(QMainWindow):
 
                 self._all_downloads[download_id].update(dl)
             else:
-
                 self._all_downloads[download_id] = dl
 
         for download_id in newly_completed:
@@ -3977,6 +3946,7 @@ class MainWindow(QMainWindow):
             self._all_downloads.pop(gid, None)
             self._retrying_gids.discard(gid)
             self._size_unknown.discard(gid)
+            self._paused_override_since.pop(gid, None)
 
         try:
             self._worker_remove_multi([g for g in raw_gids if g])
@@ -4953,11 +4923,9 @@ class MainWindow(QMainWindow):
             print("✅ Proxy disabled")
 
     def _restart_aria2(self) -> None:
-        try:
-            subprocess.run(["pkill", "-f", "aria2c"], capture_output=True)
-            time.sleep(0.5)
-        except Exception:
-            pass
+        # Only our own aria2 (pkill -f aria2c killed the user's others too).
+        self._stop_own_aria2()
+        time.sleep(0.5)
 
         self.aria2 = Aria2RPC(
             self.store.settings["aria2_host"],
@@ -5183,11 +5151,6 @@ class MainWindow(QMainWindow):
             self._worker_pause(gid)
             self._all_downloads[gid]["status"] = "paused"
             self._all_downloads[gid]["downloadSpeed"] = 0
-
-            self._pending_status[gid] = (
-                "paused",
-                time.time() + 5.0,
-            )
             self.store.save()
             self._refresh_table()
             self._update_queue_buttons()
@@ -5211,11 +5174,6 @@ class MainWindow(QMainWindow):
         if real_status == "paused":
             self._worker_resume(gid)
             self._all_downloads[gid]["status"] = "active"
-
-            self._pending_status[gid] = (
-                "active",
-                time.time() + 5.0,
-            )
 
             self.store.mark_dirty()
             self._refresh_table()
@@ -5372,7 +5330,6 @@ class MainWindow(QMainWindow):
         for gid in normal_gids:
             self._all_downloads[gid]["status"] = "paused"
             self._all_downloads[gid]["downloadSpeed"] = 0
-            self._pending_status[gid] = ("paused", time.time() + 5.0)
 
         if normal_gids:
             self._worker_pause_multi(normal_gids)
@@ -5411,7 +5368,6 @@ class MainWindow(QMainWindow):
             if status == "paused":
                 self._worker_resume(gid)
                 self._all_downloads[gid]["status"] = "active"
-                self._pending_status[gid] = ("active", time.time() + 5.0)
 
         self.store.mark_dirty()
         self._refresh_table()
@@ -6130,15 +6086,6 @@ class MainWindow(QMainWindow):
             for download_id, data in self._all_downloads.items():
                 if data.get("status") not in ("complete", "error", "removed"):
                     data["status"] = "paused"
-
-                    # Short TTL: this only needs to cover the gap until the
-                    # first stats poll arrives. The previous 999999s value
-                    # pinned every restored download to "Paused" in the UI
-                    # for ~11.5 days, even while aria2 reported it active.
-                    self._pending_status[download_id] = (
-                        "paused",
-                        time.time() + 10.0,
-                    )
 
             for q in self.store.queues:
                 q.paused = True
@@ -7038,11 +6985,6 @@ class MainWindow(QMainWindow):
             f"🔄 Retrying in {retry_delay}s... ({next_attempt}/{max_tries})"
         )
 
-        self._pending_status[download_id] = (
-            "retrying",
-            time.time() + retry_delay + 2.0,
-        )
-
         timer = QTimer(self)
         timer.setSingleShot(True)
         timer.timeout.connect(lambda d=download_id: self._do_delayed_retry(d))
@@ -7164,11 +7106,6 @@ class MainWindow(QMainWindow):
                 if data.get("status_detail") != new_detail:
                     data["status_detail"] = new_detail
                     data["status"] = "retrying"
-
-                    self._pending_status[download_id] = (
-                        "retrying",
-                        time.time() + 3.0,
-                    )
                     any_change = True
 
         for download_id in finished:

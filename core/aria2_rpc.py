@@ -1,7 +1,6 @@
 # core/aria2_rpc.py
 
 import json
-import subprocess
 import time
 import re
 import os
@@ -220,17 +219,12 @@ class Aria2RPC:
                 max_tries=max_tries,
             )
 
-            cmd = [
-                "aria2c",
-                "--enable-rpc",
-                "--daemon",
-                f"--conf-path={conf_path}",
-            ]
-
             print(f"🚀 Starting aria2 (port={self.port}, conf={conf_path})")
-            subprocess.Popen(
-                cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
-            )
+            # Our own child (no --daemon): its PID is known, so it can be
+            # stopped on quit, and it exits by itself if the app dies.
+            from core import aria2_process
+
+            self._aria2_process = aria2_process.spawn(conf_path)
 
             for _ in range(30):
                 time.sleep(0.3)
@@ -552,8 +546,12 @@ class Aria2RPC:
             print(f"⚠️ Error during aria2 shutdown: {e}")
             try:
 
-                subprocess.run(["pkill", "-f", "aria2c"], capture_output=True)
-                print("✅ aria2 killed via pkill")
+                # Only our own aria2: `pkill -f aria2c` also killed aria2
+                # instances the user runs by hand.
+                from core import aria2_process
+
+                aria2_process.stop()
+                print("✅ aria2 stopped")
                 return True
             except Exception as e2:
                 print(f"❌ Could not kill aria2: {e2}")

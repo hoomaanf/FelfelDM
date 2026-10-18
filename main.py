@@ -63,6 +63,15 @@ def signal_handler(sig, frame):
         except:
             pass
 
+    # The normal quit path (MainWindow.quit_app) is skipped on a signal, and
+    # aria2 used to keep running afterwards.
+    try:
+        from core import aria2_process
+
+        aria2_process.stop()
+    except Exception:
+        pass
+
     global app
     if app:
         try:

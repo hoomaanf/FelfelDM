@@ -261,9 +261,6 @@ class BackendWorker(QThread):
 
         all_downloads = active + waiting + stopped
 
-        # ⭐ ساخت set از GIDهای waiting
-        waiting_gids = {dl.get("gid") for dl in waiting if dl.get("gid")}
-
         downloads_snapshot = []
         seen_gids = set()
 
@@ -301,10 +298,6 @@ class BackendWorker(QThread):
 
             complete_info = self._get_complete_download_info(gid, download)
             if complete_info:
-                if gid in waiting_gids:
-                    complete_info["status"] = "waiting"
-                    complete_info["downloadSpeed"] = "0"
-
                 complete_info["download_id"] = gid_to_download_id.get(gid)
                 downloads_snapshot.append(complete_info)
 
