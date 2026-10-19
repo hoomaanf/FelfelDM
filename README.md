@@ -1,3 +1,5 @@
+**English** | [فارسی](./README.fa.md)
+
 # 🌶️ FelfelDM
 
 <div align="center">
@@ -60,8 +62,10 @@ bash <(curl -s https://raw.githubusercontent.com/hoomaanf/FelfelDM/main/install.
 - 📊 **Real-time Progress** — Live download speed and progress tracking
 - 🎯 **Download Rules** — Automatically apply queue, folder, connections, and speed limit based on URL pattern, extension, domain, or file size
 - 🎯 **Smart Management** — Intelligent auto-retry with configurable delay, pause/resume, and error handling
+- 🎯 **Single Source of Truth** — aria2 is the only source for a download's status and speed. The UI never invents state; if aria2 says `active`, the app shows `active`
+- 🚫 **Smart Duplicate Detection** — The same URL cannot be added twice to the **same queue**, but is allowed across **different queues** (with a notification naming the queues that already have it)
 - 🔄 **Smart Retry** — Automatically retry transient errors (timeout, DNS, connection, TLS packet, 5xx, 429) with a configurable delay; fail fast on permanent errors (404, 403, 401, certificate issues)
-- 🔁 **Retry Counter Reset** — The failed-attempt counter resets to 0 after a configurable period of healthy downloading, so intermittent network issues don't permanently exhaust the retry budget
+- 🔁 **Retry Counter Reset** — The failed-attempt counter resets to 0 in three cases: (a) after a configurable period of healthy downloading, (b) **when the queue is paused** (so a queue paused overnight doesn't stay blocked by counters from a momentary outage), and (c) **when the user clicks Start Queue** (an explicit user action beats the cap)
 - ⏱️ **Countdown Retry** — Live countdown in the Status column while waiting between retry attempts (e.g. `🔄 Retrying in 5s... (2/5)`)
 - 🗑️ **Safe Removal** — Remove from list, or delete files with a confirmation dialog that lists exactly what will be deleted (main file + aria2 sidecar + temp files)
 - 🎵 **YouTube Download** — Download videos and audio from YouTube with dynamic quality selection
@@ -104,6 +108,35 @@ Rules let you define conditions and actions that are applied automatically when 
 - Rule speed limit **overrides** queue speed limit when both are set
 
 **Where to configure:** Settings → General → Download Rules → Manage Rules...
+
+### 🎯 Automatic Queue Selection
+
+The Add Download dialog picks the right queue automatically based on how many URLs you paste:
+
+| URL count | Selected queue | Notes |
+|-----------|----------------|-------|
+| **0 or 1** | **Direct Downloads** | Starts immediately, no queue |
+| **2 or more** | **First real queue** | Direct Downloads is **removed from the list** (not just disabled) |
+
+- If you manually pick a queue, auto-selection is disabled for that dialog session (your choice is respected)
+- If you clear all URLs, auto-selection re-enables
+- The **Save to** path always follows the selected queue's folder
+
+### 🚫 Duplicate URL Handling
+
+FelfelDM tracks every URL that's already in any queue. When you add a URL that already exists:
+
+| Situation | Behavior |
+|-----------|----------|
+| **Same queue** — URL is already in the queue you're adding to | ⛔ **Blocked silently.** Notification: `This URL is already in queue 'X'. Nothing was added.` |
+| **Different queue** — URL is in another queue, adding to a new one | ✅ **Allowed.** Notification: `ℹ️ already existed in 'X' — added anyway`. The file will be downloaded twice into two different folders. |
+| **Multiple queues** — URL is in 2+ queues, adding to a third | ✅ Allowed, notification lists **all** existing queues |
+
+**Why this design?**
+
+- Same queue = no value in downloading the same file twice to the same folder
+- Different queues = the user may want different proxy, speed limit, folder, or schedule
+- Notifications make it clear **what** was skipped and **why**, so nothing silently fails
 
 ### 🎯 Preview Sizes Before Downloading
 
@@ -183,6 +216,7 @@ FelfelDM includes a built-in log viewer for debugging without leaving the app.
 
 - 🌐 **Browser Extension** — Firefox & Chrome extension with smart connection handling
 - 🔌 **aria2 Integration** — High-performance multi-connection downloads
+- 🎯 **Owned aria2 Process** — FelfelDM starts its **own** `aria2c` in the foreground (no `--daemon`), so it knows the real PID. On quit — including crashes and `SIGKILL` — aria2 exits cleanly and saves its session. Other `aria2c` instances (e.g. one you started in a terminal) are **never** touched.
 - 🎨 **Modern UI** — Dark/Light theme with Papirus icons
 - ⚡ **Speed Limit** — Global, per-queue, and **per-download** speed limiting
   - **Global Speed Limit** — Limits the total speed of all downloads
@@ -298,6 +332,14 @@ FelfelDM --update
 # Or manually
 bash <(curl -s https://raw.githubusercontent.com/hoomaanf/FelfelDM/main/install.sh)
 ```
+
+> ⚠️ **Running as a background service?** Restart it after every update so it reloads the new code:
+>
+> ```bash
+> systemctl --user restart felfeldm.service
+> ```
+>
+> Without a restart, the running process keeps the old Python code in memory — which can cause the new `--add` endpoint to crash with `QApplication failed to initialize`.
 
 ---
 
@@ -460,7 +502,9 @@ FelfelDM supports smart retry with configurable behavior:
 - **Transient errors** (timeout, DNS, connection, TLS packet, 5xx, 429) → automatically retried with the configured delay
 - **Permanent errors** (404, 403, 401, certificate issues) → fail immediately, no retry
 - **Countdown display** — While waiting, the Status column shows `🔄 Retrying in 5s... (2/5)`
-- **Counter reset** — If a download stays healthy for the configured period, its failed-attempt counter resets to 0
+- **Counter reset on healthy** — If a download stays healthy for the configured period, its failed-attempt counter resets to 0
+- **Counter reset on pause** — Pausing a queue (manually or by schedule) resets all failed-attempt counters to 0. Starting the queue again gives every download a fresh budget. This prevents a queue paused overnight from staying blocked the next morning because of an outage that has long since been fixed.
+- **Counter reset on Start Queue** — Clicking Start on a queue that already has errored downloads resets their counters before retrying, so the automatic cap doesn't silently block the retry the user explicitly requested.
 
 **Configure these in:** Settings → General → Download
 
@@ -562,7 +606,9 @@ cd FelfelDM-extension
 - 🖱️ **Context Menu** — Right-click links, images, videos
 - 🔗 **Selected Links** — Download multiple links from selection
 - 🎯 **Download Interception** — Auto-catch browser downloads
+- 🎯 **YouTube Inline Button** — A small FelfelDM icon appears on YouTube and YouTube Music pages; click it to send the URL straight to the yt-dlp dialog
 - 🔔 **Notifications** — Status updates and confirmations
+- 🎨 **Cleaner Notifications** — Fewer icons in the extension popup, so status and action feedback is easier to read at a glance
 - 🔄 **Toggle Switch** — Enable/disable download catching
 - 📡 **Dual Port Support** — Works with both GUI and service modes
 - 🟢 **Visual Badges** — Status indicators on extension icon:
@@ -687,6 +733,34 @@ Queue Speed Limit
 Global Speed Limit        (lowest priority)
 ```
 
+### aria2 Process Lifecycle
+
+FelfelDM launches its own `aria2c` and keeps full control over its lifetime.
+
+**Why this exists:**
+
+- aria2 has no `--pid-file` option, and starting it with `--daemon` forks it away — the app has no way to learn the real PID
+- `pkill -f aria2c` (the old cleanup) also killed user's own aria2 instances
+- A daemonised aria2 outlived the app, leaving downloads running silently
+
+**What FelfelDM does instead (`core/aria2_process.py`):**
+
+- Starts `aria2c` in the **foreground** as a child of the app — its PID is known and written to `~/.config/felfelDM/aria2.pid`
+- Passes `--stop-with-process=<app_pid>` so aria2 **exits on its own** when the app dies for any reason (crash, `SIGKILL`, closed terminal)
+- On normal quit, sends `SIGTERM` first so aria2 saves its session, then `SIGKILL` if it doesn't exit within 3 seconds
+- **Only stops aria2 instances started with *our* config file** (`--conf-path=~/.config/felfelDM/aria2.conf`); any other `aria2c` on the machine is left alone
+- Verifies PID identity via `/proc/<pid>/cmdline` before killing, so a stale PID file cannot hit an unrelated process
+- Registers `atexit` cleanup so even an unhandled exception still stops aria2
+
+**What this fixes:**
+
+| Old behavior | New behavior |
+|--------------|--------------|
+| `pkill -f aria2c` killed every aria2 on the system | Only FelfelDM's aria2 is stopped |
+| `--daemon` forked aria2 away, no PID known | Foreground child, PID written to `aria2.pid` |
+| aria2 survived app crashes and kept downloading | `--stop-with-process` makes aria2 exit when the app does |
+| Session wasn't always saved | `SIGTERM` gives aria2 time to save the session |
+
 ---
 
 ## 📁 Project Structure
@@ -696,8 +770,11 @@ FelfelDM/
     ├── core/                          # Core modules
     │   ├── __init__.py
     │   ├── aria2_handler.py           # aria2 handler
+    │   ├── aria2_process.py           # Spawns aria2c as our own child (no --daemon),
+    │   │                              #   knows its PID, stops only aria2 instances we started
     │   ├── aria2_rpc.py               # aria2 JSON-RPC client
     │   ├── data_store.py              # Data persistence (UUID-based)
+    │   ├── error_classifier.py        # Classifies aria2 errors (transient vs permanent)
     │   ├── file_size_fetcher.py       # File size fetcher (HEAD → RANGE → STREAM → yt-dlp)
     │   ├── local_server.py            # Local HTTP server for extension
     │   ├── proxy_manager.py           # Proxy configuration
@@ -806,13 +883,45 @@ systemctl --user daemon-reload
 # Then reinstall from settings
 ```
 
-### Permission denied
+### Service crashes after update (`--add` fails with `QApplication failed`)
+
+After updating the app or extension, the background service may still be running the **old code in memory**. When a new `--add` request arrives, it tries to construct a `QApplication` inside the service cgroup — where `DISPLAY` and `WAYLAND_DISPLAY` don't exist — and Qt aborts with `QApplication failed to initialize`.
+
+**Fix:**
 
 ```bash
-chmod +x main.py
-chmod +x install.sh
-chmod +x uninstall.sh
+systemctl --user restart felfeldm.service
 ```
+
+**Always run this after `FelfelDM --update` or `yay -Suy felfeldm-git` if you use the service.** The `.py` files on disk get replaced, but the running Python process doesn't re-import them.
+
+### Permission denied: `/usr/share/felfeldm/main.py`
+
+If `FelfelDM` fails with `Permission denied` after an install or update:
+
+```bash
+sudo find /usr/share/felfeldm -type f -exec chmod 644 {} \;
+```
+
+`main.py` and any other Python file should be readable by your user (`644`). If `ls -la /usr/share/felfeldm/` shows `-rw-------` for `main.py`, `README.md`, or `requirements.txt`, that's the bug — likely caused by `install -m 600` or `umask 077` in `PKGBUILD` / `install.sh`.
+
+### aria2 keeps running after FelfelDM quits
+
+In older versions this was expected — aria2 was daemonised and the app had no way to stop it.
+
+In the current version, FelfelDM:
+
+- starts aria2 in the foreground as its own child
+- passes `--stop-with-process=<app_pid>` so aria2 exits when the app does
+- cleans up explicitly via `SIGTERM` (then `SIGKILL` after 3 s) on quit
+
+If aria2 still survives, check that the app isn't being killed with `SIGKILL` on the *parent shell* (which would bypass Python's cleanup). Even then, `--stop-with-process` should make aria2 exit within a second or two. You can confirm with:
+
+```bash
+pgrep -a aria2c
+```
+
+If the leftover `aria2c` was **not** started by FelfelDM (no `--conf-path=~/.config/felfelDM/aria2.conf`), it's not ours and FelfelDM will deliberately not touch it. Stop it yourself.
 
 ### YouTube download requires cookies
 
@@ -862,6 +971,7 @@ chmod +x uninstall.sh
 3. Transient errors (timeout, DNS, connection, TLS packet, 5xx) are retried with the configured delay
 4. The Status column shows the countdown: `🔄 Retrying in 5s... (2/5)`
 5. **Reset Retries After** controls when the failed-attempt counter resets to 0 (0 = never)
+6. Pausing the queue (or clicking Start again) also resets the counters — so a queue paused overnight won't stay blocked after you restart it
 
 ### Rules not being applied
 
@@ -898,6 +1008,15 @@ chmod +x uninstall.sh
 1. Some servers don't return size via HEAD or RANGE requests
 2. The file will still download, but size won't be shown before downloading
 3. Try a different server or download the file and check the size afterward
+
+### Duplicate URL not being added
+
+This is expected behavior for the same queue — FelfelDM will not add the same URL twice to the **same** queue. If you want a second copy:
+
+- Add it to a **different** queue (allowed, with a notification)
+- Or remove the existing one first, then add it again
+
+Cross-queue duplicates are intentionally allowed and reported in the notification, so the behavior is never silent.
 
 ### UI freezes when removing files
 

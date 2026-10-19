@@ -390,6 +390,14 @@ class MainWindow(QMainWindow):
                     dl["status"] = "paused"
                     info["status"] = "paused"
 
+                new_status = info.get("status", "")
+                if gid in self._all_downloads and new_status:
+                    self._all_downloads[gid]["status"] = new_status
+                    if new_status == "paused":
+                        self._all_downloads[gid]["downloadSpeed"] = 0
+
+            self._reset_queue_retry_state(q)
+            self.store.save()
             self._queue_list_dirty = True
             self._refresh_queue_list()
             self._refresh_table()
@@ -1053,6 +1061,53 @@ class MainWindow(QMainWindow):
         self._last_speed_limit_active_count = None
         self._apply_queue_speed_limit(q)
 
+    def _reset_queue_retry_state(self, q: Queue) -> None:
+        """Reset failed-attempt counters when a queue is paused.
+
+        Pausing is a natural "give up for now" point: the user (or the
+        schedule) stops the queue because the network is bad / it's
+        daytime / whatever. When it's started again — possibly hours
+        later, after fixing Wi-Fi, connecting a VPN, etc. — the
+        download should get a fresh retry budget. Otherwise a queue
+        paused overnight stays blocked by counters that ran up
+        against a momentary outage.
+
+        Also cancels any pending retry timer/countdown for the
+        queue's downloads, so a stale timer can't fire after pause.
+        """
+        reset_count = 0
+        for gid in q.downloads:
+            # Cancel any pending retry timer / countdown for this download
+            timer = self._retry_timers.pop(gid, None)
+            if timer is not None:
+                try:
+                    timer.stop()
+                except Exception:
+                    pass
+            self._retry_state.pop(gid, None)
+            self._retrying_gids.discard(gid)
+
+            data = self._all_downloads.get(gid)
+            if data is None:
+                continue
+
+            # Clear transient retry UI state ("Retrying in Ns...")
+            data.pop("status_detail", None)
+
+            if self._to_int(data.get("error_count", 0)) > 0:
+                data["error_count"] = 0
+                reset_count += 1
+
+            info = q.downloads_info.get(gid)
+            if info and self._to_int(info.get("error_count", 0)) > 0:
+                info["error_count"] = 0
+
+        if reset_count:
+            print(
+                f"♻️ [Pause] Reset error_count for {reset_count} "
+                f"download(s) in queue '{q.name}'"
+            )
+
     def _pause_current_queue(self):
         q = self._current_queue()
         if not q or q.name == "__direct__":
@@ -1070,6 +1125,7 @@ class MainWindow(QMainWindow):
 
         q.paused = True
         q.manually_paused = True
+        self._reset_queue_retry_state(q)
         self.store.save()
 
         # Ask aria2 directly which gids are currently active/waiting.
