@@ -733,6 +733,32 @@ Queue Speed Limit
 Global Speed Limit        (پایین‌ترین اولویت)
 ```
 
+### ترکیب MainWindow
+
+کلاس `MainWindow` از ۱۷ mixin ساخته شده که هر کدام یک مسئولیت را بر عهده دارند. هر متد در هر mixin روی نمونهٔ `MainWindow` ترکیب‌شده اجرا می‌شود، بنابراین mixinها می‌توانند آزادانه متدهای mixinهای دیگر را با `self` صدا بزنند. این کار کلاس ~۷۰۰۰ خطی را قابل پیمایش نگه می‌دارد بدون اینکه هیچ رفتاری تغییر کند:
+
+| Mixin | مسئولیت |
+|-------|---------|
+| `ui_builders` | ویجت‌ها، ترای، میان‌برها |
+| `details_panel` | پنل جزئیات |
+| `table_view` | جدول، فیلتر، منوی راست‌کلیک |
+| `status_display` | برچسب‌ها، دکمه‌ها، نشانگرهای سرعت |
+| `stats_sync` | polling aria2 به UI |
+| `aria2_control` | استارت/توقف aria2، دستورها، محدودیت سرعت، پراکسی |
+| `queues` | صف‌ها و زمان‌بندی |
+| `add_download` | drag & drop، دیالوگ افزودن |
+| `youtube` | دانلودهای یوتیوب |
+| `progress_dialogs` | دیالوگ پیشرفت هر دانلود |
+| `download_actions` | pause/resume/retry دستی |
+| `retry` | retry خودکار |
+| `removal` | حذف دانلود و فایل‌ها |
+| `file_actions` | باز کردن فایل و پوشه، کپی لینک |
+| `settings_dialogs` | تنظیمات، about، نمایشگر لاگ، export |
+| `shutdown` | «خاموش کن بعد از اتمام» |
+| `lifecycle` | restore، save، close، quit |
+
+سه slot نام‌محور (`_delayed_ui_update`، `_add_from_extension`، `_open_dialog_from_extension`) روی خود `MainWindow` می‌مانند چون `QMetaObject.invokeMethod` فقط slotهایی را resolve می‌کند که روی خود کلاس تعریف شده‌اند — نه آن‌هایی که از mixinها به ارث رسیده‌اند.
+
 ### چرخهٔ حیات فرایند aria2
 
 FelfelDM `aria2c` خودش را راه‌اندازی می‌کند و کنترل کامل روی عمر آن دارد.
@@ -792,7 +818,26 @@ FelfelDM/
     │   ├── export_dialog.py           # دیالوگ export
     │   ├── export_manager.py          # مدیر export
     │   ├── log_viewer.py              # دیالوگ نمایشگر لاگ زنده
-    │   ├── main_window.py             # پنجرهٔ اصلی برنامه
+    │   ├── main_window/               # پنجرهٔ اصلی (تقسیم‌شده بر اساس مسئولیت)
+    │   │   ├── __init__.py            # نقطهٔ ورود پکیج — re-export از MainWindow
+    │   │   ├── window.py              # کلاس MainWindow — سازنده، slotها، هماهنگی
+    │   │   ├── ui_builders.py         # ویجت‌ها، ترای، میان‌برها
+    │   │   ├── details_panel.py       # پنل جزئیات
+    │   │   ├── table_view.py          # جدول، فیلتر، منوی راست‌کلیک
+    │   │   ├── status_display.py      # برچسب‌ها، دکمه‌ها، نشانگرهای سرعت
+    │   │   ├── stats_sync.py          # polling aria2 به UI
+    │   │   ├── aria2_control.py       # استارت/توقف aria2، دستورها، محدودیت سرعت، پراکسی
+    │   │   ├── queues.py              # صف‌ها و زمان‌بندی
+    │   │   ├── add_download.py        # drag & drop، دیالوگ افزودن
+    │   │   ├── youtube.py             # دانلودهای یوتیوب
+    │   │   ├── progress_dialogs.py    # دیالوگ پیشرفت هر دانلود
+    │   │   ├── download_actions.py    # pause/resume/retry دستی
+    │   │   ├── retry.py               # retry خودکار
+    │   │   ├── removal.py             # حذف دانلود و فایل‌ها
+    │   │   ├── file_actions.py        # باز کردن فایل و پوشه، کپی لینک
+    │   │   ├── settings_dialogs.py    # تنظیمات، about، نمایشگر لاگ، export
+    │   │   ├── shutdown.py            # «خاموش کن بعد از اتمام»
+    │   │   └── lifecycle.py           # restore، save، close، quit
     │   ├── proxy_dialog.py            # دیالوگ تنظیمات پروکسی
     │   ├── rules_dialog.py            # دیالوگ مدیر قوانین
     │   ├── splash.py                  # صفحهٔ خوش‌آمدگویی

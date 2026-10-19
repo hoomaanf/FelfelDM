@@ -15,7 +15,7 @@ from PyQt6.QtWidgets import QApplication
 from PyQt6.QtGui import QIcon
 from PyQt6.QtCore import Qt, QTimer, QCoreApplication
 from PyQt6.QtNetwork import QLocalServer, QLocalSocket
-from ui.main_window import MainWindow
+from ui.main_window.window import MainWindow
 from utils.style import setup_style, CustomProxyStyle
 from utils.logger import setup_logging
 

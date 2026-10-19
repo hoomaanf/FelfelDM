@@ -733,6 +733,32 @@ Queue Speed Limit
 Global Speed Limit        (lowest priority)
 ```
 
+### MainWindow Composition
+
+The `MainWindow` class is assembled from 17 mixins, each handling a single area of responsibility. Every method in every mixin runs on the composed `MainWindow` instance, so mixins can freely call methods from other mixins via `self`. This keeps a ~7,000-line class navigable without changing any behavior:
+
+| Mixin | Responsibility |
+|-------|----------------|
+| `ui_builders` | Widgets, tray, shortcuts |
+| `details_panel` | Details panel |
+| `table_view` | Table, filter, context menu |
+| `status_display` | Labels, buttons, speed indicators |
+| `stats_sync` | aria2 polling → UI updates |
+| `aria2_control` | Start/stop aria2, commands, speed limits, proxy |
+| `queues` | Queues and scheduling |
+| `add_download` | Drag & drop, add-download dialog |
+| `youtube` | YouTube downloads |
+| `progress_dialogs` | Per-download progress dialogs |
+| `download_actions` | Manual pause/resume/retry |
+| `retry` | Automatic retry |
+| `removal` | Download and file removal |
+| `file_actions` | Open file/folder, copy link |
+| `settings_dialogs` | Settings, about, log viewer, export |
+| `shutdown` | "Shutdown after finish" |
+| `lifecycle` | Restore, save, close, quit |
+
+The three name-based slots (`_delayed_ui_update`, `_add_from_extension`, `_open_dialog_from_extension`) stay on `MainWindow` itself because `QMetaObject.invokeMethod` only resolves slots defined on the class — not inherited from mixins.
+
 ### aria2 Process Lifecycle
 
 FelfelDM launches its own `aria2c` and keeps full control over its lifetime.
@@ -792,7 +818,26 @@ FelfelDM/
     │   ├── export_dialog.py           # Export dialog
     │   ├── export_manager.py          # Export manager
     │   ├── log_viewer.py              # Live log viewer dialog
-    │   ├── main_window.py             # Main application window
+    │   ├── main_window/               # Main window (split by responsibility)
+    │   │   ├── __init__.py            # Package entry — re-exports MainWindow
+    │   │   ├── window.py              # MainWindow class — constructor, slots, orchestration
+    │   │   ├── ui_builders.py         # Widgets, tray, shortcuts
+    │   │   ├── details_panel.py       # Details panel
+    │   │   ├── table_view.py          # Table, filter, context menu
+    │   │   ├── status_display.py      # Labels, buttons, speed indicators
+    │   │   ├── stats_sync.py          # aria2 polling → UI updates
+    │   │   ├── aria2_control.py       # Start/stop aria2, commands, speed limits, proxy
+    │   │   ├── queues.py              # Queues and scheduling
+    │   │   ├── add_download.py        # Drag & drop, add-download dialog
+    │   │   ├── youtube.py             # YouTube downloads
+    │   │   ├── progress_dialogs.py    # Per-download progress dialogs
+    │   │   ├── download_actions.py    # Manual pause/resume/retry
+    │   │   ├── retry.py               # Automatic retry
+    │   │   ├── removal.py             # Download and file removal
+    │   │   ├── file_actions.py        # Open file/folder, copy link
+    │   │   ├── settings_dialogs.py    # Settings, about, log viewer, export
+    │   │   ├── shutdown.py            # "Shutdown after finish"
+    │   │   └── lifecycle.py           # Restore, save, close, quit
     │   ├── proxy_dialog.py            # Proxy settings dialog
     │   ├── rules_dialog.py            # Rules manager dialog
     │   ├── splash.py                  # Splash screen

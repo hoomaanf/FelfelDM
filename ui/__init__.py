@@ -1,6 +1,5 @@
 # ui/__init__.py
 
-from .main_window import MainWindow
 from .dialogs import (
     AddDownloadDialog,
     QueueSettingsDialog,
