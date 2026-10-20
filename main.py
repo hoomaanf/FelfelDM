@@ -191,6 +191,70 @@ def main():
         print("Daemon stopped.")
         return
 
+    if args.add or getattr(args, "youtube_url", None):
+        import json as _json
+        import urllib.request as _urllib_request
+
+        _forwarded = False
+
+        for _port in (8766, 8765):
+            try:
+                with _urllib_request.urlopen(
+                    f"http://127.0.0.1:{_port}/ping", timeout=1
+                ):
+                    pass
+            except Exception:
+                continue
+
+            print(f"📥 Forwarding to running FelfelDM on port {_port}...")
+
+            if args.add:
+                for _url in args.add:
+                    try:
+                        _req = _urllib_request.Request(
+                            f"http://127.0.0.1:{_port}/add",
+                            data=_json.dumps({"url": _url}).encode("utf-8"),
+                            headers={"Content-Type": "application/json"},
+                            method="POST",
+                        )
+                        with _urllib_request.urlopen(_req, timeout=5):
+                            print(f"  ✅ {_url}")
+                    except Exception as _e:
+                        print(f"  ⚠️ {_url}: {_e}")
+
+            if getattr(args, "youtube_url", None):
+                try:
+                    _req = _urllib_request.Request(
+                        f"http://127.0.0.1:{_port}/open",
+                        data=_json.dumps(
+                            {"url": args.youtube_url, "kind": "youtube"}
+                        ).encode("utf-8"),
+                        headers={"Content-Type": "application/json"},
+                        method="POST",
+                    )
+                    with _urllib_request.urlopen(_req, timeout=5):
+                        print(f"✅ YouTube dialog requested: {args.youtube_url}")
+                except Exception as _e:
+                    print(f"⚠️ {_e}")
+
+            _forwarded = True
+            break
+
+        if _forwarded:
+            return
+
+        # Nothing was listening. If we're headless, launching the GUI
+        # would just abort again — fail with a clear message instead.
+        if not (os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY")):
+            print(
+                "❌ FelfelDM is not running and no display is available.\n"
+                "   Start it with one of:\n"
+                "     FelfelDM                                 # GUI\n"
+                "     systemctl --user start felfeldm.service  # daemon",
+                file=sys.stderr,
+            )
+            sys.exit(1)
+
     # Normal GUI mode
     QApplication.setHighDpiScaleFactorRoundingPolicy(
         Qt.HighDpiScaleFactorRoundingPolicy.PassThrough
