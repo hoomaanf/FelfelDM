@@ -18,7 +18,7 @@ class RetryMixin:
         if not data:
             return
 
-        if data.get("download_type") == "youtube":
+        if data.get("download_type") == "video":
             return
 
         if download_id in self._retrying_gids:
@@ -251,7 +251,7 @@ class RetryMixin:
                 self._healthy_since.pop(download_id, None)
 
         for download_id, data in self._all_downloads.items():
-            if data.get("download_type") == "youtube":
+            if data.get("download_type") == "video":
                 continue
 
             if self._to_int(data.get("error_count", 0)) <= 0:

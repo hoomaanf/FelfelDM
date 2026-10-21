@@ -151,9 +151,9 @@ class TableViewMixin:
         data = self._all_downloads.get(gid, {})
         download_type = data.get("download_type", "normal")
 
-        # YouTube downloads always open the progress dialog
-        if download_type == "youtube":
-            self._open_youtube_progress_dialog(gid)
+        # Video downloads always open the progress dialog
+        if download_type == "video":
+            self._open_video_progress_dialog(gid)
             return
 
         status = data.get("status", "")
@@ -276,8 +276,8 @@ class TableViewMixin:
                 get_icon("media-playback-pause"),
                 "Pause",
                 lambda: (
-                    self._pause_youtube_download(gid)
-                    if download_type == "youtube"
+                    self._pause_video_download(gid)
+                    if download_type == "video"
                     else self._pause_selected()
                 ),
             )
@@ -286,8 +286,8 @@ class TableViewMixin:
                 get_icon("media-playback-start"),
                 "Resume",
                 lambda: (
-                    self._resume_youtube_download(gid)
-                    if download_type == "youtube"
+                    self._resume_video_download(gid)
+                    if download_type == "video"
                     else self._resume_selected()
                 ),
             )

@@ -21,7 +21,7 @@ class DownloadActionsMixin:
         gids = [self.model.get_gid(r.row()) for r in rows]
         gids = [g for g in gids if g]
 
-        youtube_gids = []
+        video_gids = []
         normal_gids = []
 
         for gid in gids:
@@ -33,13 +33,13 @@ class DownloadActionsMixin:
             if status not in ("active", "downloading"):
                 continue
 
-            if dtype == "youtube":
-                youtube_gids.append(gid)
+            if dtype == "video":
+                video_gids.append(gid)
             else:
                 normal_gids.append(gid)
 
-        for gid in youtube_gids:
-            self._pause_youtube_download(gid)
+        for gid in video_gids:
+            self._pause_video_download(gid)
 
         if normal_gids:
             self._worker_pause_multi(normal_gids)
@@ -66,9 +66,9 @@ class DownloadActionsMixin:
             dtype = self._all_downloads[gid].get("download_type", "normal")
             status = self._all_downloads[gid].get("status", "")
 
-            if dtype == "youtube":
+            if dtype == "video":
                 if status == "paused":
-                    self._resume_youtube_download(gid)
+                    self._resume_video_download(gid)
                 continue
 
             if status == "error":

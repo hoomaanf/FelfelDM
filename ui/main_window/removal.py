@@ -114,7 +114,7 @@ class RemovalMixin:
         self._close_progress_dialogs_for(gids_to_remove)
         # This action is explicitly "remove AND delete files", so the
         # yt-dlp worker is asked to clean up whatever it produced.
-        self._cancel_youtube_workers_for(gids_to_remove, delete_files=True)
+        self._cancel_video_workers_for(gids_to_remove, delete_files=True)
 
         for gid in gids_to_remove:
             for q in self.store.queues:
@@ -204,13 +204,13 @@ class RemovalMixin:
         # Close any progress dialogs for these downloads first.
         self._close_progress_dialogs_for(gids_to_remove)
 
-        # YouTube downloads are handled by a yt-dlp subprocess, not aria2.
+        # Video downloads are handled by a yt-dlp subprocess, not aria2.
         # Removing them from the list without cancelling the worker left the
         # process running (it is started in its own session) while the store
         # record was gone, so it kept writing files and -- because the
-        # youtube store was never flushed -- the entry reappeared on restart.
+        # video store was never flushed -- the entry reappeared on restart.
         raw_gids = [self._get_aria2_gid(g) or g for g in gids_to_remove]
-        self._cancel_youtube_workers_for(gids_to_remove, delete_files=delete_files)
+        self._cancel_video_workers_for(gids_to_remove, delete_files=delete_files)
 
         # Now remove from UI + aria2
         for gid in gids_to_remove:

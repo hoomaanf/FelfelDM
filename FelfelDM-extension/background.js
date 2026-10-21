@@ -356,7 +356,7 @@ async function send(urls) {
   }
 }
 
-// ── Send a single URL to /open (YouTube or aria2 dialog) ──
+// ── Send a single URL to /open (video dialog or aria2 dialog) ──
 async function sendOpenDialog(url, kind) {
   if (!url) return false;
   const { connected, server } = await checkConnection(true);
@@ -376,7 +376,7 @@ async function sendOpenDialog(url, kind) {
     clearTimeout(timeoutId);
     if (r.ok) {
       notify(
-        `Opening ${kind === "youtube" ? "YouTube" : "download"} dialog`,
+        `Opening ${kind === "video" ? "video" : "download"} dialog`,
       );
       return true;
     }

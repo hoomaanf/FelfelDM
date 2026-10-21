@@ -1,4 +1,4 @@
-# ui/youtube_progress.py
+# ui/video_progress.py
 
 import os
 from PyQt6.QtWidgets import (
@@ -18,7 +18,7 @@ from PyQt6.QtWidgets import (
 )
 from PyQt6.QtCore import QPoint, Qt, QUrl, QTimer, pyqtSignal, QRect
 from PyQt6.QtGui import QDesktopServices, QColor, QFont, QPainter, QBrush, QPixmap, QPen
-from core.youtube_worker import YouTubeWorker
+from core.video_worker import VideoWorker
 from utils.helpers import format_size, get_icon
 import tempfile
 
@@ -126,7 +126,7 @@ class StripedProgressBar(QProgressBar):
         painter.end()
 
 
-class YouTubeProgressDialog(QDialog):
+class VideoProgressDialog(QDialog):
     pause_requested = pyqtSignal(str)
     resume_requested = pyqtSignal(str)
     cancel_requested = pyqtSignal(str)
@@ -145,19 +145,19 @@ class YouTubeProgressDialog(QDialog):
         super().__init__(parent)
 
         title = (
-            video_info.get("title", "YouTube Download")
+            video_info.get("title", "Video Download")
             if video_info
-            else "YouTube Download"
+            else "Video Download"
         )
 
-        if (not title or title == "YouTube Download") and download_id and parent:
+        if (not title or title == "Video Download") and download_id and parent:
             if (
                 hasattr(parent, "_all_downloads")
                 and download_id in parent._all_downloads
             ):
                 title = parent._all_downloads[download_id].get("name", title)
 
-        self.setWindowTitle(title if title else "YouTube Download")
+        self.setWindowTitle(title if title else "Video Download")
         self.setMinimumWidth(560)
         self.setSizeGripEnabled(True)
 
@@ -243,9 +243,9 @@ class YouTubeProgressDialog(QDialog):
         details_layout.setSpacing(10)
 
         # Title (video name)
-        video_title = "Downloading from YouTube"
+        video_title = "Downloading video"
         if self.video_info:
-            video_title = self.video_info.get("title", "Downloading from YouTube")
+            video_title = self.video_info.get("title", "Downloading video")
 
         self.title_label = QLabel(video_title)
         self.title_label.setWordWrap(True)
@@ -647,7 +647,7 @@ class YouTubeProgressDialog(QDialog):
         lines = []
         lines.append("Download")
         lines.append(f"  Download ID      {self.download_id or '—'}")
-        lines.append(f"  Type             youtube")
+        lines.append(f"  Type             video")
         lines.append(f"  Status           {self._status_text or '—'}")
         lines.append(f"  Format           {self.format_type}")
 
@@ -774,7 +774,7 @@ class YouTubeProgressDialog(QDialog):
         return True
 
     def _create_worker(self):
-        self._worker = YouTubeWorker(
+        self._worker = VideoWorker(
             url=self.url,
             output_path=self.output_path,
             format_type=self.format_type,
@@ -1058,7 +1058,7 @@ class YouTubeProgressDialog(QDialog):
         if getattr(self, "_cookie_hint_shown", False):
             return
 
-        from core.youtube_worker import cookie_hint
+        from core.video_worker import cookie_hint
 
         hint = cookie_hint(message, self.cookie_file)
         if not hint:

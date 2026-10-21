@@ -390,7 +390,9 @@ class Handler(BaseHTTPRequestHandler):
             return
 
         kind = data.get("kind", "")
-        if kind not in ("youtube", "download", ""):
+        if kind == "youtube":  # kind sent by older extension versions
+            kind = "video"
+        if kind not in ("video", "download", ""):
             kind = ""
 
         print(f"📥 Received /open: url={url[:80]!r}, kind={kind!r}")
@@ -409,16 +411,16 @@ class Handler(BaseHTTPRequestHandler):
             self._send_json(200, {"status": "success"})
         elif thread is not None:
             # Daemon mode: no GUI to open a dialog in.
-            if kind == "youtube":
-                print(f"🚀 Daemon mode: launching YouTube dialog for {url!r}")
-                self._launch_youtube_dialog(url)
+            if kind == "video":
+                print(f"🚀 Daemon mode: launching Video dialog for {url!r}")
+                self._launch_video_dialog(url)
             else:
                 print(f"🚀 Daemon mode: queuing {url!r} via --add")
                 self._launch_with_urls([url])
             self._send_json(200, {"status": "queued"})
             
-    def _launch_youtube_dialog(self, url):
-        """Launch FelfelDM with --youtube-url so the YouTube dialog opens."""
+    def _launch_video_dialog(self, url):
+        """Launch FelfelDM with --video-url so the video dialog opens."""
         try:
             exe_path = "/usr/local/bin/FelfelDM"
             if not os.path.exists(exe_path):
@@ -426,16 +428,16 @@ class Handler(BaseHTTPRequestHandler):
             if not os.path.exists(exe_path):
                 exe_path = "FelfelDM"
 
-            cmd = [exe_path, "--youtube-url", url]
+            cmd = [exe_path, "--video-url", url]
             subprocess.Popen(
                 cmd,
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
                 start_new_session=True,
             )
-            print(f"✅ Launched YouTube dialog: {' '.join(cmd)}")
+            print(f"✅ Launched Video dialog: {' '.join(cmd)}")
         except Exception as e:
-            print(f"❌ Failed to launch YouTube dialog: {e}")
+            print(f"❌ Failed to launch Video dialog: {e}")
     
     def _launch_with_urls(self, urls):
         """Launch FelfelDM with URLs in daemon mode"""

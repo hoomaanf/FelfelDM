@@ -1,4 +1,5 @@
 import os
+import re
 import subprocess
 import time
 import socket
@@ -263,7 +264,7 @@ class StripedProgressBar(QProgressBar):
 
 
 # ═══════════════════════════════════════════════════════════════════
-# Add / Quick / Single / YouTube dialogs
+# Add / Quick / Single / Video dialogs
 # ═══════════════════════════════════════════════════════════════════
 
 
@@ -1379,13 +1380,25 @@ class AddDownloadDialog(QDialog):
         event.accept()
 
 
-class YouTubeDownloadDialog(QDialog):
-    youtube_download_requested = pyqtSignal(dict)
+class VideoDownloadDialog(QDialog):
+    video_download_requested = pyqtSignal(dict)
+    # One dict per selected playlist entry (same shape as the single signal).
+    video_playlist_requested = pyqtSignal(list)
+
+    # Playlists share one quality choice (format ids differ per video).
+    PLAYLIST_PRESETS = [
+        ("Best quality", "best", "bv+ba/b", "video"),
+        ("Up to 1080p", "1080", "bv[height<=1080]+ba/b[height<=1080]/b", "video"),
+        ("Up to 720p", "720", "bv[height<=720]+ba/b[height<=720]/b", "video"),
+        ("Up to 480p", "480", "bv[height<=480]+ba/b[height<=480]/b", "video"),
+        ("Up to 360p", "360", "bv[height<=360]+ba/b[height<=360]/b", "video"),
+        ("Audio only", "bestaudio", "ba/b", "audio"),
+    ]
 
     def __init__(self, parent=None, queues=None, default_queue=0):
         super().__init__(None)
         self._main_window = parent
-        self.setWindowTitle("YouTube Download")
+        self.setWindowTitle("Video Download")
         self.setMinimumWidth(600)
         self.setMinimumHeight(340)
         self.setSizeGripEnabled(True)
@@ -1395,6 +1408,7 @@ class YouTubeDownloadDialog(QDialog):
         self.video_info = None
         self._custom_proxy = None
         self._format_map = {}
+        self._playlist_entries = []
         self.worker = None
         self._path_user_edited = False
 
@@ -1414,7 +1428,7 @@ class YouTubeDownloadDialog(QDialog):
         url_row = QHBoxLayout()
         url_row.setSpacing(6)
         self.url_edit = QLineEdit()
-        self.url_edit.setPlaceholderText("https://www.youtube.com/watch?v=...")
+        self.url_edit.setPlaceholderText("Video or playlist URL (Video, Vimeo, X, ...)")
         url_row.addWidget(self.url_edit)
 
         self.fetch_btn = QPushButton(get_icon("view-refresh"), " Get Info")
@@ -1427,11 +1441,34 @@ class YouTubeDownloadDialog(QDialog):
         self.info_layout = QFormLayout(info_group)
         self.info_layout.setSpacing(6)
 
-        self.info_placeholder = QLabel("Enter a YouTube URL and click 'Get Info'")
+        self.info_placeholder = QLabel("Enter a video or playlist URL and click 'Get Info'")
         self.info_placeholder.setStyleSheet("color: #95a5a6; font-size: 11px;")
         self.info_layout.addRow(self.info_placeholder)
 
         video_layout.addWidget(info_group)
+
+        # Playlist videos (hidden until a playlist link is fetched).
+        self.playlist_box = QGroupBox("Playlist")
+        pl_layout = QVBoxLayout(self.playlist_box)
+        pl_layout.setSpacing(6)
+        pl_top = QHBoxLayout()
+        self.pl_all_btn = QPushButton("Select all")
+        self.pl_none_btn = QPushButton("Select none")
+        self.pl_all_btn.clicked.connect(lambda: self._set_all_checked(True))
+        self.pl_none_btn.clicked.connect(lambda: self._set_all_checked(False))
+        self.pl_count_label = QLabel("")
+        self.pl_count_label.setStyleSheet("color: #95a5a6; font-size: 11px;")
+        pl_top.addWidget(self.pl_all_btn)
+        pl_top.addWidget(self.pl_none_btn)
+        pl_top.addStretch(1)
+        pl_top.addWidget(self.pl_count_label)
+        pl_layout.addLayout(pl_top)
+        self.pl_list = QListWidget()
+        self.pl_list.setMinimumHeight(170)
+        self.pl_list.itemChanged.connect(self._update_playlist_selection)
+        pl_layout.addWidget(self.pl_list)
+        self.playlist_box.setVisible(False)
+        video_layout.addWidget(self.playlist_box, 1)
 
         self.format_combo = QComboBox()
         self.format_combo.setEnabled(False)
@@ -1485,8 +1522,8 @@ class YouTubeDownloadDialog(QDialog):
         opts_form.addRow("Cookies file:", cookie_row)
 
         cookie_note = QLabel(
-            "Needed when YouTube asks you to sign in (bot check, age-restricted "
-            "or private videos)."
+            "Needed when the site asks you to sign in (bot check, age-restricted, "
+            "private or members-only videos)."
         )
         cookie_note.setWordWrap(True)
         cookie_note.setStyleSheet("color: #95a5a6; font-size: 11px;")
@@ -1608,7 +1645,7 @@ class YouTubeDownloadDialog(QDialog):
         from ui.download_proxy_dialog import SimpleProxyDialog
 
         url = self.url_edit.text().strip()
-        display_name = os.path.basename(url) if url else "YouTube Download"
+        display_name = os.path.basename(url) if url else "Video Download"
         dlg = SimpleProxyDialog(display_name, self._custom_proxy, self)
         if dlg.exec():
             new_config = dlg.get_proxy_config()
@@ -1647,11 +1684,13 @@ class YouTubeDownloadDialog(QDialog):
     def _fetch_info(self):
         url = self.url_edit.text().strip()
         if not url:
-            QMessageBox.warning(self, "Error", "Please enter a YouTube URL")
+            QMessageBox.warning(self, "Error", "Please enter a video URL")
             return
 
         self.fetch_btn.setEnabled(False)
         self.fetch_btn.setText("Fetching...")
+        self.download_btn.setEnabled(False)
+        self._set_playlist_mode(False)
 
         self.clear_info_layout()
         self.info_placeholder = QLabel("Getting video info...")
@@ -1659,12 +1698,21 @@ class YouTubeDownloadDialog(QDialog):
         self.info_layout.addRow(self.info_placeholder)
 
         try:
-            from core.youtube_worker import YouTubeWorker
+            from core.video_worker import VideoWorker
 
             cookie_file = self.cookie_edit.text().strip() or None
             proxy_url = self._get_proxy_url()
 
-            self.worker = YouTubeWorker(url, "", "mp4", cookie_file, proxy_url)
+            try:
+                verify_ssl = not self._main_window.store.settings.get(
+                    "disable_ssl_verify", False
+                )
+            except Exception:
+                verify_ssl = True
+
+            self.worker = VideoWorker(
+                url, "", "mp4", cookie_file, proxy_url, verify_ssl=verify_ssl
+            )
             self.worker.is_fetching_info = True
             self.worker.info_fetched.connect(self._on_info_fetched)
             self.worker.finished.connect(self._on_info_fetch_finished)
@@ -1678,25 +1726,123 @@ class YouTubeDownloadDialog(QDialog):
             self.fetch_btn.setEnabled(True)
             self.fetch_btn.setText("Get Info")
 
+    @staticmethod
+    def _fmt_duration(seconds):
+        try:
+            seconds = int(seconds or 0)
+        except (TypeError, ValueError):
+            return "Unknown"
+        if seconds <= 0:
+            return "Unknown"
+        h, rem = divmod(seconds, 3600)
+        m, sec = divmod(rem, 60)
+        return f"{h}:{m:02d}:{sec:02d}" if h else f"{m}:{sec:02d}"
+
+    def _set_playlist_mode(self, on):
+        self.playlist_box.setVisible(on)
+        if not on:
+            self._playlist_entries = []
+            self.pl_list.clear()
+            self.download_btn.setText("Add to Queue")
+
+    def _set_all_checked(self, checked):
+        state = Qt.CheckState.Checked if checked else Qt.CheckState.Unchecked
+        self.pl_list.blockSignals(True)
+        for i in range(self.pl_list.count()):
+            self.pl_list.item(i).setCheckState(state)
+        self.pl_list.blockSignals(False)
+        self._update_playlist_selection()
+
+    def _selected_playlist_entries(self):
+        out = []
+        for i in range(self.pl_list.count()):
+            item = self.pl_list.item(i)
+            if item.checkState() == Qt.CheckState.Checked:
+                out.append(item.data(Qt.ItemDataRole.UserRole))
+        return out
+
+    def _update_playlist_selection(self, *_):
+        n = len(self._selected_playlist_entries())
+        total = self.pl_list.count()
+        self.pl_count_label.setText(f"{n} of {total} selected")
+        self.download_btn.setEnabled(n > 0)
+        self.download_btn.setText(
+            f"Add {n} video{'s' if n != 1 else ''} to Queue" if n else "Add to Queue"
+        )
+
+    def _show_playlist(self, info, entries):
+        self._playlist_entries = entries
+
+        title = info.get("title") or "Playlist"
+        title_label = QLabel(title)
+        title_label.setWordWrap(True)
+        title_label.setStyleSheet("font-weight: 600;")
+        self.info_layout.addRow("Playlist:", title_label)
+        owner = info.get("uploader") or info.get("channel")
+        if owner:
+            self.info_layout.addRow("Channel:", QLabel(str(owner)))
+        self.info_layout.addRow("Videos:", QLabel(str(len(entries))))
+        site = info.get("extractor_key") or info.get("extractor")
+        if site:
+            self.info_layout.addRow("Site:", QLabel(str(site)))
+
+        self.pl_list.blockSignals(True)
+        self.pl_list.clear()
+        width = len(str(len(entries)))
+        for e in entries:
+            dur = self._fmt_duration(e.get("duration"))
+            text = f"{e['index']:>{width}}.  {e['title']}"
+            if dur != "Unknown":
+                text += f"   [{dur}]"
+            item = QListWidgetItem(text)
+            item.setFlags(
+                Qt.ItemFlag.ItemIsUserCheckable | Qt.ItemFlag.ItemIsEnabled
+            )
+            item.setCheckState(Qt.CheckState.Checked)
+            item.setData(Qt.ItemDataRole.UserRole, e)
+            self.pl_list.addItem(item)
+        self.pl_list.blockSignals(False)
+
+        self.format_combo.clear()
+        self._format_map = {}
+        for label, key, _spec, _kind in self.PLAYLIST_PRESETS:
+            self.format_combo.addItem(label, key)
+        self.format_combo.setCurrentIndex(0)
+
+        self.playlist_box.setVisible(True)
+        self.format_combo.setEnabled(True)
+        self._update_playlist_selection()
+        self.fetch_btn.setEnabled(True)
+        self.fetch_btn.setText("Get Info")
+        QTimer.singleShot(100, self.adjustSize)
+
     def _on_info_fetched(self, info):
+        from core.video_worker import is_playlist_info, playlist_entries
+
         self.video_info = info
         self.clear_info_layout()
 
-        title = info.get("title", "Unknown")
+        if is_playlist_info(info):
+            self._show_playlist(info, playlist_entries(info))
+            return
+        self._set_playlist_mode(False)
+
+        title = info.get("title") or "Unknown"
         title_label = QLabel(title)
         title_label.setWordWrap(True)
         title_label.setStyleSheet("font-weight: 600;")
         self.info_layout.addRow("Title:", title_label)
 
-        uploader = info.get("uploader", "Unknown")
-        self.info_layout.addRow("Channel:", QLabel(uploader))
+        uploader = info.get("uploader") or info.get("channel") or "Unknown"
+        self.info_layout.addRow("Channel:", QLabel(str(uploader)))
 
-        duration = info.get("duration", 0)
-        minutes = duration // 60
-        seconds = duration % 60
-        self.info_layout.addRow("Duration:", QLabel(f"{minutes}:{seconds:02d}"))
+        self.info_layout.addRow("Duration:", QLabel(self._fmt_duration(info.get("duration"))))
 
-        formats = info.get("formats", [])
+        site = info.get("extractor_key") or info.get("extractor")
+        if site:
+            self.info_layout.addRow("Site:", QLabel(str(site)))
+
+        formats = info.get("formats") or []
         self.format_combo.clear()
         self._format_map = {}
 
@@ -1705,15 +1851,20 @@ class YouTubeDownloadDialog(QDialog):
 
         for f in formats:
             format_id = f.get("format_id")
-            resolution = f.get("resolution")
-            ext = f.get("ext")
-            filesize = f.get("filesize")
+            if not format_id:
+                continue
+            ext = (f.get("ext") or "?").upper()
+            filesize = f.get("filesize") or f.get("filesize_approx")
             vcodec = f.get("vcodec")
             acodec = f.get("acodec")
+            height = f.get("height")
+            resolution = f.get("resolution")
 
             if vcodec and vcodec != "none":
-                label = f"Video ({ext.upper()})"
-                if resolution and resolution != "audio only":
+                label = f"Video ({ext})"
+                if height:
+                    label += f" - {height}p"
+                elif resolution and resolution != "audio only":
                     label += f" - {resolution}"
                 if filesize:
                     label += f" ({format_size(filesize)})"
@@ -1721,21 +1872,23 @@ class YouTubeDownloadDialog(QDialog):
 
             elif acodec and acodec != "none" and (not vcodec or vcodec == "none"):
                 bitrate = f.get("abr")
-                label = f"Audio ({ext.upper()})"
+                label = f"Audio ({ext})"
                 if bitrate:
-                    label += f" - {bitrate}kbps"
+                    label += f" - {int(bitrate)}kbps"
                 if filesize:
                     label += f" ({format_size(filesize)})"
                 audio_formats.append((format_id, label, f))
 
-        def sort_key(item):
-            resolution = item[2].get("resolution", "")
-            if "p" in resolution:
-                return int(resolution.replace("p", ""))
-            return 0
+        # Other sites often report "1920x1080" instead of "1080p": sort by
+        # the numeric height/bitrate, never by parsing the resolution text.
+        video_formats.sort(
+            key=lambda item: (item[2].get("height") or 0, item[2].get("tbr") or 0),
+            reverse=True,
+        )
 
-        video_formats.sort(key=sort_key, reverse=True)
-
+        # "Best Quality" is always offered: some sites give no per-format
+        # list at all, and yt-dlp still picks the best stream for them.
+        self.format_combo.addItem("Best Quality", "best")
         for format_id, label, f in video_formats:
             self.format_combo.addItem(label, format_id)
             self._format_map[format_id] = f
@@ -1746,18 +1899,17 @@ class YouTubeDownloadDialog(QDialog):
                 self.format_combo.addItem(label, format_id)
                 self._format_map[format_id] = f
 
-        if video_formats:
-            self.format_combo.insertItem(0, "Best Quality", "best")
-
         self.format_combo.setCurrentIndex(0)
 
-        if video_formats:
-            quality_labels = [
-                f[2].get("resolution", "Unknown") for f in video_formats[:5]
-            ]
-            self.info_layout.addRow("Qualities:", QLabel(", ".join(quality_labels)))
+        heights = []
+        for _fid, _label, f in video_formats:
+            h = f.get("height")
+            if h and f"{h}p" not in heights:
+                heights.append(f"{h}p")
+        if heights:
+            self.info_layout.addRow("Qualities:", QLabel(", ".join(heights[:5])))
 
-        filesize = info.get("filesize")
+        filesize = info.get("filesize") or info.get("filesize_approx")
         if filesize:
             self.info_layout.addRow("Size:", QLabel(format_size(filesize)))
 
@@ -1771,9 +1923,10 @@ class YouTubeDownloadDialog(QDialog):
     def _on_info_fetch_finished(self, success, message):
         if not success:
             self.clear_info_layout()
+            self._set_playlist_mode(False)
             self.download_btn.setEnabled(False)
 
-            from core.youtube_worker import cookie_hint
+            from core.video_worker import cookie_hint
 
             hint = cookie_hint(message, self.cookie_edit.text().strip() or None)
             if hint:
@@ -1820,17 +1973,69 @@ class YouTubeDownloadDialog(QDialog):
             self.tabs.setCurrentIndex(0)
             self._fetch_info()
 
+    @staticmethod
+    def _safe_folder_name(name):
+        name = re.sub(r'[<>:"/\\|?*\x00-\x1f]', "_", name or "").strip(" .")
+        return name[:80].strip(" .") or "Playlist"
+
+    def _on_add_playlist_to_queue(self):
+        entries = self._selected_playlist_entries()
+        if not entries:
+            QMessageBox.warning(self, "Error", "Select at least one video")
+            return
+
+        data = self.get_data()
+        folder = self._safe_folder_name((self.video_info or {}).get("title"))
+        save_path = os.path.join(data["path"], folder)
+        try:
+            os.makedirs(save_path, exist_ok=True)
+        except OSError as e:
+            QMessageBox.warning(self, "Error", f"Cannot create folder:\n{e}")
+            return
+
+        items = []
+        for e in entries:
+            items.append(
+                {
+                    "url": e["url"],
+                    "save_path": save_path,
+                    "queue_id": data["queue_name"],
+                    "download_type": "video",
+                    "yt_options": {
+                        "quality": data.get("quality", "best"),
+                        "format": data.get("format", "video"),
+                        "cookies_path": data.get("cookie_file"),
+                        "title": e["title"],
+                        "format_id": data.get("format_id"),
+                        "format_spec": data.get("format_spec", "bv+ba/b"),
+                        "format_info": {},
+                    },
+                    "proxy": data.get("proxy_url"),
+                    "video_info": {
+                        "title": e["title"],
+                        "uploader": e.get("uploader") or "",
+                        "duration": e.get("duration") or 0,
+                        "webpage_url": e["url"],
+                    },
+                }
+            )
+        self.video_playlist_requested.emit(items)
+        self.accept()
+
     def _on_add_to_queue(self):
+        if self._playlist_entries:
+            self._on_add_playlist_to_queue()
+            return
         data = self.get_data()
         if not data["url"]:
-            QMessageBox.warning(self, "Error", "Please enter a valid YouTube URL")
+            QMessageBox.warning(self, "Error", "Please enter a valid video URL")
             return
 
         download_data = {
             "url": data["url"],
             "save_path": data["path"],
             "queue_id": data["queue_name"],
-            "download_type": "youtube",
+            "download_type": "video",
             "yt_options": {
                 "quality": data.get("quality", "best"),
                 "format": data.get("format", "video"),
@@ -1844,7 +2049,7 @@ class YouTubeDownloadDialog(QDialog):
             "video_info": data.get("video_info"),
         }
 
-        self.youtube_download_requested.emit(download_data)
+        self.video_download_requested.emit(download_data)
         self.accept()
 
     def get_data(self):
@@ -1852,6 +2057,25 @@ class YouTubeDownloadDialog(QDialog):
         selected_format_id = self.format_combo.currentData()
         format_type = "video"
         quality = "best"
+
+        if self._playlist_entries:
+            for _label, key, spec, kind in self.PLAYLIST_PRESETS:
+                if key == selected_format_id:
+                    return {
+                        "url": self.url_edit.text().strip(),
+                        "path": self.path_edit.text().strip(),
+                        "format": kind,
+                        "quality": key,
+                        "format_id": key,
+                        "format_spec": spec,
+                        "format_info": {},
+                        "cookie_file": self.cookie_edit.text().strip() or None,
+                        "video_info": self.video_info,
+                        "proxy_mode": proxy_mode,
+                        "custom_proxy": self._custom_proxy if proxy_mode == 1 else None,
+                        "proxy_url": self._get_proxy_url(),
+                        "queue_name": self.queue_combo.currentData(),
+                    }
 
         if selected_format_id == "best":
             quality = "best"
@@ -1877,6 +2101,13 @@ class YouTubeDownloadDialog(QDialog):
             format_spec = "ba/b"
         else:
             format_spec = selected_format_id
+            fi = self._format_map.get(selected_format_id, {})
+            if fi.get("vcodec") not in (None, "none") and fi.get("acodec") in (
+                None,
+                "none",
+            ):
+                # Video-only stream: add the best audio, or the file is silent.
+                format_spec = f"{selected_format_id}+ba/{selected_format_id}"
 
         return {
             "url": self.url_edit.text().strip(),

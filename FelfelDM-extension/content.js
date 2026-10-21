@@ -2,7 +2,7 @@
 // sits on videos and next to audio players.
 //
 // Which link gets sent on click:
-//   1. YouTube page      -> canonical video URL, kind "youtube" (yt-dlp dialog)
+//   1. YouTube page      -> canonical video URL, kind "video" (yt-dlp dialog)
 //   2. Element has a real http(s) src (progressive mp4/mp3/...) -> that URL
 //      to the normal aria2 dialog
 //   3. Element uses blob:/MSE/HLS -> best direct file the background script
@@ -84,6 +84,32 @@
     return { isYoutube: true, url };
   }
 
+  // Sites (besides YouTube) where one page = one video, matched by host and
+  // path so feeds and home pages never send the wrong URL. Returns the
+  // canonical page URL (no query/hash) or null.
+  const SITE_VIDEO_PATTERNS = [
+    [/(^|\.)vimeo\.com$/, /^\/(\d+|channels\/[^/]+\/\d+|groups\/[^/]+\/videos\/\d+)/],
+    [/(^|\.)dailymotion\.com$/, /^\/video\//],
+    [/(^|\.)twitch\.tv$/, /^\/(videos\/\d+|[^/]+\/clip\/)/],
+    [/(^|\.)tiktok\.com$/, /^\/@[^/]+\/video\/\d+/],
+    [/(^|\.)(twitter|x)\.com$/, /^\/[^/]+\/status\/\d+/],
+    [/(^|\.)instagram\.com$/, /^\/(p|reel|reels|tv)\/[^/]+/],
+    [/(^|\.)rumble\.com$/, /^\/v[^/]+/],
+    [/(^|\.)streamable\.com$/, /^\/[a-z0-9]+$/i],
+    [/(^|\.)bilibili\.com$/, /^\/video\//],
+    [/(^|\.)reddit\.com$/, /^\/r\/[^/]+\/comments\//],
+  ];
+
+  function siteVideoUrl() {
+    const host = location.hostname.toLowerCase();
+    for (const [hostRe, pathRe] of SITE_VIDEO_PATTERNS) {
+      if (hostRe.test(host) && pathRe.test(location.pathname)) {
+        return location.origin + location.pathname;
+      }
+    }
+    return null;
+  }
+
   // The element's own downloadable URL, or null for blob:/MSE players.
   function ownUrl(media) {
     const cands = [media.currentSrc, media.src];
@@ -111,9 +137,17 @@
         sendToBackground({
           action: "open_dialog",
           url: yt.url,
-          kind: "youtube",
+          kind: "video",
         });
       }
+      return;
+    }
+
+    // Other yt-dlp sites whose page URL *is* the video: let yt-dlp handle it
+    // instead of grabbing a raw (often split or protected) stream.
+    const site = siteVideoUrl();
+    if (site) {
+      sendToBackground({ action: "open_dialog", url: site, kind: "video" });
       return;
     }
 

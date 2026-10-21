@@ -32,7 +32,7 @@ CATEGORY_ICON_NAMES = {
     "📝 Subtitle": "text-x-generic-template",
     "📋 Playlist": "audio-x-playlist",
     "📁 Other": "folder",
-    "🎬 YouTube": "applications-multimedia",
+    "🎬 Video": "applications-multimedia",
 }
 
 CATEGORY_DISPLAY = {
@@ -51,7 +51,7 @@ CATEGORY_DISPLAY = {
     "📝 Subtitle": "Subtitle",
     "📋 Playlist": "Playlist",
     "📁 Other": "Other",
-    "🎬 YouTube": "YouTube",
+    "🎬 Video": "Video",
 }
 
 STATUS_ICON_NAMES = {
@@ -214,9 +214,9 @@ class DownloadTableModel(QAbstractTableModel):
         if role == Qt.ItemDataRole.ForegroundRole and col == self.COL_STATUS:
             return self._foreground_status(row, download_type, status)
 
-        # ── Background (subtle highlight for YouTube rows) ──
+        # ── Background (subtle highlight for Video rows) ──
         if role == Qt.ItemDataRole.BackgroundRole:
-            if download_type == "youtube":
+            if download_type == "video":
                 return QColor(155, 89, 182, 20)
 
         return None
@@ -227,7 +227,7 @@ class DownloadTableModel(QAbstractTableModel):
 
     def _display_name(self, row, download_type):
         name = row.get("name", "—")
-        if download_type == "youtube":
+        if download_type == "video":
             yt_title = row.get("yt_options", {}).get("title", "")
             if yt_title:
                 return yt_title
@@ -241,7 +241,7 @@ class DownloadTableModel(QAbstractTableModel):
         if total == 0:
             if row.get("sizeUnknown") and status not in ("complete", "completed"):
                 return "Unknown"
-            if download_type == "youtube" and status in (
+            if download_type == "video" and status in (
                 "downloading",
                 "pending",
                 "paused",
@@ -254,7 +254,7 @@ class DownloadTableModel(QAbstractTableModel):
         return format_size(total)
 
     def _display_progress(self, row, download_type):
-        if download_type == "youtube":
+        if download_type == "video":
             progress = self._to_int(row.get("progress", 0))
             return f"{progress}%"
 
@@ -269,7 +269,7 @@ class DownloadTableModel(QAbstractTableModel):
         if status == "paused":
             return "—"
 
-        if download_type == "youtube":
+        if download_type == "video":
             speed_str = row.get("speed", "")
             if speed_str and isinstance(speed_str, str):
                 return speed_str
@@ -284,7 +284,7 @@ class DownloadTableModel(QAbstractTableModel):
         if status in ("paused", "complete", "completed", "error", "removed"):
             return "—"
 
-        if download_type == "youtube":
+        if download_type == "video":
             return "—"
 
         conns = self._to_int(row.get("connections", 0))
@@ -294,7 +294,7 @@ class DownloadTableModel(QAbstractTableModel):
         if status == "paused":
             return "—"
 
-        if download_type == "youtube":
+        if download_type == "video":
             eta = row.get("eta", "")
             if eta and isinstance(eta, str):
                 return eta
@@ -323,8 +323,8 @@ class DownloadTableModel(QAbstractTableModel):
                 # Strip any leading emoji like "🔄 " if present.
                 return detail.lstrip("🔄 ").strip() or "Retrying..."
 
-        # YouTube uses a slightly different vocabulary.
-        if download_type == "youtube":
+        # Video uses a slightly different vocabulary.
+        if download_type == "video":
             yt_map = {
                 "downloading": "Downloading (yt-dlp)",
                 "pending": "Pending",
@@ -365,8 +365,8 @@ class DownloadTableModel(QAbstractTableModel):
     def _display_category(self, row, download_type):
         """Category as plain text (no emoji) — the icon is drawn by
         the DecorationRole branch of data()."""
-        if download_type == "youtube":
-            return "YouTube"
+        if download_type == "video":
+            return "Video"
 
         category = row.get("category", "📁 Other")
         if isinstance(category, dict):
@@ -391,8 +391,8 @@ class DownloadTableModel(QAbstractTableModel):
 
     def _category_icon(self, row, download_type):
         """Return a QIcon for the Category column's decoration."""
-        if download_type == "youtube":
-            key = "🎬 YouTube"
+        if download_type == "video":
+            key = "🎬 Video"
         else:
             category = row.get("category", "📁 Other")
             if isinstance(category, dict):
@@ -418,7 +418,7 @@ class DownloadTableModel(QAbstractTableModel):
     # ─────────────────────────────────────────────────────────────
 
     def _tooltip_progress(self, row, download_type):
-        if download_type == "youtube":
+        if download_type == "video":
             progress = self._to_int(row.get("progress", 0))
             speed = row.get("speed", "")
             eta = row.get("eta", "")
@@ -462,7 +462,7 @@ class DownloadTableModel(QAbstractTableModel):
     # ─────────────────────────────────────────────────────────────
 
     def _foreground_status(self, row, download_type, status):
-        if download_type == "youtube":
+        if download_type == "video":
             yt_colors = {
                 "completed": "success_text",
                 "error": "danger",
@@ -549,7 +549,7 @@ class DownloadTableModel(QAbstractTableModel):
         return None
 
     def get_download_type(self, row_idx):
-        """Get download type (normal or youtube)."""
+        """Get download type (normal or video)."""
         if 0 <= row_idx < len(self.rows):
             return self.rows[row_idx].get("download_type", "normal")
         return "normal"
@@ -600,7 +600,7 @@ class DownloadTableModel(QAbstractTableModel):
 
     def _get_progress_value(self, row):
         """Get progress value (0–100) for sorting."""
-        if row.get("download_type") == "youtube":
+        if row.get("download_type") == "video":
             return self._to_int(row.get("progress", 0))
 
         total = self._to_int(row.get("totalLength", 0))
@@ -612,7 +612,7 @@ class DownloadTableModel(QAbstractTableModel):
 
     def _get_eta_value(self, row):
         """Get ETA value in seconds for sorting (large = unknown)."""
-        if row.get("download_type") == "youtube":
+        if row.get("download_type") == "video":
             eta = row.get("eta", "")
             if eta and isinstance(eta, str) and ":" in eta:
                 try:

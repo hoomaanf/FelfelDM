@@ -306,7 +306,7 @@ class LifecycleMixin:
     def quit_app(self) -> None:
         """Quit the application for real (tray → Quit, or no tray).
 
-        C43 fix: iterate _youtube_dialogs.values(), not .items() — the
+        C43 fix: iterate _video_dialogs.values(), not .items() — the
         old code passed (key, value) tuples to .close(), and every
         close silently failed inside the except block.
 
@@ -367,7 +367,7 @@ class LifecycleMixin:
                                 self._worker_pause(gid)
                             if (
                                 self._all_downloads[gid].get("download_type")
-                                == "youtube"
+                                == "video"
                             ):
                                 self._all_downloads[gid]["status"] = "paused"
                                 self._all_downloads[gid]["downloadSpeed"] = 0
@@ -393,13 +393,13 @@ class LifecycleMixin:
         self._progress_dialogs.clear()
 
         # C43 fix: values(), not items().
-        for dlg in list(self._youtube_dialogs.values()):
+        for dlg in list(self._video_dialogs.values()):
             try:
                 dlg.close()
                 dlg.deleteLater()
             except Exception:
                 pass
-        self._youtube_dialogs.clear()
+        self._video_dialogs.clear()
 
         # ── 7. Stop BackendWorker properly (C44 fix) ──
         shutdown_dialog.update_status("Stopping backend...", 55)

@@ -1,4 +1,4 @@
-"""YouTube (yt-dlp) downloads: add, start, pause, resume, cancel, progress dialogs."""
+"""Video (yt-dlp) downloads: add, start, pause, resume, cancel, progress dialogs."""
 
 import os
 import re
@@ -9,19 +9,20 @@ from typing import Any, Dict, List
 from PyQt6.QtCore import QTimer, Qt
 from PyQt6.QtWidgets import QApplication, QMessageBox, QSystemTrayIcon
 
-from ui.dialogs import YouTubeDownloadDialog
-from ui.youtube_progress import YouTubeProgressDialog
+from ui.dialogs import VideoDownloadDialog
+from utils.helpers import is_known_video_site
+from ui.video_progress import VideoProgressDialog
 
 
-class YouTubeMixin:
-    """YouTube (yt-dlp) downloads: add, start, pause, resume, cancel, progress dialogs."""
+class VideoMixin:
+    """Video (yt-dlp) downloads: add, start, pause, resume, cancel, progress dialogs."""
 
-    def _cancel_youtube_workers_for(
+    def _cancel_video_workers_for(
         self, gids: List[str], delete_files: bool = False
     ) -> None:
-        """Stop the yt-dlp worker behind any YouTube download in `gids`.
+        """Stop the yt-dlp worker behind any Video download in `gids`.
 
-        aria2 removal does nothing for YouTube items (there is no aria2 gid),
+        aria2 removal does nothing for Video items (there is no aria2 gid),
         so without this the subprocess keeps running in the background.
         `delete_files` decides whether the worker also removes what it
         produced.
@@ -32,58 +33,58 @@ class YouTubeMixin:
         for gid in gids:
             data = self._all_downloads.get(gid)
             if data is None:
-                # Fall back to the persisted record: a queued YouTube item
+                # Fall back to the persisted record: a queued Video item
                 # may not be in the runtime dict yet.
                 try:
-                    if self.store.get_youtube_download(gid):
-                        data = {"download_type": "youtube"}
+                    if self.store.get_video_download(gid):
+                        data = {"download_type": "video"}
                 except Exception:
                     data = None
-            if data is None or data.get("download_type") != "youtube":
+            if data is None or data.get("download_type") != "video":
                 continue
 
             # Suppress the stats-snapshot handler from resurrecting this
             # item while the worker is still winding down.
-            self._cancelling_youtube.add(gid)
+            self._cancelling_video.add(gid)
 
-            if gid in self._youtube_dialogs:
+            if gid in self._video_dialogs:
                 try:
-                    self._youtube_dialogs[gid].close()
+                    self._video_dialogs[gid].close()
                 except Exception:
                     pass
-                self._youtube_dialogs.pop(gid, None)
+                self._video_dialogs.pop(gid, None)
 
             try:
                 if delete_files:
-                    self.worker.cancel_youtube_download(gid)
+                    self.worker.cancel_video_download(gid)
                 else:
-                    self.worker.cancel_youtube_download_without_delete(gid)
+                    self.worker.cancel_video_download_without_delete(gid)
             except Exception as e:
-                print(f"⚠️ [Remove] Could not cancel YouTube worker {gid[:12]}: {e}")
+                print(f"⚠️ [Remove] Could not cancel Video worker {gid[:12]}: {e}")
 
-            # Drop the persisted YouTube record so it cannot come back after
+            # Drop the persisted Video record so it cannot come back after
             # a restart.
             try:
-                self.store.delete_youtube_download(gid)
+                self.store.delete_video_download(gid)
             except Exception as e:
-                print(f"⚠️ [Remove] Could not delete YouTube record {gid[:12]}: {e}")
+                print(f"⚠️ [Remove] Could not delete Video record {gid[:12]}: {e}")
 
             # Keep the guard for a while: a stats snapshot taken before the
             # cancel can still arrive and would re-create the row as
             # "downloading" -- a ghost nothing ever updates, which keeps the
             # tray icon green forever.
-            QTimer.singleShot(5000, lambda g=gid: self._cancelling_youtube.discard(g))
+            QTimer.singleShot(5000, lambda g=gid: self._cancelling_video.discard(g))
 
-    def _open_youtube_dialog_with_url(self, url: str) -> None:
-        """Open the download dialog for a media URL (YouTube or any yt-dlp site)."""
-        existing = self._open_dialogs.get("youtube_download")
+    def _open_video_dialog_with_url(self, url: str) -> None:
+        """Open the download dialog for a media URL (Video or any yt-dlp site)."""
+        existing = self._open_dialogs.get("video_download")
         if existing is not None:
             try:
                 if existing.isVisible():
                     existing.close()
             except RuntimeError:
                 pass
-            self._open_dialogs.pop("youtube_download", None)
+            self._open_dialogs.pop("video_download", None)
 
         queues = [q for q in self.store.queues if q.name != "__direct__"]
         default_idx = 0
@@ -94,10 +95,11 @@ class YouTubeMixin:
                     default_idx = i
                     break
 
-        dlg = YouTubeDownloadDialog(
+        dlg = VideoDownloadDialog(
             parent=self, queues=queues, default_queue=default_idx
         )
-        dlg.youtube_download_requested.connect(self._add_youtube_to_queue)
+        dlg.video_download_requested.connect(self._add_video_to_queue)
+        dlg.video_playlist_requested.connect(self._add_video_playlist_to_queue)
 
         dlg.url_edit.setText(url)
         # Do NOT auto-fetch — user clicks "Get Info" manually.
@@ -109,16 +111,14 @@ class YouTubeMixin:
             host = urlparse(url).hostname or ""
         except Exception:
             host = ""
-        if "youtube" in host or "youtu.be" in host:
-            dlg.setWindowTitle("YouTube Download")
-        elif host:
-            dlg.setWindowTitle(f"Download from {host}")
+        if host:
+            dlg.setWindowTitle(f"Video Download — {host}")
         else:
-            dlg.setWindowTitle("Download Media")
+            dlg.setWindowTitle("Video Download")
 
-        self._show_singleton_dialog("youtube_download", dlg)
+        self._show_singleton_dialog("video_download", dlg)
 
-    def _youtube_download(self) -> None:
+    def _video_download(self) -> None:
         queues = [q for q in self.store.queues if q.name != "__direct__"]
         default_idx = 0
         current_q = self._current_queue()
@@ -128,19 +128,45 @@ class YouTubeMixin:
                     default_idx = i
                     break
 
-        dlg = YouTubeDownloadDialog(
+        dlg = VideoDownloadDialog(
             parent=self, queues=queues, default_queue=default_idx
         )
-        dlg.youtube_download_requested.connect(self._add_youtube_to_queue)
+        dlg.video_download_requested.connect(self._add_video_to_queue)
+        dlg.video_playlist_requested.connect(self._add_video_playlist_to_queue)
 
         clip = QApplication.clipboard().text().strip()
-        if clip and ("youtube.com" in clip or "youtu.be" in clip):
+        if clip and "\n" not in clip and is_known_video_site(clip):
             dlg.url_edit.setText(clip)
 
-        self._show_singleton_dialog("youtube_download", dlg)
+        self._show_singleton_dialog("video_download", dlg)
 
-    def _add_youtube_to_queue(self, download_data: Dict[str, Any]) -> None:
-        print("🎯 _add_youtube_to_queue CALLED")
+    def _add_video_playlist_to_queue(self, items: List[Dict[str, Any]]) -> None:
+        """Add every selected playlist video as its own download."""
+        if not items:
+            return
+        for item in items:
+            self._add_video_to_queue(item, batch=True)
+
+        self._queue_list_dirty = True
+        self._refresh_queue_list()
+        self._refresh_table()
+        self._update_queue_buttons()
+        self._update_shutdown_button_state()
+
+        queue_name = items[0].get("queue_id", "Default")
+        self.tray.showMessage(
+            "FelfelDM",
+            f"Added {len(items)} playlist videos to '{queue_name}'",
+            QSystemTrayIcon.MessageIcon.Information,
+            3000,
+        )
+
+    def _add_video_to_queue(
+        self, download_data: Dict[str, Any], batch: bool = False
+    ) -> None:
+        """Add one video download. `batch=True` (playlists) skips the
+        per-item progress dialog, refresh and notification."""
+        print("🎯 _add_video_to_queue CALLED")
 
         queue_name = download_data.get("queue_id", "Default")
 
@@ -157,12 +183,12 @@ class YouTubeMixin:
         filename = re.sub(r'[<>:"/\\|?*]', "_", f"{title}.{ext}")
         full_path = os.path.join(download_data["save_path"], filename)
 
-        youtube_data = {
+        video_data = {
             "id": download_id,
             "url": download_data["url"],
             "save_path": download_data["save_path"],
             "queue_id": queue_name,
-            "download_type": "youtube",
+            "download_type": "video",
             "status": "paused",
             "progress": 0,
             "speed": "",
@@ -185,7 +211,7 @@ class YouTubeMixin:
             "full_path": full_path,
         }
 
-        self.store.add_youtube_download(youtube_data)
+        self.store.add_video_download(video_data)
 
         self._all_downloads[download_id] = {
             "gid": download_id,
@@ -197,11 +223,11 @@ class YouTubeMixin:
             "connections": 0,
             "files": [{"path": full_path}],
             "errorMessage": "",
-            "category": "🎬 YouTube",
-            "download_type": "youtube",
+            "category": "🎬 Video",
+            "download_type": "video",
             "real_path": full_path,
             "save_path": download_data["save_path"],
-            "yt_options": youtube_data["yt_options"],
+            "yt_options": video_data["yt_options"],
         }
 
         if download_id not in target_queue.downloads:
@@ -213,8 +239,8 @@ class YouTubeMixin:
             "totalLength": 0,
             "completedLength": 0,
             "status": "paused",
-            "category": "🎬 YouTube",
-            "download_type": "youtube",
+            "category": "🎬 Video",
+            "download_type": "video",
             "files": [{"path": full_path}],
             "real_path": full_path,
             "save_path": download_data["save_path"],
@@ -228,25 +254,28 @@ class YouTubeMixin:
             self._all_downloads[download_id]["status"] = "downloading"
             target_queue.downloads_info[download_id]["status"] = "downloading"
 
-            self.store.update_youtube_status(download_id, "downloading")
+            self.store.update_video_status(download_id, "downloading")
 
             self.store.save()
 
         if self.worker:
-            self.worker.add_youtube_download(
+            self.worker.add_video_download(
                 {
                     "id": download_id,
                     "url": download_data["url"],
                     "save_path": download_data["save_path"],
-                    "yt_options": youtube_data["yt_options"],
+                    "yt_options": video_data["yt_options"],
                     "proxy": download_data.get("proxy"),
                     "queue_id": queue_name,
                 }
             )
 
+        if batch:
+            return
+
         if is_direct:
             QTimer.singleShot(
-                300, lambda did=download_id: self._open_youtube_progress_dialog(did)
+                300, lambda did=download_id: self._open_video_progress_dialog(did)
             )
 
         self._queue_list_dirty = True
@@ -257,25 +286,25 @@ class YouTubeMixin:
 
         self.tray.showMessage(
             "FelfelDM",
-            f"Added YouTube download to '{queue_name}': {title[:50]}...",
+            f"Added video download to '{queue_name}': {title[:50]}...",
             QSystemTrayIcon.MessageIcon.Information,
             3000,
         )
 
-    def _start_youtube_download(self, download_id: str) -> None:
+    def _start_video_download(self, download_id: str) -> None:
         if not hasattr(self, "worker") or not self.worker:
             print(f"⚠️ [MainWindow] No worker available")
             return
 
-        data = self.store.get_youtube_download(download_id)
+        data = self.store.get_video_download(download_id)
         if not data:
             print(f"⚠️ [MainWindow] No data for {download_id}")
             return
 
         worker_exists = False
         try:
-            with self.worker.youtube_lock:
-                worker_exists = download_id in self.worker.youtube_workers
+            with self.worker.video_lock:
+                worker_exists = download_id in self.worker.video_workers
         except Exception:
             worker_exists = False
 
@@ -283,8 +312,8 @@ class YouTubeMixin:
             print(f"⏭️ [MainWindow] Worker already exists for {download_id}")
             return
 
-        print(f"🎬 [MainWindow] Starting YouTube download: {download_id}")
-        self.worker.add_youtube_download(
+        print(f"🎬 [MainWindow] Starting Video download: {download_id}")
+        self.worker.add_video_download(
             {
                 "id": download_id,
                 "url": data["url"],
@@ -298,11 +327,11 @@ class YouTubeMixin:
             }
         )
 
-    def _pause_youtube_download(self, download_id: str) -> None:
+    def _pause_video_download(self, download_id: str) -> None:
         if not hasattr(self, "worker") or not self.worker:
             return
 
-        self.worker.pause_youtube_download(download_id)
+        self.worker.pause_video_download(download_id)
 
         if download_id in self._all_downloads:
             self._all_downloads[download_id]["status"] = "paused"
@@ -316,27 +345,27 @@ class YouTubeMixin:
         self._update_queue_buttons()
         self._refresh_table()
 
-    def _resume_youtube_download(self, download_id: str) -> None:
+    def _resume_video_download(self, download_id: str) -> None:
         if not hasattr(self, "worker") or not self.worker:
             return
 
         worker_exists = False
         try:
-            with self.worker.youtube_lock:
-                worker_exists = download_id in self.worker.youtube_workers
+            with self.worker.video_lock:
+                worker_exists = download_id in self.worker.video_workers
         except Exception:
             worker_exists = False
 
         if worker_exists:
             print(f"▶️ [MainWindow] Resuming existing worker: {download_id}")
-            self.worker.resume_youtube_download(download_id)
+            self.worker.resume_video_download(download_id)
         else:
             print(f"🎬 [MainWindow] No active worker, starting fresh: {download_id}")
-            data = self.store.get_youtube_download(download_id)
+            data = self.store.get_video_download(download_id)
             if not data:
                 print(f"⚠️ [MainWindow] No data for {download_id}")
                 return
-            self.worker.add_youtube_download(
+            self.worker.add_video_download(
                 {
                     "id": download_id,
                     "url": data["url"],
@@ -361,9 +390,9 @@ class YouTubeMixin:
         self._update_queue_buttons()
         self._refresh_table()
 
-    def _cancel_youtube_download(self, download_id: str) -> None:
-        print(f"🗑️ [MainWindow] _cancel_youtube_download CALLED for: {download_id}")
-        self._cancelling_youtube.add(download_id)
+    def _cancel_video_download(self, download_id: str) -> None:
+        print(f"🗑️ [MainWindow] _cancel_video_download CALLED for: {download_id}")
+        self._cancelling_video.add(download_id)
         print(
             f"🗑️ [MainWindow] _all_downloads count BEFORE: {len(self._all_downloads)}"
         )
@@ -374,14 +403,14 @@ class YouTubeMixin:
 
         print(f"🗑️ [MainWindow] Updating UI first...")
 
-        if download_id in self._youtube_dialogs:
+        if download_id in self._video_dialogs:
             try:
-                self._youtube_dialogs[download_id].close()
+                self._video_dialogs[download_id].close()
             except Exception:
                 pass
-            self._youtube_dialogs.pop(download_id, None)
+            self._video_dialogs.pop(download_id, None)
 
-        self.store.delete_youtube_download(download_id)
+        self.store.delete_video_download(download_id)
         self.store.save()
 
         if download_id in self._all_downloads:
@@ -394,11 +423,11 @@ class YouTubeMixin:
                 del q.downloads_info[download_id]
         self.store.save()
 
-        print(f"🗑️ [MainWindow] Calling worker.cancel_youtube_download...")
+        print(f"🗑️ [MainWindow] Calling worker.cancel_video_download...")
         try:
-            self.worker.cancel_youtube_download(download_id)
+            self.worker.cancel_video_download(download_id)
         except Exception as e:
-            print(f"⚠️ [MainWindow] Error in worker.cancel_youtube_download: {e}")
+            print(f"⚠️ [MainWindow] Error in worker.cancel_video_download: {e}")
 
         self._reset_speed_if_idle()
 
@@ -410,29 +439,29 @@ class YouTubeMixin:
         print(f"🗑️ [MainWindow] _all_downloads count AFTER: {len(self._all_downloads)}")
         print(f"🗑️ [MainWindow] Cancel complete for: {download_id}")
         QTimer.singleShot(
-            5000, lambda did=download_id: self._cancelling_youtube.discard(did)
+            5000, lambda did=download_id: self._cancelling_video.discard(did)
         )
 
-    def _on_youtube_progress(self, download_id: str, progress: int) -> None:
+    def _on_video_progress(self, download_id: str, progress: int) -> None:
         if download_id in self._all_downloads:
             self._all_downloads[download_id]["progress"] = progress
             self._all_downloads[download_id]["status"] = "downloading"
             self._refresh_table()
 
-    def _on_youtube_status(self, download_id: str, status: str) -> None:
+    def _on_video_status(self, download_id: str, status: str) -> None:
         if download_id in self._all_downloads:
             self._all_downloads[download_id]["status"] = status
             self._update_queue_buttons()
             self._refresh_table()
 
-    def _on_youtube_speed(self, download_id: str, speed: str, eta: str) -> None:
+    def _on_video_speed(self, download_id: str, speed: str, eta: str) -> None:
         if download_id in self._all_downloads:
             self._all_downloads[download_id]["speed"] = speed
             self._all_downloads[download_id]["eta"] = eta
             self._all_downloads[download_id]["downloadSpeed"] = self._parse_speed(speed)
             self._refresh_table()
 
-    def _on_youtube_size_fetched(self, download_id: str, size: int) -> None:
+    def _on_video_size_fetched(self, download_id: str, size: int) -> None:
         if size <= 0:
             self._size_unknown.add(download_id)
         else:
@@ -441,42 +470,42 @@ class YouTubeMixin:
             self._all_downloads[download_id]["totalLength"] = max(size, 0)
             self._refresh_table()
 
-    def _on_youtube_finished(
+    def _on_video_finished(
         self, download_id: str, success: bool, message: str
     ) -> None:
-        print(f"🎬 [MainWindow] YouTube finished: {download_id} success={success}")
+        print(f"🎬 [MainWindow] Video finished: {download_id} success={success}")
 
-        if download_id in self._youtube_dialogs:
-            dialog = self._youtube_dialogs[download_id]
+        if download_id in self._video_dialogs:
+            dialog = self._video_dialogs[download_id]
             try:
                 dialog.update_finished(success, message)
             except RuntimeError:
-                self._youtube_dialogs.pop(download_id, None)
+                self._video_dialogs.pop(download_id, None)
 
         if success:
             self.tray.showMessage(
                 "FelfelDM",
-                "YouTube download completed!",
+                "Video download completed!",
                 QSystemTrayIcon.MessageIcon.Information,
                 3000,
             )
         elif "cancelled" not in message.lower():
             self.tray.showMessage(
                 "FelfelDM",
-                f"❌ YouTube download failed: {message}",
+                f"❌ Video download failed: {message}",
                 QSystemTrayIcon.MessageIcon.Warning,
                 3000,
             )
 
         self._refresh_table()
 
-    def _open_youtube_progress_dialog(self, download_id: str) -> None:
+    def _open_video_progress_dialog(self, download_id: str) -> None:
         try:
             if not download_id:
                 return
 
-            if download_id in self._youtube_dialogs:
-                dialog = self._youtube_dialogs[download_id]
+            if download_id in self._video_dialogs:
+                dialog = self._video_dialogs[download_id]
                 try:
                     if dialog.isVisible():
                         dialog.raise_()
@@ -484,16 +513,16 @@ class YouTubeMixin:
                         return
                     else:
                         dialog.deleteLater()
-                        del self._youtube_dialogs[download_id]
+                        del self._video_dialogs[download_id]
                 except RuntimeError:
-                    del self._youtube_dialogs[download_id]
+                    del self._video_dialogs[download_id]
 
-            data = self.store.get_youtube_download(download_id)
+            data = self.store.get_video_download(download_id)
             if not data:
                 QMessageBox.warning(self, "Error", "Download not found")
                 return
 
-            dialog = YouTubeProgressDialog(
+            dialog = VideoProgressDialog(
                 url=data["url"],
                 output_path=data["save_path"],
                 format_type=data.get("yt_options", {}).get("format", "mp4"),
@@ -511,17 +540,17 @@ class YouTubeMixin:
             )
             dialog.setWindowModality(Qt.WindowModality.NonModal)
 
-            dialog.pause_requested.connect(self._pause_youtube_download)
-            dialog.resume_requested.connect(self._resume_youtube_download)
-            dialog.cancel_requested.connect(self._cancel_youtube_download)
+            dialog.pause_requested.connect(self._pause_video_download)
+            dialog.resume_requested.connect(self._resume_video_download)
+            dialog.cancel_requested.connect(self._cancel_video_download)
 
             dialog.finished.connect(
-                lambda result, did=download_id: self._on_youtube_dialog_closed(
+                lambda result, did=download_id: self._on_video_dialog_closed(
                     did, result
                 )
             )
 
-            self._youtube_dialogs[download_id] = dialog
+            self._video_dialogs[download_id] = dialog
             dialog.show()
             self._center_dialog_on_screen(dialog)
 
@@ -548,18 +577,18 @@ class YouTubeMixin:
                     dialog.update_finished(True, "Download completed!")
 
         except Exception as e:
-            print(f"❌ Error opening YouTube dialog: {e}")
+            print(f"❌ Error opening Video dialog: {e}")
 
-    def _on_youtube_dialog_closed(self, download_id: str, result=None) -> None:
-        if download_id in self._youtube_dialogs:
-            dialog = self._youtube_dialogs.pop(download_id)
+    def _on_video_dialog_closed(self, download_id: str, result=None) -> None:
+        if download_id in self._video_dialogs:
+            dialog = self._video_dialogs.pop(download_id)
             try:
                 dialog.deleteLater()
             except RuntimeError:
                 pass
 
-    def _update_youtube_dialogs(self, youtube_downloads: List[Dict]) -> None:
-        for yt_data in youtube_downloads:
+    def _update_video_dialogs(self, video_downloads: List[Dict]) -> None:
+        for yt_data in video_downloads:
             if not isinstance(yt_data, dict):
                 continue
 
@@ -567,7 +596,7 @@ class YouTubeMixin:
             if not yt_id:
                 continue
 
-            if yt_id in self._cancelling_youtube:
+            if yt_id in self._cancelling_video:
                 print(f"⏭️ [MainWindow] Skipping cancelling download: {yt_id[:8]}")
                 continue
 
@@ -577,7 +606,7 @@ class YouTubeMixin:
             ):
                 continue
 
-            saved_data = self.store.get_youtube_download(yt_id)
+            saved_data = self.store.get_video_download(yt_id)
             status = yt_data.get("status", "pending")
             progress = yt_data.get("progress", 0)
             speed = yt_data.get("speed", "")
@@ -601,8 +630,8 @@ class YouTubeMixin:
                         "totalLength": total_size,
                         "completedLength": completed,
                         "downloadSpeed": self._parse_speed(speed),
-                        "download_type": "youtube",
-                        "category": "🎬 YouTube",
+                        "download_type": "video",
+                        "category": "🎬 Video",
                     }
                 )
             else:
@@ -619,33 +648,33 @@ class YouTubeMixin:
                     "connections": 0,
                     "files": [],
                     "errorMessage": "",
-                    "category": "🎬 YouTube",
-                    "download_type": "youtube",
+                    "category": "🎬 Video",
+                    "download_type": "video",
                 }
 
             if saved_data and saved_data.get("status") != status:
-                self.store.update_youtube_status(yt_id, status)
+                self.store.update_video_status(yt_id, status)
 
-            self._update_open_youtube_dialog(
+            self._update_open_video_dialog(
                 yt_id, status, progress, speed, eta, total_size
             )
 
-        # Self-heal: a YouTube row that still claims to be active although
+        # Self-heal: a Video row that still claims to be active although
         # the worker no longer knows it can never finish, and it would keep
         # the tray icon green. Mark it paused so the user can resume/remove.
-        reported = {d.get("id") for d in youtube_downloads if isinstance(d, dict)}
+        reported = {d.get("id") for d in video_downloads if isinstance(d, dict)}
         for did, info in self._all_downloads.items():
             if (
-                info.get("download_type") == "youtube"
+                info.get("download_type") == "video"
                 and info.get("status") in ("active", "downloading")
                 and did not in reported
-                and did not in self._cancelling_youtube
+                and did not in self._cancelling_video
             ):
                 info["status"] = "paused"
                 info["speed"] = ""
                 info["downloadSpeed"] = 0
 
-    def _update_open_youtube_dialog(
+    def _update_open_video_dialog(
         self,
         download_id: str,
         status: str,
@@ -654,10 +683,10 @@ class YouTubeMixin:
         eta: str,
         total_size: int,
     ) -> None:
-        if download_id not in self._youtube_dialogs:
+        if download_id not in self._video_dialogs:
             return
 
-        dialog = self._youtube_dialogs[download_id]
+        dialog = self._video_dialogs[download_id]
 
         try:
             dialog.update_progress(progress, speed, eta)
@@ -675,4 +704,4 @@ class YouTubeMixin:
                 )
                 dialog.update_finished(False, msg)
         except RuntimeError:
-            self._youtube_dialogs.pop(download_id, None)
+            self._video_dialogs.pop(download_id, None)

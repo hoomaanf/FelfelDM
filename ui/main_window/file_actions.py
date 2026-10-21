@@ -93,7 +93,7 @@ class FileActionsMixin:
                 if dl_save_path and os.path.exists(dl_save_path):
                     return dl_save_path
 
-        saved_data = self.store.get_youtube_download(gid)
+        saved_data = self.store.get_video_download(gid)
         if saved_data:
             folder_path = saved_data.get("save_path", "")
             if folder_path and os.path.exists(folder_path):
@@ -102,7 +102,7 @@ class FileActionsMixin:
         return os.path.expanduser("~/Downloads")
 
     def _copy_link(self, gid: str) -> None:
-        saved_data = self.store.get_youtube_download(gid)
+        saved_data = self.store.get_video_download(gid)
         if saved_data:
             QApplication.clipboard().setText(saved_data.get("url", ""))
         else:

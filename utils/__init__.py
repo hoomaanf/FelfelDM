@@ -7,5 +7,6 @@ from .helpers import (
     get_category,
     get_icon,
     is_ytdlp_supported,
+    is_known_video_site,
 )
 from .style import setup_style, CustomProxyStyle

@@ -48,28 +48,28 @@ class QueueOperationWorker(QThread):
 
         self.status_update.emit(f"Starting {total} download(s)...")
 
-        youtube_ids = []
+        video_ids = []
         normal_ids = []  # download_id (UUID)
 
         for download_id in q.downloads:
             download_type = self._all_downloads.get(download_id, {}).get(
                 "download_type", "normal"
             )
-            if download_type == "youtube":
-                youtube_ids.append(download_id)
+            if download_type == "video":
+                video_ids.append(download_id)
             else:
                 normal_ids.append(download_id)
 
         resumed_count = 0
 
-        # ===== YouTube =====
-        for download_id in youtube_ids:
+        # ===== Video =====
+        for download_id in video_ids:
             real_status = self._all_downloads.get(download_id, {}).get("status", "")
             if real_status == "paused":
-                self.worker.resume_youtube_download(download_id)
+                self.worker.resume_video_download(download_id)
                 self.download_status_changed.emit(download_id, "downloading")
                 resumed_count += 1
-                self.status_update.emit(f"Resuming YouTube: {download_id[:8]}...")
+                self.status_update.emit(f"Resuming video: {download_id[:8]}...")
 
         # ===== Normal =====
         if normal_ids:
@@ -172,13 +172,13 @@ class QueueOperationWorker(QThread):
                 "download_type", "normal"
             )
 
-            if download_type == "youtube":
+            if download_type == "video":
                 real_status = self._all_downloads.get(download_id, {}).get("status", "")
                 if real_status in ["downloading", "pending"]:
-                    self.worker.pause_youtube_download(download_id)
+                    self.worker.pause_video_download(download_id)
                     self.download_status_changed.emit(download_id, "paused")
                     paused_count += 1
-                    self.status_update.emit(f"Pausing YouTube: {download_id[:8]}...")
+                    self.status_update.emit(f"Pausing video: {download_id[:8]}...")
             else:
                 aria2_gid = self._get_aria2_gid(download_id)
                 if not aria2_gid:

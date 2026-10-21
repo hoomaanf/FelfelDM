@@ -68,7 +68,7 @@ bash <(curl -s https://raw.githubusercontent.com/hoomaanf/FelfelDM/main/install.
 - 🔁 **Retry Counter Reset** — The failed-attempt counter resets to 0 in three cases: (a) after a configurable period of healthy downloading, (b) **when the queue is paused** (so a queue paused overnight doesn't stay blocked by counters from a momentary outage), and (c) **when the user clicks Start Queue** (an explicit user action beats the cap)
 - ⏱️ **Countdown Retry** — Live countdown in the Status column while waiting between retry attempts (e.g. `🔄 Retrying in 5s... (2/5)`)
 - 🗑️ **Safe Removal** — Remove from list, or delete files with a confirmation dialog that lists exactly what will be deleted (main file + aria2 sidecar + temp files)
-- 🎵 **YouTube Download** — Download videos and audio from YouTube with dynamic quality selection
+- 🎵 **Video Download** — Download videos, audio and whole playlists from YouTube and every other site yt-dlp supports (Vimeo, X, Instagram, TikTok, Twitch, ...)
 - 📋 **Details Panel** — View download details (name, size, downloaded, status, path) with quick actions including Retry for failed downloads
 - 🔄 **Per-Download Retry** — A Retry button appears in the Details Panel when a download fails, re-adding it with a fresh aria2 gid
 - 📜 **Live Log Viewer** — See the current session's log in a live window (`Ctrl+L` or `View → Show Logs`), with auto-scroll, clear, and refresh
@@ -175,7 +175,7 @@ Double-click a **completed** download in the main table to open it directly with
 - `Ctrl+Double-Click` forces the details dialog (previous behavior)
 - Falls back to the details dialog if the file is missing, or opens the folder if the path is a directory
 - Active, paused, and errored downloads keep the previous behavior (details dialog)
-- YouTube downloads always open the YouTube progress dialog
+- Video downloads always open the video progress dialog
 
 ### 📥 Drag & Drop Links
 
@@ -248,21 +248,24 @@ FelfelDM includes a built-in log viewer for debugging without leaving the app.
 - 📜 **Built-in Log Viewer** — Open a live log window from `View → Show Logs` or press `Ctrl+L`. Useful for debugging without leaving the app.
 - 💾 **Persistent Logs** — Logs are written to `~/.cache/felfelDM/logs/app.log` with automatic rotation
 
-### YouTube Download Features
+### Video Download Features
+
+- 🌍 **Many Sites** — Anything yt-dlp supports, not only YouTube
+- 📃 **Playlists** — Paste a playlist link, tick the videos you want, pick one quality for all; they go into a folder named after the playlist, one download per video (at most 3 run at a time)
 
 - 🎥 **Video Download** — Download videos in MP4, WebM formats
 - 🎵 **Audio Extraction** — Extract audio as MP3, M4A
 - 📐 **Quality Selection** — Choose from available qualities (1080p, 720p, 480p, etc.)
 - 🔄 **Best Quality** — Automatically select the best available format
 - 🍪 **Cookie Support** — Use browser cookies for age-restricted content
-- 🌐 **Proxy Support** — Download YouTube videos through proxy
-- 📊 **Real-time Progress** — Live progress, speed, and ETA for YouTube downloads
-- ⏸️ **Pause/Resume** — Pause and resume YouTube downloads
+- 🌐 **Proxy Support** — Download videos through proxy
+- 📊 **Real-time Progress** — Live progress, speed, and ETA for video downloads
+- ⏸️ **Pause/Resume** — Pause and resume video downloads
 - 🗑️ **Clean Removal** — Remove downloads and associated files
-- 🎬 **YouTube Category** — YouTube downloads are visually distinguished in the queue
+- 🎬 **Video Category** — Video downloads are visually distinguished in the queue
 - 📁 **Custom Output** — Choose where to save downloaded files
-- 🖥️ **Standalone Dialog** — Independent progress dialog for YouTube downloads
-- 🪟 **Multiple Dialogs** — Open multiple YouTube progress dialogs simultaneously
+- 🖥️ **Standalone Dialog** — Independent progress dialog for video downloads
+- 🪟 **Multiple Dialogs** — Open multiple video progress dialogs simultaneously
 - 🎨 **Redesigned Progress Dialog** — Same tabbed layout as the regular download progress dialog
 
 ---
@@ -375,13 +378,13 @@ FelfelDM --update
 5. Choose queue and options
 6. Click **Download** or **Add to Queue**
 
-#### YouTube Downloads:
+#### Video Downloads:
 
-1. Click **YouTube** button in the toolbar
-2. Paste the YouTube URL
-3. Select quality and format
+1. Click **Video** button in the toolbar
+2. Paste a video or playlist URL (YouTube, Vimeo, X, ... any yt-dlp site) and click **Get Info**
+3. For a playlist, tick the videos you want; pick quality and format
 4. Choose queue and save location
-5. Click Download
+5. Click **Add to Queue**
 
 ### Opening Completed Downloads
 
@@ -444,9 +447,9 @@ FelfelDM includes a built-in live log viewer:
 - **Refresh** reloads the entire log from disk
 - Logs are also written to `~/.cache/felfelDM/logs/app.log`
 
-### YouTube Download
+### Video Download
 
-FelfelDM supports downloading videos and audio from YouTube with advanced features:
+FelfelDM downloads videos and audio from YouTube and from every other site supported by yt-dlp, with advanced features:
 
 **Quality Selection:**
 
@@ -552,9 +555,9 @@ FelfelDM supports proxy configuration at three levels:
 - SOCKS5 Proxy (`socks5://proxy:port`)
 - Authentication supported via `user:pass@host:port`
 
-**YouTube Proxy Support:**
+**Video Proxy Support:**
 
-- YouTube downloads also support proxy configuration
+- Video downloads also support proxy configuration
 - Proxy settings from the main dialog are automatically applied to the download progress window
 - No need to re-enter proxy details in the progress dialog
 
@@ -606,7 +609,7 @@ cd FelfelDM-extension
 - 🖱️ **Context Menu** — Right-click links, images, videos
 - 🔗 **Selected Links** — Download multiple links from selection
 - 🎯 **Download Interception** — Auto-catch browser downloads
-- 🎯 **YouTube Inline Button** — A small FelfelDM icon appears on YouTube and YouTube Music pages; click it to send the URL straight to the yt-dlp dialog
+- 🎯 **Video Inline Button** — A small FelfelDM icon appears on YouTube, YouTube Music and video pages of other supported sites (Vimeo, X, Instagram, TikTok, Twitch, Dailymotion, ...); click it to send the URL straight to the video dialog
 - 🔔 **Notifications** — Status updates and confirmations
 - 🎨 **Cleaner Notifications** — Fewer icons in the extension popup, so status and action feedback is easier to read at a glance
 - 🔄 **Toggle Switch** — Enable/disable download catching
@@ -747,7 +750,7 @@ The `MainWindow` class is assembled from 17 mixins, each handling a single area 
 | `aria2_control` | Start/stop aria2, commands, speed limits, proxy |
 | `queues` | Queues and scheduling |
 | `add_download` | Drag & drop, add-download dialog |
-| `youtube` | YouTube downloads |
+| `video` | Video downloads (yt-dlp) |
 | `progress_dialogs` | Per-download progress dialogs |
 | `download_actions` | Manual pause/resume/retry |
 | `retry` | Automatic retry |
@@ -809,7 +812,7 @@ FelfelDM/
     │   ├── rule_engine.py             # Download rules engine
     │   ├── size_fetcher_worker.py     # Parallel size fetcher (5 threads)
     │   ├── worker.py                  # Background download worker
-    │   └── youtube_worker.py          # YouTube download worker
+    │   └── video_worker.py            # Video download worker (yt-dlp)
     ├── ui/                            # UI components
     │   ├── __init__.py
     │   ├── delegates.py               # Custom table delegates
@@ -829,7 +832,7 @@ FelfelDM/
     │   │   ├── aria2_control.py       # Start/stop aria2, commands, speed limits, proxy
     │   │   ├── queues.py              # Queues and scheduling
     │   │   ├── add_download.py        # Drag & drop, add-download dialog
-    │   │   ├── youtube.py             # YouTube downloads
+    │   │   ├── video.py               # Video downloads
     │   │   ├── progress_dialogs.py    # Per-download progress dialogs
     │   │   ├── download_actions.py    # Manual pause/resume/retry
     │   │   ├── retry.py               # Automatic retry
@@ -844,7 +847,7 @@ FelfelDM/
     │   ├── table_model.py             # Download table model
     │   ├── update_dialog.py           # Update dialog
     │   ├── widgets.py                 # Reusable widgets (DropOverlay)
-    │   └── youtube_progress.py        # YouTube progress dialog
+    │   └── video_progress.py        # Video progress dialog
     ├── utils/                         # Utilities
     │   ├── __init__.py
     │   ├── helpers.py                 # Helper functions
@@ -968,25 +971,25 @@ pgrep -a aria2c
 
 If the leftover `aria2c` was **not** started by FelfelDM (no `--conf-path=~/.config/felfelDM/aria2.conf`), it's not ours and FelfelDM will deliberately not touch it. Stop it yourself.
 
-### YouTube download requires cookies
+### Video download requires cookies
 
 1. Install browser extension: [Get cookies.txt](https://github.com/rotemdan/ExportCookies)
-2. Export cookies from YouTube
-3. Use the cookie file in YouTube download dialog
+2. Export cookies from the site
+3. Use the cookie file in the video download dialog
 
-### YouTube downloads not starting
+### Video downloads not starting
 
 1. Make sure yt-dlp is installed: `which yt-dlp`
 2. Check if yt-dlp is up to date: `yt-dlp -U`
 3. Try downloading without proxy first
 4. Check the console output for error messages
 
-### YouTube download speed not showing
+### Video download speed not showing
 
-1. YouTube downloads use yt-dlp for downloading
-2. Speed is shown in the YouTube progress dialog
-3. Total speed in the status bar includes both aria2 and YouTube downloads
-4. Check the YouTube progress dialog for detailed information
+1. Video downloads use yt-dlp for downloading
+2. Speed is shown in the video progress dialog
+3. Total speed in the status bar includes both aria2 and video downloads
+4. Check the video progress dialog for detailed information
 
 ### Proxy not working
 
@@ -1116,7 +1119,7 @@ python3 main.py
 - [PyQt6](https://www.riverbankcomputing.com/software/pyqt/) — Python bindings for Qt6
 - [Papirus](https://github.com/PapirusDevelopmentTeam/papirus-icon-theme) — Icon theme
 - [systemd](https://systemd.io/) — Service management
-- [yt-dlp](https://github.com/yt-dlp/yt-dlp) — YouTube downloading
+- [yt-dlp](https://github.com/yt-dlp/yt-dlp) — Video downloading (YouTube and many other sites)
 
 ---
 

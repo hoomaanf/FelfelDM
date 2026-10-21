@@ -65,8 +65,8 @@ class StatsSyncMixin:
         for download_id, error_msg in new_errors:
             self._on_download_error(download_id, error_msg)
 
-        youtube_downloads = result.get("youtube_downloads", [])
-        self._update_youtube_dialogs(youtube_downloads)
+        video_downloads = result.get("video_downloads", [])
+        self._update_video_dialogs(video_downloads)
 
         self._refresh_table()
         self._update_queue_status()
@@ -220,7 +220,7 @@ class StatsSyncMixin:
 
         current_gids = {dl.get("gid") for dl in downloads_list if dl.get("gid")}
         for download_id in list(self._all_downloads.keys()):
-            if self._all_downloads[download_id].get("download_type") == "youtube":
+            if self._all_downloads[download_id].get("download_type") == "video":
                 continue
             in_queue = any(download_id in q.downloads for q in self.store.queues)
             aria2_gid = self._all_downloads[download_id].get("aria2_gid")
@@ -338,11 +338,11 @@ class StatsSyncMixin:
         self._refresh_table()
 
     def _on_download_status_changed(self, gid: str, status: str) -> None:
-        # Only YouTube downloads (managed by yt-dlp workers, not aria2)
+        # Only Video downloads (managed by yt-dlp workers, not aria2)
         # announce their status. For everything else aria2 is the single
         # source of truth and the stats poll sets the status.
         data = self._all_downloads.get(gid)
-        if data is not None and data.get("download_type") == "youtube":
+        if data is not None and data.get("download_type") == "video":
             data["status"] = status
             if status == "paused":
                 data["downloadSpeed"] = 0

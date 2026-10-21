@@ -134,11 +134,11 @@ class Aria2ControlMixin:
         self.worker.size_fetched.connect(self._on_size_fetched)
         self.worker.size_failed.connect(self._on_size_failed)
 
-        self.worker.youtube_progress.connect(self._on_youtube_progress)
-        self.worker.youtube_status.connect(self._on_youtube_status)
-        self.worker.youtube_speed.connect(self._on_youtube_speed)
-        self.worker.youtube_finished.connect(self._on_youtube_finished)
-        self.worker.youtube_size_fetched.connect(self._on_youtube_size_fetched)
+        self.worker.video_progress.connect(self._on_video_progress)
+        self.worker.video_status.connect(self._on_video_status)
+        self.worker.video_speed.connect(self._on_video_speed)
+        self.worker.video_finished.connect(self._on_video_finished)
+        self.worker.video_size_fetched.connect(self._on_video_size_fetched)
 
         self.worker.operation_result.connect(self._on_worker_operation_result)
 

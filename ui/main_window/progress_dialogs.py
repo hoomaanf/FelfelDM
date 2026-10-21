@@ -106,8 +106,8 @@ class ProgressDialogsMixin:
         real_status = self._all_downloads[gid].get("status", "")
         download_type = self._all_downloads[gid].get("download_type", "normal")
 
-        if download_type == "youtube":
-            self._resume_youtube_download(gid)
+        if download_type == "video":
+            self._resume_video_download(gid)
             return
 
         if real_status == "error":

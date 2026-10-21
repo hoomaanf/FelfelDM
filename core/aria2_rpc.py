@@ -101,7 +101,7 @@ class Aria2RPC:
 
         return conf_path
     
-    def _is_youtube_gid(self, gid: str) -> bool:
+    def _is_video_gid(self, gid: str) -> bool:
         if not gid:
             return False
         return bool(
@@ -265,7 +265,7 @@ class Aria2RPC:
         if not gid:
             return None
 
-        if self._is_youtube_gid(gid):
+        if self._is_video_gid(gid):
             return None
 
         return self._call("aria2.tellStatus", [gid])
@@ -275,7 +275,7 @@ class Aria2RPC:
         instead of one aria2.tellStatus call per gid. Returns a dict keyed
         by gid; a gid aria2 doesn't know about (or a fault) maps to None,
         matching get_status()'s behavior for a missing download."""
-        real_gids = [g for g in gids if g and not self._is_youtube_gid(g)]
+        real_gids = [g for g in gids if g and not self._is_video_gid(g)]
         if not real_gids:
             return {}
 
@@ -333,7 +333,7 @@ class Aria2RPC:
         if not gid:
             return False
 
-        if self._is_youtube_gid(gid):
+        if self._is_video_gid(gid):
             return False
 
         result = self._call("aria2.pause", [gid])
@@ -343,7 +343,7 @@ class Aria2RPC:
         if not gid:
             return False
 
-        if self._is_youtube_gid(gid):
+        if self._is_video_gid(gid):
             return False
 
         result = self._call("aria2.forcePause", [gid])
@@ -353,7 +353,7 @@ class Aria2RPC:
         if not gid:
             return False
 
-        if self._is_youtube_gid(gid):
+        if self._is_video_gid(gid):
             return False
 
         result = self._call("aria2.unpause", [gid])
@@ -385,7 +385,7 @@ class Aria2RPC:
         """Pause many downloads in one RPC round trip instead of one call
         per gid — used for queue-level pause where looping individual
         aria2.pause calls causes a visible, cumulative delay."""
-        real_gids = [g for g in gids if g and not self._is_youtube_gid(g)]
+        real_gids = [g for g in gids if g and not self._is_video_gid(g)]
         if not real_gids:
             return True
 
@@ -395,7 +395,7 @@ class Aria2RPC:
 
     def resume_multi(self, gids: List[str]) -> bool:
         """Resume many downloads in one RPC round trip. See pause_multi."""
-        real_gids = [g for g in gids if g and not self._is_youtube_gid(g)]
+        real_gids = [g for g in gids if g and not self._is_video_gid(g)]
         if not real_gids:
             return True
 
@@ -407,7 +407,7 @@ class Aria2RPC:
         if not gid:
             return False
 
-        if self._is_youtube_gid(gid):
+        if self._is_video_gid(gid):
             return False
 
         result = self._call("aria2.remove", [gid])
@@ -417,7 +417,7 @@ class Aria2RPC:
         if not gid:
             return False
 
-        if self._is_youtube_gid(gid):
+        if self._is_video_gid(gid):
             return False
 
         result = self._call("aria2.forceRemove", [gid])
@@ -437,7 +437,7 @@ class Aria2RPC:
         if not gid:
             return False
 
-        if self._is_youtube_gid(gid):
+        if self._is_video_gid(gid):
             return False
 
         if speed_kb <= 0:
@@ -452,7 +452,7 @@ class Aria2RPC:
         """Apply the same per-download speed limit to many gids in one
         multicall round trip (e.g. when a queue's speed limit needs to be
         applied to every download in it after starting the queue)."""
-        real_gids = [g for g in gids if g and not self._is_youtube_gid(g)]
+        real_gids = [g for g in gids if g and not self._is_video_gid(g)]
         if not real_gids:
             return True
 
@@ -471,7 +471,7 @@ class Aria2RPC:
         if not gid or not options:
             return False
 
-        if self._is_youtube_gid(gid):
+        if self._is_video_gid(gid):
             return False
 
         result = self._call("aria2.changeOption", [gid, options])
@@ -481,7 +481,7 @@ class Aria2RPC:
         if not gid:
             return None
 
-        if self._is_youtube_gid(gid):
+        if self._is_video_gid(gid):
             return None
 
         return self._call("aria2.getOption", [gid])
@@ -571,7 +571,7 @@ class Aria2RPC:
         if not gid:
             return None
 
-        if self._is_youtube_gid(gid):
+        if self._is_video_gid(gid):
             return None
 
         return self._call("aria2.getFiles", [gid])
@@ -580,7 +580,7 @@ class Aria2RPC:
         if not gid:
             return None
 
-        if self._is_youtube_gid(gid):
+        if self._is_video_gid(gid):
             return None
 
         return self._call("aria2.getPeers", [gid])
@@ -589,7 +589,7 @@ class Aria2RPC:
         if not gid:
             return None
 
-        if self._is_youtube_gid(gid):
+        if self._is_video_gid(gid):
             return None
 
         return self._call("aria2.getServers", [gid])
@@ -600,7 +600,7 @@ class Aria2RPC:
         if not gid:
             return None
 
-        if self._is_youtube_gid(gid):
+        if self._is_video_gid(gid):
             return None
 
         return self._call("aria2.changePosition", [gid, pos, how])

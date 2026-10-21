@@ -19,8 +19,8 @@ from ui.dialogs import DownloadProgressDialog
 from ui.export_manager import ExportManager
 from ui.splash import SplashScreen
 from ui.widgets import DropOverlay
-from ui.youtube_progress import YouTubeProgressDialog
-from utils.helpers import is_ytdlp_supported
+from ui.video_progress import VideoProgressDialog
+from utils.helpers import is_ytdlp_supported, is_known_video_site
 from ui.main_window.ui_builders import UIBuilderMixin
 from ui.main_window.details_panel import DetailsPanelMixin
 from ui.main_window.table_view import TableViewMixin
@@ -29,7 +29,7 @@ from ui.main_window.stats_sync import StatsSyncMixin
 from ui.main_window.aria2_control import Aria2ControlMixin
 from ui.main_window.queues import QueuesMixin
 from ui.main_window.add_download import AddDownloadMixin
-from ui.main_window.youtube import YouTubeMixin
+from ui.main_window.video import VideoMixin
 from ui.main_window.progress_dialogs import ProgressDialogsMixin
 from ui.main_window.download_actions import DownloadActionsMixin
 from ui.main_window.retry import RetryMixin
@@ -49,7 +49,7 @@ class MainWindow(
     Aria2ControlMixin,
     QueuesMixin,
     AddDownloadMixin,
-    YouTubeMixin,
+    VideoMixin,
     ProgressDialogsMixin,
     DownloadActionsMixin,
     RetryMixin,
@@ -68,6 +68,8 @@ class MainWindow(
     """
 
     _aria2_error_signal = pyqtSignal(str)
+    # (url, supported) from the background yt-dlp probe
+    _ytdlp_probe_done = pyqtSignal(str, bool)
 
     def __init__(self) -> None:
         super().__init__()
@@ -94,7 +96,7 @@ class MainWindow(
         self._pending_pause: Set[str] = set()
         self._shutdown_dialog_shown: bool = False
         self._progress_dialogs: Dict[str, DownloadProgressDialog] = {}
-        self._youtube_dialogs: Dict[str, "YouTubeProgressDialog"] = {}
+        self._video_dialogs: Dict[str, "VideoProgressDialog"] = {}
         self._shutdown_dialog: Optional[QDialog] = None
         self._speed_samples: List[int] = []
         self._max_samples: int = 8
@@ -111,7 +113,7 @@ class MainWindow(
         self._details_visible = False
         self.details_panel = None
         self._completed_gids: Set[str] = set()
-        self._cancelling_youtube: Set[str] = set()
+        self._cancelling_video: Set[str] = set()
         # Downloads whose size fetch finished without a result (shown as
         # "Unknown"; they must not block starting a queue).
         self._size_unknown: Set[str] = set()
@@ -182,6 +184,7 @@ class MainWindow(
         self.proxy_manager = ProxyManager(self.store)
         self._apply_proxy_to_aria2()
         self._aria2_error_signal.connect(self._on_aria2_error)
+        self._ytdlp_probe_done.connect(self._on_ytdlp_probe_done)
         self.aria2.on_error = self._aria2_error_signal.emit
 
         self.splash.update_status("Connecting to aria2...", 45)
@@ -264,29 +267,35 @@ class MainWindow(
             )
             return
 
-        if kind == "youtube":
-            self._open_youtube_dialog_with_url(url)
+        # "youtube" is the kind older extension versions send.
+        if kind in ("video", "youtube"):
+            self._open_video_dialog_with_url(url)
             return
 
-        try:
-            from urllib.parse import urlparse
-
-            host = urlparse(url).hostname or ""
-            host = host.lower()
-            if (
-                host == "youtu.be"
-                or host.endswith(".youtube.com")
-                or host == "youtube.com"
-                or host.endswith(".youtube-nocookie.com")
-                or host == "music.youtube.com"
-            ):
-                self._open_youtube_dialog_with_url(url)
-                return
-        except Exception:
-            pass
-
-        if is_ytdlp_supported(url):
-            self._open_youtube_dialog_with_url(url)
+        # Well-known video sites skip the (slow) yt-dlp probe.
+        if is_known_video_site(url):
+            self._open_video_dialog_with_url(url)
             return
 
-        self._open_or_update_add_dialog([url])
+        # Unknown site: ask yt-dlp in a background thread (it can take up to
+        # 15 s) and decide when it answers, so the UI never freezes.
+        self._probe_url_async(url)
+
+    def _probe_url_async(self, url: str) -> None:
+        import threading
+
+        def run():
+            try:
+                ok = bool(is_ytdlp_supported(url))
+            except Exception:
+                ok = False
+            self._ytdlp_probe_done.emit(url, ok)
+
+        threading.Thread(target=run, name="YtdlpProbe", daemon=True).start()
+
+    @pyqtSlot(str, bool)
+    def _on_ytdlp_probe_done(self, url: str, supported: bool) -> None:
+        if supported:
+            self._open_video_dialog_with_url(url)
+        else:
+            self._open_or_update_add_dialog([url])

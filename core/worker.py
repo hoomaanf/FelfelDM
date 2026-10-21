@@ -13,7 +13,7 @@ import re
 import glob
 import time
 
-from core.youtube_worker import YouTubeWorker
+from core.video_worker import VideoWorker
 from core.data_store import DataStore
 
 
@@ -58,11 +58,14 @@ class BackendWorker(QThread):
 
     operation_result = pyqtSignal(str, object)
 
-    youtube_progress = pyqtSignal(str, int)
-    youtube_status = pyqtSignal(str, str)
-    youtube_speed = pyqtSignal(str, str, str)
-    youtube_finished = pyqtSignal(str, bool, str)
-    youtube_size_fetched = pyqtSignal(str, int)
+    MAX_PARALLEL_VIDEO_DOWNLOADS = 3
+    MAX_PARALLEL_SIZE_FETCHES = 3
+
+    video_progress = pyqtSignal(str, int)
+    video_status = pyqtSignal(str, str)
+    video_speed = pyqtSignal(str, str, str)
+    video_finished = pyqtSignal(str, bool, str)
+    video_size_fetched = pyqtSignal(str, int)
 
     def __init__(self, aria2, store: DataStore, proxy_manager=None):
         super().__init__()
@@ -82,11 +85,19 @@ class BackendWorker(QThread):
         self.remove_multi_requested.connect(
             self._on_remove_multi_requested, Qt.ConnectionType.QueuedConnection
         )
-        self.youtube_workers: Dict[str, YouTubeWorker] = {}
-        self.youtube_downloads: Dict[str, dict] = {}
-        self.youtube_lock = threading.Lock()
-        self.youtube_gids: Set[str] = set()
-        self._size_workers: Dict[str, YouTubeWorker] = {}
+        self.video_workers: Dict[str, VideoWorker] = {}
+        self.video_downloads: Dict[str, dict] = {}
+        self.video_lock = threading.Lock()
+        self.video_gids: Set[str] = set()
+        self._size_workers: Dict[str, VideoWorker] = {}
+        # Playlists add many items at once: only a few yt-dlp processes may
+        # run at the same time, the rest wait here for a free slot.
+        self._video_pending: List[str] = []
+        self._size_pending: List[str] = []
+        # Size-fetch threads that already reported their result but may still
+        # be returning from run(); kept alive (never waited on from the UI
+        # thread) until they are really finished.
+        self._size_finishing: List[VideoWorker] = []
 
         self.resume_requested.connect(
             self._on_resume_requested, Qt.ConnectionType.QueuedConnection
@@ -122,7 +133,7 @@ class BackendWorker(QThread):
             self._on_shutdown, Qt.ConnectionType.QueuedConnection
         )
 
-        self._load_youtube_downloads()
+        self._load_video_downloads()
 
     def _yt_verify_ssl(self) -> bool:
         """Certificate verification for yt-dlp, following the user setting.
@@ -135,39 +146,39 @@ class BackendWorker(QThread):
         except Exception:
             return True
 
-    def _load_youtube_downloads(self):
-        """Load YouTube downloads from datastore"""
+    def _load_video_downloads(self):
+        """Load Video downloads from datastore"""
         try:
-            youtube_items = self.store.get_all_youtube_downloads()
-            for item in youtube_items:
+            video_items = self.store.get_all_video_downloads()
+            for item in video_items:
                 download_id = item.get("id")
                 if download_id:
-                    self.youtube_downloads[download_id] = item
-                    self.youtube_gids.add(download_id)
+                    self.video_downloads[download_id] = item
+                    self.video_gids.add(download_id)
 
                     status = item.get("status", "")
                     print(
-                        f"📁 Loading YouTube download: {download_id} - status: {status}"
+                        f"📁 Loading Video download: {download_id} - status: {status}"
                     )
 
                     if status in ["completed", "cancelled"]:
-                        self.store.delete_youtube_download(download_id)
-                        if download_id in self.youtube_downloads:
-                            del self.youtube_downloads[download_id]
-                        self.youtube_gids.discard(download_id)
+                        self.store.delete_video_download(download_id)
+                        if download_id in self.video_downloads:
+                            del self.video_downloads[download_id]
+                        self.video_gids.discard(download_id)
                         print(f"🗑️ Removed completed/cancelled download: {download_id}")
                         continue
 
                     if status in ["downloading", "paused"]:
-                        self.youtube_downloads[download_id]["status"] = "paused"
-                        self.store.update_youtube_status(download_id, "paused")
+                        self.video_downloads[download_id]["status"] = "paused"
+                        self.store.update_video_status(download_id, "paused")
                         print(f"⏸️ Set download to paused: {download_id}")
 
             self._cleanup_completed_downloads()
-            print(f"📁 Loaded {len(self.youtube_downloads)} active YouTube downloads")
+            print(f"📁 Loaded {len(self.video_downloads)} active Video downloads")
 
         except Exception as e:
-            print(f"Error loading YouTube downloads: {e}")
+            print(f"Error loading Video downloads: {e}")
             import traceback
 
             traceback.print_exc()
@@ -175,12 +186,12 @@ class BackendWorker(QThread):
     def _cleanup_completed_downloads(self):
         """Clean up completed and cancelled downloads from datastore"""
         try:
-            all_downloads = self.store.get_all_youtube_downloads()
+            all_downloads = self.store.get_all_video_downloads()
             for item in all_downloads:
                 download_id = item.get("id")
                 status = item.get("status", "")
                 if status in ["completed", "cancelled"]:
-                    self.store.delete_youtube_download(download_id)
+                    self.store.delete_video_download(download_id)
                     print(f"🗑️ Cleaned up completed/cancelled: {download_id}")
         except Exception as e:
             print(f"Error cleaning up downloads: {e}")
@@ -213,11 +224,11 @@ class BackendWorker(QThread):
         """
         self.running = False
 
-        # Cancel YouTube workers (bounded: each has a 3s wait timeout).
+        # Cancel Video workers (bounded: each has a 3s wait timeout).
         try:
-            self._stop_all_youtube_downloads()
+            self._stop_all_video_downloads()
         except Exception as e:
-            print(f"⚠️ Error stopping YouTube workers: {e}")
+            print(f"⚠️ Error stopping Video workers: {e}")
 
         # Stop size-fetcher workers (bounded: 1s per worker).
         try:
@@ -302,12 +313,12 @@ class BackendWorker(QThread):
                 downloads_snapshot.append(complete_info)
 
         try:
-            youtube_status = self._get_youtube_status()
-            if not isinstance(youtube_status, list):
-                youtube_status = []
+            video_status = self._get_video_status()
+            if not isinstance(video_status, list):
+                video_status = []
         except Exception as e:
-            print(f"⚠️ [Worker] Error getting youtube status: {e}")
-            youtube_status = []
+            print(f"⚠️ [Worker] Error getting video status: {e}")
+            video_status = []
 
         snapshot = {
             "connected": True,
@@ -316,7 +327,7 @@ class BackendWorker(QThread):
             "active": active,
             "waiting": waiting,
             "stopped": stopped,
-            "youtube_downloads": youtube_status,
+            "video_downloads": video_status,
         }
 
         return snapshot
@@ -361,7 +372,7 @@ class BackendWorker(QThread):
                 "status"
             ) in ("active", "waiting", "paused"):
                 if (
-                    gid not in self.youtube_gids
+                    gid not in self.video_gids
                     and gid not in self._fetching_sizes
                     and gid not in self._fetched_sizes
                 ):
@@ -394,11 +405,11 @@ class BackendWorker(QThread):
                 "errorCode": partial_info.get("errorCode", None),
             }
 
-    def _get_youtube_status(self) -> List[dict]:
+    def _get_video_status(self) -> List[dict]:
         status_list = []
         try:
-            with self.youtube_lock:
-                for download_id, info in self.youtube_downloads.items():
+            with self.video_lock:
+                for download_id, info in self.video_downloads.items():
                     status_list.append(
                         {
                             "id": download_id,
@@ -412,7 +423,7 @@ class BackendWorker(QThread):
                         }
                     )
         except Exception as e:
-            print(f"⚠️ [Worker] Error getting youtube status: {e}")
+            print(f"⚠️ [Worker] Error getting video status: {e}")
             return []
         return status_list
 
@@ -449,7 +460,7 @@ class BackendWorker(QThread):
                 # Cooldown expired: forget the previous failure and retry.
                 del self._failed_sizes[gid]
 
-            if gid in self.youtube_gids:
+            if gid in self.video_gids:
                 return
 
             # Resolve the download_id and queue_name that own this gid.
@@ -854,30 +865,30 @@ class BackendWorker(QThread):
         except Exception as e:
             print(f"⚠️ [Worker] Shutdown failed: {e}")
 
-    def add_youtube_download(self, download_data: dict) -> str:
+    def add_video_download(self, download_data: dict) -> str:
         download_id = download_data.get("id") or str(uuid.uuid4())
-        existing = self.store.get_youtube_download(download_id)
+        existing = self.store.get_video_download(download_id)
         if existing:
             requested_status = download_data.get("status")
 
             print(f"📦 [ADD] Download already exists: {download_id}")
-            with self.youtube_lock:
+            with self.video_lock:
                 # Merge the persisted record into memory, but never let a
                 # stale persisted status override an explicit one from the
                 # caller. A queue Start re-adds an item that the store still
                 # has marked "paused" (it was only flipped in the UI), so
-                # copying that status verbatim made _start_youtube_download
+                # copying that status verbatim made _start_video_download
                 # bail out and the download never actually began.
                 merged = dict(existing)
                 if requested_status:
                     merged["status"] = requested_status
-                self.youtube_downloads[download_id] = merged
-                self.youtube_gids.add(download_id)
+                self.video_downloads[download_id] = merged
+                self.video_gids.add(download_id)
                 total_size = merged.get("total_size", 0)
                 status = merged.get("status", "paused")
 
             # Always resolve the size so the table can display it. Whether the
-            # download then *starts* is decided in _on_youtube_size_fetched(),
+            # download then *starts* is decided in _on_video_size_fetched(),
             # which only auto-starts when the status is "downloading" -- so a
             # queued (paused) item gets its size without starting, and a Start
             # request begins as soon as the size is known.
@@ -887,16 +898,16 @@ class BackendWorker(QThread):
             # fetched at all, leaving "Getting size..." forever.
             if total_size > 0:
                 if status == "downloading":
-                    self._start_youtube_download(download_id)
+                    self._start_video_download(download_id)
             else:
-                self._fetch_youtube_size(download_id)
+                self._fetch_video_size(download_id)
             return download_id
 
         download_item = {
             "id": download_id,
             "url": download_data["url"],
             "save_path": download_data["save_path"],
-            "download_type": "youtube",
+            "download_type": "video",
             "status": "paused",
             "progress": 0,
             "speed": "",
@@ -909,18 +920,18 @@ class BackendWorker(QThread):
             "completed_at": None,
             "error_message": "",
         }
-        self.store.add_youtube_download(download_item)
-        with self.youtube_lock:
-            self.youtube_downloads[download_id] = download_item
-            self.youtube_gids.add(download_id)
-        self._fetch_youtube_size(download_id)
+        self.store.add_video_download(download_item)
+        with self.video_lock:
+            self.video_downloads[download_id] = download_item
+            self.video_gids.add(download_id)
+        self._fetch_video_size(download_id)
         return download_id
 
-    def _fetch_youtube_size(self, download_id: str):
-        with self.youtube_lock:
-            if download_id not in self.youtube_downloads:
+    def _fetch_video_size(self, download_id: str):
+        with self.video_lock:
+            if download_id not in self.video_downloads:
                 return
-            item = self.youtube_downloads[download_id]
+            item = self.video_downloads[download_id]
             if item.get("total_size", 0) > 0:
                 return
 
@@ -932,6 +943,12 @@ class BackendWorker(QThread):
                 print(f"⏭️ [SIZE] Already fetching size for {download_id}")
                 return
 
+            running = sum(1 for w in self._size_workers.values() if w.isRunning())
+            if running >= self.MAX_PARALLEL_SIZE_FETCHES:
+                if download_id not in self._size_pending:
+                    self._size_pending.append(download_id)
+                return
+
             url = item["url"]
             save_path = item["save_path"]
             format_type = item.get("yt_options", {}).get("format", "mp4")
@@ -941,7 +958,7 @@ class BackendWorker(QThread):
         format_id = item.get("yt_options", {}).get("format_id")
         quality = item.get("yt_options", {}).get("quality", "best")
         yt_opts = item.get("yt_options", {})
-        size_worker = YouTubeWorker(
+        size_worker = VideoWorker(
             url=url,
             output_path=save_path,
             format_type=format_type,
@@ -956,14 +973,16 @@ class BackendWorker(QThread):
         )
 
         size_worker.size_fetched.connect(
-            lambda size: self._on_youtube_size_fetched(download_id, size)
+            lambda size, w=size_worker: self._on_video_size_fetched(
+                download_id, size, w
+            )
         )
         size_worker.is_fetching_size = True
         size_worker.start()
         self._size_workers[download_id] = size_worker
         print(f"📏 [SIZE] Worker started for: {download_id}")
 
-    def _on_youtube_size_fetched(self, download_id: str, size: int):
+    def _on_video_size_fetched(self, download_id: str, size: int, source=None):
         print(f"📏 [SIZE] Received size for {download_id}: {size} bytes")
 
         # The size fetcher reports 0 on failure and 1 when yt-dlp answered
@@ -973,63 +992,72 @@ class BackendWorker(QThread):
             size = 0
 
         should_auto_start = False
-        with self.youtube_lock:
-            if download_id in self.youtube_downloads:
-                item = self.youtube_downloads[download_id]
-                self.youtube_downloads[download_id]["total_size"] = size
+        with self.video_lock:
+            if download_id in self.video_downloads:
+                item = self.video_downloads[download_id]
+                self.video_downloads[download_id]["total_size"] = size
+                # The size was asked for once. A result of 0 means "unknown"
+                # (failed, or the site gives no size), NOT "ask again":
+                # without this flag a failing fetch looped forever, because
+                # starting a download with total_size == 0 fetches the size.
+                self.video_downloads[download_id]["size_checked"] = True
 
                 current_status = item.get("status", "paused")
-                worker_exists = download_id in self.youtube_workers
+                worker_exists = download_id in self.video_workers
 
                 if current_status == "downloading" and not worker_exists:
                     should_auto_start = True
-                    self.store.update_youtube_download(
+                    self.store.update_video_download(
                         download_id,
                         {"total_size": size},
                     )
                 else:
-                    self.youtube_downloads[download_id]["status"] = "paused"
-                    self.store.update_youtube_download(
+                    self.video_downloads[download_id]["status"] = "paused"
+                    self.store.update_video_download(
                         download_id,
                         {"total_size": size, "status": "paused"},
                     )
 
-        self.youtube_size_fetched.emit(download_id, size)
+        self.video_size_fetched.emit(download_id, size)
 
         if should_auto_start:
             print(f"🎬 [SIZE] Auto-starting download after size fetch: {download_id}")
-            self._start_youtube_download(download_id)
+            self._start_video_download(download_id)
 
-        if download_id in self._size_workers:
-            try:
-                worker = self._size_workers[download_id]
-                if worker.isRunning():
-                    # quit() is a no-op on YouTubeWorker (custom run());
-                    # use its cooperative stop instead.
-                    worker.stop_for_removal()
-            except Exception as e:
-                print(f"⚠️ [Worker] Could not stop size worker: {e}")
-            self._size_workers.pop(download_id, None)
+        # Release the worker that produced this result. Never wait() for it
+        # here: this runs on the UI thread and the thread is only a moment
+        # from finishing. (Earlier code called stop_for_removal(), which
+        # blocks up to 3 s, and it did so on whatever worker was registered
+        # for this id -- including a *new* fetch started just above.)
+        if source is None or self._size_workers.get(download_id) is source:
+            old = self._size_workers.pop(download_id, None)
+        else:
+            old = source
+        if old is not None:
+            self._size_finishing.append(old)
+        self._size_finishing = [w for w in self._size_finishing if w.isRunning()]
 
-    def _start_youtube_download(self, download_id: str):
-        with self.youtube_lock:
-            if download_id not in self.youtube_downloads:
-                print(f"❌ [START] download_id not in youtube_downloads")
+        self._drain_size_pending()
+
+    def _start_video_download(self, download_id: str):
+        with self.video_lock:
+            if download_id not in self.video_downloads:
+                print(f"❌ [START] download_id not in video_downloads")
                 return
-            item = self.youtube_downloads[download_id]
+            item = self.video_downloads[download_id]
             total_size = item.get("total_size", 0)
             status = item.get("status", "paused")
 
             print(f"🔍 [START] total_size={total_size}, status={status}")
-            print(f"🔍 [START] worker exists: {download_id in self.youtube_workers}")
+            print(f"🔍 [START] worker exists: {download_id in self.video_workers}")
 
-            if download_id in self.youtube_workers:
+            if download_id in self.video_workers:
                 print(f"⏭️ [START] Worker already exists for {download_id}")
                 return
 
-            if total_size == 0:
+            size_known = total_size > 0 or bool(item.get("size_checked"))
+            if not size_known:
                 print(f"⚠️ [START] total_size is 0, will fetch size")
-                pass
             else:
                 if status == "completed":
                     print(f"⏭️ [START] Status is completed, skipping")
@@ -1040,15 +1068,25 @@ class BackendWorker(QThread):
                 cookie_file = item.get("yt_options", {}).get("cookies_path")
                 proxy_url = item.get("proxy")
 
-        if total_size == 0:
-            self._fetch_youtube_size(download_id)
+        if not size_known:
+            self._fetch_video_size(download_id)
             return
 
-        print(f"🔨 [START] Creating YouTubeWorker for {download_id}")
+        with self.video_lock:
+            active = sum(1 for w in self.video_workers.values() if w.is_running())
+            must_wait = active >= self.MAX_PARALLEL_VIDEO_DOWNLOADS
+            if must_wait and download_id not in self._video_pending:
+                self._video_pending.append(download_id)
+        if must_wait:
+            print(f"⏳ [START] Waiting for a free slot: {download_id}")
+            self._on_video_status(download_id, "⏳ Waiting for a free slot...")
+            return
+
+        print(f"🔨 [START] Creating VideoWorker for {download_id}")
         format_id = item.get("yt_options", {}).get("format_id")
         quality = item.get("yt_options", {}).get("quality", "best")
         yt_opts = item.get("yt_options", {})
-        worker = YouTubeWorker(
+        worker = VideoWorker(
             url=url,
             output_path=save_path,
             format_type=format_type,
@@ -1061,26 +1099,26 @@ class BackendWorker(QThread):
             download_id=download_id,
             verify_ssl=self._yt_verify_ssl(),
         )
-        worker.progress.connect(lambda p: self._on_youtube_progress(download_id, p))
-        worker.status.connect(lambda s: self._on_youtube_status(download_id, s))
-        worker.speed_eta.connect(lambda s, e: self._on_youtube_speed(download_id, s, e))
+        worker.progress.connect(lambda p: self._on_video_progress(download_id, p))
+        worker.status.connect(lambda s: self._on_video_status(download_id, s))
+        worker.speed_eta.connect(lambda s, e: self._on_video_speed(download_id, s, e))
         worker.finished.connect(
-            lambda success, msg: self._on_youtube_finished(download_id, success, msg)
+            lambda success, msg: self._on_video_finished(download_id, success, msg)
         )
-        with self.youtube_lock:
-            self.youtube_workers[download_id] = worker
-            if download_id in self.youtube_downloads:
-                self.youtube_downloads[download_id]["status"] = "downloading"
-                self.store.update_youtube_status(download_id, "downloading")
-        self.youtube_status.emit(download_id, "downloading")
+        with self.video_lock:
+            self.video_workers[download_id] = worker
+            if download_id in self.video_downloads:
+                self.video_downloads[download_id]["status"] = "downloading"
+                self.store.update_video_status(download_id, "downloading")
+        self.video_status.emit(download_id, "downloading")
         print(f"▶️ [START] Calling worker.start() for {download_id}")
         worker.start()
-        print(f"🎬 YouTube download started: {download_id}")
+        print(f"🎬 Video download started: {download_id}")
 
-    def _resume_youtube_download(self, item: dict):
+    def _resume_video_download(self, item: dict):
         download_id = item["id"]
         yt_options = item.get("yt_options", {})
-        worker = YouTubeWorker(
+        worker = VideoWorker(
             url=item["url"],
             output_path=item["save_path"],
             format_type=yt_options.get("format", "mp4"),
@@ -1093,48 +1131,56 @@ class BackendWorker(QThread):
             download_id=download_id,
             verify_ssl=self._yt_verify_ssl(),
         )
-        worker.progress.connect(lambda p: self._on_youtube_progress(download_id, p))
-        worker.status.connect(lambda s: self._on_youtube_status(download_id, s))
-        worker.speed_eta.connect(lambda s, e: self._on_youtube_speed(download_id, s, e))
+        worker.progress.connect(lambda p: self._on_video_progress(download_id, p))
+        worker.status.connect(lambda s: self._on_video_status(download_id, s))
+        worker.speed_eta.connect(lambda s, e: self._on_video_speed(download_id, s, e))
         worker.finished.connect(
-            lambda success, msg: self._on_youtube_finished(download_id, success, msg)
+            lambda success, msg: self._on_video_finished(download_id, success, msg)
         )
-        self.youtube_workers[download_id] = worker
+        self.video_workers[download_id] = worker
         item["status"] = "downloading"
-        self.store.update_youtube_status(download_id, "downloading")
+        self.store.update_video_status(download_id, "downloading")
         worker.start()
-        print(f"🎬 YouTube download resumed: {download_id}")
+        print(f"🎬 Video download resumed: {download_id}")
 
-    def pause_youtube_download(self, download_id: str):
+    def pause_video_download(self, download_id: str):
         print(f"⏸️ [Worker] Pausing: {download_id}")
         worker = None
-        with self.youtube_lock:
-            if download_id in self.youtube_workers:
-                worker = self.youtube_workers[download_id]
+        with self.video_lock:
+            if download_id in self._video_pending:
+                # Never started: just take it off the waiting list.
+                self._video_pending.remove(download_id)
+                if download_id in self.video_downloads:
+                    self.video_downloads[download_id]["status"] = "paused"
+                    self.store.update_video_status(download_id, "paused")
+                self.video_status.emit(download_id, "paused")
+                return
+            if download_id in self.video_workers:
+                worker = self.video_workers[download_id]
         if worker and worker.is_running():
             worker.pause()
-            with self.youtube_lock:
-                if download_id in self.youtube_downloads:
-                    self.youtube_downloads[download_id]["status"] = "paused"
-                    self.store.update_youtube_status(download_id, "paused")
-            self.youtube_status.emit(download_id, "paused")
+            with self.video_lock:
+                if download_id in self.video_downloads:
+                    self.video_downloads[download_id]["status"] = "paused"
+                    self.store.update_video_status(download_id, "paused")
+            self.video_status.emit(download_id, "paused")
 
-    def resume_youtube_download(self, download_id: str):
+    def resume_video_download(self, download_id: str):
         print(f"▶️ [Worker] Resuming: {download_id}")
         worker = None
-        with self.youtube_lock:
-            if download_id in self.youtube_workers:
-                worker = self.youtube_workers[download_id]
+        with self.video_lock:
+            if download_id in self.video_workers:
+                worker = self.video_workers[download_id]
         if worker and worker.is_running():
             worker.resume()
-            with self.youtube_lock:
-                if download_id in self.youtube_downloads:
-                    self.youtube_downloads[download_id]["status"] = "downloading"
-                    self.store.update_youtube_status(download_id, "downloading")
-            self.youtube_status.emit(download_id, "downloading")
+            with self.video_lock:
+                if download_id in self.video_downloads:
+                    self.video_downloads[download_id]["status"] = "downloading"
+                    self.store.update_video_status(download_id, "downloading")
+            self.video_status.emit(download_id, "downloading")
 
-    def cancel_youtube_download(self, download_id: str):
-        """Cancel a YouTube download and safely remove only its own files.
+    def cancel_video_download(self, download_id: str):
+        """Cancel a Video download and safely remove only its own files.
 
         C29 fix: the previous implementation unconditionally called
         os.remove(file_path) where file_path was derived from the stored
@@ -1143,24 +1189,28 @@ class BackendWorker(QThread):
         It also built glob patterns from the title, which are unsafe if the
         title contains glob metacharacters.
 
-        Now: we only ask the YouTubeWorker to clean up (it knows exactly
+        Now: we only ask the VideoWorker to clean up (it knows exactly
         which files it produced), and we only remove the final target file
         if we can prove it was created by THIS run — i.e. its mtime is not
         older than the moment this download was started, and it lives
         directly inside save_path.
         """
-        print(f"🗑️ [Worker] Cancelling YouTube download: {download_id}")
+        print(f"🗑️ [Worker] Cancelling Video download: {download_id}")
         worker = None
         save_path = None
         expected_final_path = None
         download_started_at = None
 
-        with self.youtube_lock:
-            if download_id in self.youtube_workers:
-                worker = self.youtube_workers[download_id]
-                del self.youtube_workers[download_id]
-            if download_id in self.youtube_downloads:
-                item = self.youtube_downloads[download_id]
+        with self.video_lock:
+            if download_id in self._video_pending:
+                self._video_pending.remove(download_id)
+            if download_id in self._size_pending:
+                self._size_pending.remove(download_id)
+            if download_id in self.video_workers:
+                worker = self.video_workers[download_id]
+                del self.video_workers[download_id]
+            if download_id in self.video_downloads:
+                item = self.video_downloads[download_id]
                 yt_options = item.get("yt_options", {})
                 title = yt_options.get("title", "Unknown")
                 format_type = yt_options.get("format", "video")
@@ -1199,10 +1249,10 @@ class BackendWorker(QThread):
                 expected_final_path, save_path, download_started_at
             )
 
-        with self.youtube_lock:
-            if download_id in self.youtube_downloads:
-                del self.youtube_downloads[download_id]
-            self.youtube_gids.discard(download_id)
+        with self.video_lock:
+            if download_id in self.video_downloads:
+                del self.video_downloads[download_id]
+            self.video_gids.discard(download_id)
             if download_id in self._size_workers:
                 try:
                     size_worker = self._size_workers.pop(download_id, None)
@@ -1212,7 +1262,7 @@ class BackendWorker(QThread):
                     print(f"⚠️ [Worker] Could not stop size worker: {e}")
 
         print(
-            f"🗑️ [Worker] YouTube download cancelled and its files deleted: "
+            f"🗑️ [Worker] Video download cancelled and its files deleted: "
             f"{download_id}"
         )
 
@@ -1267,22 +1317,22 @@ class BackendWorker(QThread):
         except OSError as e:
             print(f"⚠️ [Worker] Could not delete {real_file}: {e}")
 
-    def cancel_youtube_download_without_delete(self, download_id: str):
-        print(f"🗑️ [Worker] Cancelling YouTube download without delete: {download_id}")
+    def cancel_video_download_without_delete(self, download_id: str):
+        print(f"🗑️ [Worker] Cancelling Video download without delete: {download_id}")
         worker = None
-        with self.youtube_lock:
-            if download_id in self.youtube_workers:
-                worker = self.youtube_workers[download_id]
-                del self.youtube_workers[download_id]
+        with self.video_lock:
+            if download_id in self.video_workers:
+                worker = self.video_workers[download_id]
+                del self.video_workers[download_id]
 
         if worker and worker.is_running():
             worker.cancel()
             worker.wait(1000)
 
-        with self.youtube_lock:
-            if download_id in self.youtube_downloads:
-                del self.youtube_downloads[download_id]
-            self.youtube_gids.discard(download_id)
+        with self.video_lock:
+            if download_id in self.video_downloads:
+                del self.video_downloads[download_id]
+            self.video_gids.discard(download_id)
             if download_id in self._size_workers:
                 try:
                     size_worker = self._size_workers.pop(download_id, None)
@@ -1291,77 +1341,115 @@ class BackendWorker(QThread):
                 except Exception as e:
                     print(f"⚠️ [Worker] Could not stop size worker: {e}")
 
-        print(f"🗑️ [Worker] YouTube download cancelled (files kept): {download_id}")
+        print(f"🗑️ [Worker] Video download cancelled (files kept): {download_id}")
 
-    def _on_youtube_progress(self, download_id: str, progress: int):
-        with self.youtube_lock:
-            if download_id in self.youtube_downloads:
-                self.youtube_downloads[download_id]["progress"] = progress
-                self.store.update_youtube_progress(download_id, progress)
-        self.youtube_progress.emit(download_id, progress)
+    def _on_video_progress(self, download_id: str, progress: int):
+        with self.video_lock:
+            if download_id in self.video_downloads:
+                self.video_downloads[download_id]["progress"] = progress
+                self.store.update_video_progress(download_id, progress)
+        self.video_progress.emit(download_id, progress)
 
-    def _on_youtube_status(self, download_id: str, status: str):
-        with self.youtube_lock:
-            if download_id in self.youtube_downloads:
-                self.youtube_downloads[download_id]["status_text"] = status
-        self.youtube_status.emit(download_id, status)
+    def _on_video_status(self, download_id: str, status: str):
+        with self.video_lock:
+            if download_id in self.video_downloads:
+                self.video_downloads[download_id]["status_text"] = status
+        self.video_status.emit(download_id, status)
 
-    def _on_youtube_speed(self, download_id: str, speed: str, eta: str):
-        with self.youtube_lock:
-            if download_id in self.youtube_downloads:
-                self.youtube_downloads[download_id]["speed"] = speed
-                self.youtube_downloads[download_id]["eta"] = eta
-        self.youtube_speed.emit(download_id, speed, eta)
+    def _on_video_speed(self, download_id: str, speed: str, eta: str):
+        with self.video_lock:
+            if download_id in self.video_downloads:
+                self.video_downloads[download_id]["speed"] = speed
+                self.video_downloads[download_id]["eta"] = eta
+        self.video_speed.emit(download_id, speed, eta)
 
-    def _on_youtube_finished(self, download_id: str, success: bool, message: str):
+    def _on_video_finished(self, download_id: str, success: bool, message: str):
         print(
-            f"🎬 [Worker] YouTube download finished: {download_id} - Success: {success} - Message: {message}"
+            f"🎬 [Worker] Video download finished: {download_id} - Success: {success} - Message: {message}"
         )
         if "cancelled" in message.lower() or "cancel" in message.lower():
-            with self.youtube_lock:
-                if download_id in self.youtube_downloads:
-                    del self.youtube_downloads[download_id]
-                if download_id in self.youtube_workers:
-                    del self.youtube_workers[download_id]
-                self.youtube_gids.discard(download_id)
+            with self.video_lock:
+                if download_id in self.video_downloads:
+                    del self.video_downloads[download_id]
+                if download_id in self.video_workers:
+                    del self.video_workers[download_id]
+                self.video_gids.discard(download_id)
+            self._start_next_pending_video()
             return
 
-        with self.youtube_lock:
-            if download_id in self.youtube_downloads:
+        with self.video_lock:
+            if download_id in self.video_downloads:
                 if success:
-                    self.youtube_downloads[download_id]["status"] = "completed"
-                    self.youtube_downloads[download_id]["progress"] = 100
-                    self.store.update_youtube_status(download_id, "completed")
+                    self.video_downloads[download_id]["status"] = "completed"
+                    self.video_downloads[download_id]["progress"] = 100
+                    self.store.update_video_status(download_id, "completed")
                 else:
-                    self.youtube_downloads[download_id]["status"] = "error"
-                    self.youtube_downloads[download_id]["error_message"] = message
-                    self.store.update_youtube_status(download_id, "error")
-            if download_id in self.youtube_workers:
-                del self.youtube_workers[download_id]
-            self.youtube_gids.discard(download_id)
+                    self.video_downloads[download_id]["status"] = "error"
+                    self.video_downloads[download_id]["error_message"] = message
+                    self.store.update_video_status(download_id, "error")
+            if download_id in self.video_workers:
+                del self.video_workers[download_id]
+            self.video_gids.discard(download_id)
 
-        self.youtube_finished.emit(download_id, success, message)
+        self.video_finished.emit(download_id, success, message)
+        self._start_next_pending_video()
 
-    def _stop_all_youtube_downloads(self):
+    def _start_next_pending_video(self):
+        """Start waiting downloads while there are free slots."""
+        while True:
+            with self.video_lock:
+                if not self._video_pending:
+                    return
+                active = sum(1 for w in self.video_workers.values() if w.is_running())
+                if active >= self.MAX_PARALLEL_VIDEO_DOWNLOADS:
+                    return
+                nxt = self._video_pending.pop(0)
+                item = self.video_downloads.get(nxt)
+                valid = (
+                    item is not None
+                    and item.get("status") == "downloading"
+                    and nxt not in self.video_workers
+                )
+            if valid:
+                self._start_video_download(nxt)
+                # The new worker is registered synchronously; loop to
+                # re-check the slot count.
+
+    def _drain_size_pending(self):
+        """Start waiting size/metadata fetches while there are free slots."""
+        while True:
+            with self.video_lock:
+                if not self._size_pending:
+                    return
+                running = sum(1 for w in self._size_workers.values() if w.isRunning())
+                if running >= self.MAX_PARALLEL_SIZE_FETCHES:
+                    return
+                nxt = self._size_pending.pop(0)
+            self._fetch_video_size(nxt)
+
+    def _stop_all_video_downloads(self):
         # Take a snapshot of the workers under the lock, then cancel them
         # OUTSIDE the lock. cancel() calls self.wait() internally, so
-        # holding youtube_lock across it would block any other thread that
+        # holding video_lock across it would block any other thread that
         # needs the lock (and, since this is called from the UI thread via
         # quit_app -> worker.stop(), it would freeze the whole UI).
-        with self.youtube_lock:
-            workers_snapshot = list(self.youtube_workers.items())
-            self.youtube_workers.clear()
+        with self.video_lock:
+            workers_snapshot = list(self.video_workers.items())
+            self.video_workers.clear()
+            self._video_pending.clear()
+            self._size_pending.clear()
+            self._size_finishing.clear()
 
         for download_id, worker in workers_snapshot:
             try:
                 if worker.is_running():
                     worker.cancel()
             except Exception as e:
-                print(f"⚠️ Error cancelling YouTube worker {download_id[:8]}: {e}")
-            with self.youtube_lock:
-                if download_id in self.youtube_downloads:
-                    self.youtube_downloads[download_id]["status"] = "paused"
-                    self.store.update_youtube_status(download_id, "paused")
+                print(f"⚠️ Error cancelling Video worker {download_id[:8]}: {e}")
+            with self.video_lock:
+                if download_id in self.video_downloads:
+                    self.video_downloads[download_id]["status"] = "paused"
+                    self.store.update_video_status(download_id, "paused")
 
     def _stop_all_size_workers(self):
         for download_id, worker in list(self._size_workers.items()):

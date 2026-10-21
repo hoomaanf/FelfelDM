@@ -447,7 +447,7 @@ class QueuesMixin:
                 continue
 
             # The scheduler thread only unpauses downloads aria2 still
-            # knows. It cannot start YouTube downloads, retry errored or
+            # knows. It cannot start Video downloads, retry errored or
             # stopped ones, or re-add downloads aria2 has forgotten, so a
             # scheduled queue could log "started" and download nothing.
             # Run the same logic as the Start button for those.
@@ -484,16 +484,16 @@ class QueuesMixin:
                 if not info:
                     continue
 
-                # The scheduler thread skips YouTube downloads (it cannot
+                # The scheduler thread skips Video downloads (it cannot
                 # talk to the yt-dlp workers), so without this they kept
                 # downloading after the schedule window ended.
                 dl = self._all_downloads.get(gid)
                 if (
                     dl is not None
-                    and dl.get("download_type") == "youtube"
+                    and dl.get("download_type") == "video"
                     and dl.get("status") in ("downloading", "active", "waiting")
                 ):
-                    self._pause_youtube_download(gid)
+                    self._pause_video_download(gid)
                     dl["status"] = "paused"
                     info["status"] = "paused"
 
@@ -531,20 +531,20 @@ class QueuesMixin:
         """Start every download of `q` (also used by the scheduler).
 
         Retries errored/stopped downloads, resumes the rest in aria2 and
-        starts the YouTube ones. Shared by the Start button and the
+        starts the Video ones. Shared by the Start button and the
         schedule so both behave the same.
         """
         error_gids = []
         normal_gids = []
-        youtube_gids = []
+        video_gids = []
 
         for gid in q.downloads:
             if gid in self._all_downloads:
                 status = self._all_downloads[gid].get("status", "")
                 dtype = self._all_downloads[gid].get("download_type", "normal")
 
-                if dtype == "youtube":
-                    youtube_gids.append(gid)
+                if dtype == "video":
+                    video_gids.append(gid)
                     continue
 
                 if status in ["error", "stopped"]:
@@ -581,9 +581,9 @@ class QueuesMixin:
         else:
             self._queue_worker = None
 
-        for gid in youtube_gids:
-            print(f"🎬 Starting YouTube download from queue start: {gid}")
-            self._start_youtube_download(gid)
+        for gid in video_gids:
+            print(f"🎬 Starting Video download from queue start: {gid}")
+            self._start_video_download(gid)
 
         self.start_queue_btn.setEnabled(False)
         self.pause_queue_btn.setEnabled(False)
@@ -673,12 +673,12 @@ class QueuesMixin:
             info = q.downloads_info.get(gid, {})
             dtype = info.get("download_type", "normal")
 
-            if dtype == "youtube":
-                # YouTube handled via the existing _pause_youtube_download path.
+            if dtype == "video":
+                # Video handled via the existing _pause_video_download path.
                 if gid in self._all_downloads:
                     st = self._all_downloads[gid].get("status", "")
                     if st in ("downloading", "active", "waiting"):
-                        self._pause_youtube_download(gid)
+                        self._pause_video_download(gid)
                         self._all_downloads[gid]["status"] = "paused"
                         if gid in q.downloads_info:
                             q.downloads_info[gid]["status"] = "paused"

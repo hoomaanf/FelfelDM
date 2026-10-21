@@ -184,9 +184,9 @@ class ScheduleManagerThread(QThread):
                 continue
 
             dtype = info.get("download_type", "normal")
-            if dtype == "youtube":
-                # YouTube downloads are handled by the worker's
-                # add_youtube_download path when the UI processes the
+            if dtype == "video":
+                # Video downloads are handled by the worker's
+                # add_video_download path when the UI processes the
                 # start signal. Skip them here — a locked screen can't
                 # safely interact with the yt-dlp workers, and resuming
                 # a paused yt-dlp mid-process is what the UI does.
@@ -258,7 +258,7 @@ class ScheduleManagerThread(QThread):
                 continue
 
             dtype = info.get("download_type", "normal")
-            if dtype == "youtube":
+            if dtype == "video":
                 continue  # handled by UI when unlocked
 
             aria2_gid = info.get("aria2_gid")

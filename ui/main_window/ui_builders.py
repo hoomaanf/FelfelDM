@@ -387,11 +387,11 @@ class UIBuilderMixin:
         tb_lay.addWidget(divider())
         tb_lay.addSpacing(4)
 
-        self.btn_youtube = QPushButton(get_icon("applications-multimedia"), " YouTube")
-        self.btn_youtube.setIconSize(icon_size)
-        self.btn_youtube.setText(" YouTube")
-        self.btn_youtube.clicked.connect(self._youtube_download)
-        tb_lay.addWidget(self.btn_youtube)
+        self.btn_video = QPushButton(get_icon("applications-multimedia"), " Video")
+        self.btn_video.setIconSize(icon_size)
+        self.btn_video.setText(" Video")
+        self.btn_video.clicked.connect(self._video_download)
+        tb_lay.addWidget(self.btn_video)
 
         tb_lay.addStretch()
 

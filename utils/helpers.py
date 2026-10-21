@@ -324,14 +324,45 @@ def get_retry_status(download: dict) -> str:
 
     return "—"
 
+# Sites that yt-dlp handles well and that people commonly download from.
+# Links on these hosts go straight to the video dialog without a probe.
+# Any other site is still tried through is_ytdlp_supported().
+KNOWN_VIDEO_HOSTS = (
+    "youtube.com", "youtu.be", "youtube-nocookie.com",
+    "vimeo.com", "dailymotion.com", "twitch.tv",
+    "instagram.com", "facebook.com", "fb.watch", "tiktok.com",
+    "twitter.com", "x.com", "reddit.com", "v.redd.it",
+    "soundcloud.com", "bandcamp.com", "mixcloud.com",
+    "bilibili.com", "rumble.com", "odysee.com", "streamable.com",
+    "ted.com", "vk.com", "ok.ru", "aparat.com",
+)
+
+
+def is_known_video_site(url: str) -> bool:
+    """True if the URL's host is (a subdomain of) a well-known video site."""
+    from urllib.parse import urlparse
+
+    try:
+        host = (urlparse(url).hostname or "").lower()
+    except Exception:
+        return False
+    return any(host == h or host.endswith("." + h) for h in KNOWN_VIDEO_HOSTS)
+
+
 def is_ytdlp_supported(url: str) -> bool:
-    """Check if yt-dlp can handle this URL (simulate mode, no download)."""
+    """Check if yt-dlp can handle this URL (simulate mode, no download).
+
+    Blocks for up to 15 s: call it from a worker thread when possible.
+    Playlists are probed with their first item only, so a long playlist does
+    not time the check out.
+    """
     import subprocess
     if not url or not url.startswith(("http://", "https://")):
         return False
     try:
         result = subprocess.run(
-            ["yt-dlp", "--simulate", "--quiet", "--no-warnings", url],
+            ["yt-dlp", "--simulate", "--quiet", "--no-warnings",
+             "--playlist-items", "1", url],
             capture_output=True,
             timeout=15,
         )

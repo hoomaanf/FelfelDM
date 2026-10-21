@@ -256,6 +256,23 @@ class Queue:
         return None
 
 
+def _normalize_legacy_video_record(d) -> bool:
+    """Rewrite the pre-rename "youtube" markers of one stored download.
+
+    Returns True if the record was changed.
+    """
+    if not isinstance(d, dict):
+        return False
+    changed = False
+    if d.get("download_type") == "youtube":
+        d["download_type"] = "video"
+        changed = True
+    if d.get("category") == "🎬 YouTube":
+        d["category"] = "🎬 Video"
+        changed = True
+    return changed
+
+
 class DataStore:
     def __init__(self):
 
@@ -266,7 +283,9 @@ class DataStore:
         self.data_file = self.config_dir / "data.json"
         self.backup_dir = self.config_dir / "backups"
         self.backup_dir.mkdir(exist_ok=True)
-        self.youtube_downloads_file = self.config_dir / "youtube_downloads.json"
+        self.video_downloads_file = self.config_dir / "video_downloads.json"
+        # Name used before the YouTube -> Video rename; still read once.
+        self._legacy_video_downloads_file = self.config_dir / "youtube_downloads.json"
 
         # RLock: _mark_main_dirty() is called from inside `with self._lock:`
         # blocks (see load()), so a plain Lock would deadlock the same thread.
@@ -276,7 +295,7 @@ class DataStore:
         self.queues: List[Queue] = []
         self.settings = self._get_default_settings()
         self.download_proxies: Dict[str, Any] = {}
-        self.youtube_downloads: Dict[str, dict] = {}
+        self.video_downloads: Dict[str, dict] = {}
         self.rule_engine = RuleEngine()
 
         self._main_dirty = False
@@ -422,6 +441,12 @@ class DataStore:
                 for q_data in data.get("queues", []):
                     if not isinstance(q_data, dict):
                         continue
+                    # Downloads saved before the YouTube -> Video rename.
+                    info_map = q_data.get("downloads_info")
+                    if isinstance(info_map, dict):
+                        for rec in info_map.values():
+                            if _normalize_legacy_video_record(rec):
+                                needs_save_after_migration = True
                     try:
                         queues.append(Queue.from_dict(q_data))
                     except Exception as e:
@@ -466,7 +491,7 @@ class DataStore:
                 self.queues = [Queue("Default", paused=True)]
                 self._mark_main_dirty()
 
-        self._load_youtube_downloads()
+        self._load_video_downloads()
 
     def _load_secret(self) -> None:
         if KEYRING_AVAILABLE:
@@ -637,23 +662,36 @@ class DataStore:
                 traceback.print_exc()
                 time.sleep(1.0)
 
-    def _load_youtube_downloads(self) -> None:
-        if not self.youtube_downloads_file.exists():
-            print("📁 No YouTube downloads file found")
-            self.youtube_downloads = {}
+    def _load_video_downloads(self) -> None:
+        source = self.video_downloads_file
+        migrating = False
+        if not source.exists() and self._legacy_video_downloads_file.exists():
+            # First start after the rename: read the old file. The old file
+            # is left in place; the next flush writes video_downloads.json.
+            source = self._legacy_video_downloads_file
+            migrating = True
+        if not source.exists():
+            print("📁 No Video downloads file found")
+            self.video_downloads = {}
             return
         try:
-            with open(self.youtube_downloads_file, "r", encoding="utf-8") as f:
+            with open(source, "r", encoding="utf-8") as f:
                 data = json.load(f)
+            downloads = data.get("downloads", {})
+            for rec in downloads.values():
+                _normalize_legacy_video_record(rec)
             with self._yt_lock:
-                self.youtube_downloads = data.get("downloads", {})
-            print(f"📁 Loaded {len(self.youtube_downloads)} YouTube downloads")
+                self.video_downloads = downloads
+            if migrating:
+                print("🔄 [Migration] Imported youtube_downloads.json")
+                self._mark_yt_dirty()
+            print(f"📁 Loaded {len(self.video_downloads)} Video downloads")
         except Exception as e:
-            print(f"⚠️ Error loading YouTube downloads: {e}")
-            self.youtube_downloads = {}
+            print(f"⚠️ Error loading Video downloads: {e}")
+            self.video_downloads = {}
 
-    def _flush_youtube_downloads(self) -> None:
-        """Write youtube_downloads.json if dirty.
+    def _flush_video_downloads(self) -> None:
+        """Write video_downloads.json if dirty.
 
         Clears the dirty flag BEFORE the snapshot and write, so any
         update that lands during the write re-sets the flag and is
@@ -662,29 +700,29 @@ class DataStore:
         self._yt_dirty.clear()
 
         with self._yt_lock:
-            snapshot = deepcopy(self.youtube_downloads)
+            snapshot = deepcopy(self.video_downloads)
 
         try:
             _atomic_write_json(
-                self.youtube_downloads_file,
+                self.video_downloads_file,
                 {"downloads": snapshot},
                 indent=None,
             )
         except Exception as e:
             self._yt_dirty.set()
-            print(f"⚠️ Error saving YouTube downloads: {e}")
+            print(f"⚠️ Error saving Video downloads: {e}")
 
     def _yt_flush_loop(self) -> None:
         while True:
             stop_requested = self._yt_stop.wait(YT_FLUSH_INTERVAL)
-            self._flush_youtube_downloads()
+            self._flush_video_downloads()
             if stop_requested:
                 break
 
     def flush(self) -> None:
         """Force a synchronous flush of both stores."""
         self._persist(require_dirty=False)
-        self._flush_youtube_downloads()
+        self._flush_video_downloads()
 
     def shutdown(self, timeout: float = 5.0) -> None:
         self._main_stop.set()
@@ -692,24 +730,24 @@ class DataStore:
         self._main_thread.join(timeout=timeout)
         self._yt_thread.join(timeout=timeout)
         self.force_save()
-        self._flush_youtube_downloads()
+        self._flush_video_downloads()
 
-    def add_youtube_download(self, download_data: dict) -> str:
+    def add_video_download(self, download_data: dict) -> str:
         download_id = download_data.get("id") or str(uuid.uuid4())
         record = deepcopy(download_data)
         record["id"] = download_id
         with self._yt_lock:
-            self.youtube_downloads[download_id] = record
+            self.video_downloads[download_id] = record
         self._mark_yt_dirty()
-        self._flush_youtube_downloads()
+        self._flush_video_downloads()
         return download_id
 
-    def _start_youtube_download(self, download_id: str):
-        print(f"🎬🎬🎬 _start_youtube_download CALLED for: {download_id}")
-        with self.youtube_lock:
-            if download_id not in self.youtube_downloads:
+    def _start_video_download(self, download_id: str):
+        print(f"🎬🎬🎬 _start_video_download CALLED for: {download_id}")
+        with self.video_lock:
+            if download_id not in self.video_downloads:
                 return
-            item = self.youtube_downloads[download_id]
+            item = self.video_downloads[download_id]
             total_size = item.get("total_size", 0)
             if total_size == 0:
                 pass
@@ -722,89 +760,89 @@ class DataStore:
                 cookie_file = item.get("yt_options", {}).get("cookies_path")
                 proxy_url = item.get("proxy")
 
-    def get_youtube_download(self, download_id: str) -> Optional[dict]:
+    def get_video_download(self, download_id: str) -> Optional[dict]:
         with self._yt_lock:
-            d = self.youtube_downloads.get(download_id)
+            d = self.video_downloads.get(download_id)
             return deepcopy(d) if d is not None else None
 
-    def get_all_youtube_downloads(self) -> List[dict]:
+    def get_all_video_downloads(self) -> List[dict]:
         with self._yt_lock:
-            return [deepcopy(d) for d in self.youtube_downloads.values()]
+            return [deepcopy(d) for d in self.video_downloads.values()]
 
-    def get_youtube_downloads_by_status(self, status: str) -> List[dict]:
+    def get_video_downloads_by_status(self, status: str) -> List[dict]:
         with self._yt_lock:
             return [
                 deepcopy(d)
-                for d in self.youtube_downloads.values()
+                for d in self.video_downloads.values()
                 if d.get("status") == status
             ]
 
-    def get_youtube_downloads_by_queue(self, queue_id: str) -> List[dict]:
+    def get_video_downloads_by_queue(self, queue_id: str) -> List[dict]:
         with self._yt_lock:
             return [
                 deepcopy(d)
-                for d in self.youtube_downloads.values()
+                for d in self.video_downloads.values()
                 if d.get("queue_id") == queue_id
             ]
 
-    def update_youtube_download(
+    def update_video_download(
         self, download_id: str, updates: dict, flush: bool = True
     ) -> bool:
         with self._yt_lock:
-            if download_id not in self.youtube_downloads:
+            if download_id not in self.video_downloads:
                 return False
-            self.youtube_downloads[download_id].update(deepcopy(updates))
+            self.video_downloads[download_id].update(deepcopy(updates))
         if flush:
             self._mark_yt_dirty()
-            self._flush_youtube_downloads()
+            self._flush_video_downloads()
         else:
             self._mark_yt_dirty()
         return True
 
-    def update_youtube_status(self, download_id: str, status: str) -> bool:
-        return self.update_youtube_download(download_id, {"status": status}, flush=True)
+    def update_video_status(self, download_id: str, status: str) -> bool:
+        return self.update_video_download(download_id, {"status": status}, flush=True)
 
-    def update_youtube_progress(self, download_id: str, progress: int) -> bool:
-        return self.update_youtube_download(
+    def update_video_progress(self, download_id: str, progress: int) -> bool:
+        return self.update_video_download(
             download_id, {"progress": progress}, flush=False
         )
 
-    def delete_youtube_download(self, download_id: str) -> bool:
+    def delete_video_download(self, download_id: str) -> bool:
         with self._yt_lock:
-            if download_id not in self.youtube_downloads:
+            if download_id not in self.video_downloads:
                 return False
-            del self.youtube_downloads[download_id]
+            del self.video_downloads[download_id]
         self._mark_yt_dirty()
-        self._flush_youtube_downloads()
+        self._flush_video_downloads()
         return True
 
-    def clear_completed_youtube_downloads(self) -> int:
+    def clear_completed_video_downloads(self) -> int:
         with self._yt_lock:
             completed_ids = [
                 d_id
-                for d_id, d in self.youtube_downloads.items()
+                for d_id, d in self.video_downloads.items()
                 if d.get("status") in ("completed", "cancelled")
             ]
             for d_id in completed_ids:
-                del self.youtube_downloads[d_id]
+                del self.video_downloads[d_id]
         if completed_ids:
             self._mark_yt_dirty()
-            self._flush_youtube_downloads()
+            self._flush_video_downloads()
         return len(completed_ids)
 
-    def get_youtube_downloads_count(self) -> int:
+    def get_video_downloads_count(self) -> int:
         with self._yt_lock:
-            return len(self.youtube_downloads)
+            return len(self.video_downloads)
 
-    def get_youtube_downloads_count_by_status(self, status: str) -> int:
+    def get_video_downloads_count_by_status(self, status: str) -> int:
         with self._yt_lock:
             return sum(
-                1 for d in self.youtube_downloads.values() if d.get("status") == status
+                1 for d in self.video_downloads.values() if d.get("status") == status
             )
 
-    def get_youtube_downloads_info_for_display(self) -> List[dict]:
+    def get_video_downloads_info_for_display(self) -> List[dict]:
         with self._yt_lock:
-            items = list(self.youtube_downloads.items())
+            items = list(self.video_downloads.items())
 
         display_list = []
         for d_id, d in items:
@@ -825,7 +863,7 @@ class DataStore:
                     "error_message": d.get("error_message", ""),
                     "quality": yt_options.get("quality", "best"),
                     "format": yt_options.get("format", "video"),
-                    "download_type": "youtube",
+                    "download_type": "video",
                 }
             )
         return display_list

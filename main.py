@@ -134,7 +134,13 @@ def main():
     parser.add_argument(
         "--update", action="store_true", help="Update FelfelDM from GitHub"
     )
-    parser.add_argument("--youtube-url", type=str, default=None)
+    parser.add_argument(
+        "--video-url",
+        "--youtube-url",  # old name, kept so existing launchers keep working
+        dest="video_url",
+        type=str,
+        default=None,
+    )
     args = parser.parse_args()
 
     if args.update:
@@ -268,17 +274,17 @@ def main():
         print(f"📥 Adding {len(urls)} URL(s)...")
         QTimer.singleShot(1000, lambda: win._add_from_extension(urls))
 
-    # ── Handle --youtube-url (from daemon / browser extension) ──
-    if getattr(args, "youtube_url", None):
-        yt_url = args.youtube_url
-        print(f"📥 Opening YouTube dialog for: {yt_url}")
+    # ── Handle --video-url (from daemon / browser extension) ──
+    if getattr(args, "video_url", None):
+        yt_url = args.video_url
+        print(f"📥 Opening Video dialog for: {yt_url}")
         # Show the window (since is_extension_launch is False, it was shown
         # already, but ensure it is visible and on top).
         win.show()
         win.raise_()
         win.activateWindow()
         # Delay slightly so the window and its dialogs are fully initialised.
-        QTimer.singleShot(800, lambda: win._open_youtube_dialog_with_url(yt_url))
+        QTimer.singleShot(800, lambda: win._open_video_dialog_with_url(yt_url))
 
         # Do NOT exit via sys.exit(app.exec()) twice — just let the event
         # loop continue; the timer will fire and open the dialog.

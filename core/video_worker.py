@@ -1,4 +1,4 @@
-# core/youtube_worker.py
+# core/video_worker.py
 
 import os
 import subprocess
@@ -15,7 +15,7 @@ from pathlib import Path
 from PyQt6.QtCore import QThread, pyqtSignal
 
 
-# yt-dlp phrases that mean "YouTube wants you to be signed in".
+# yt-dlp phrases that mean "the site wants you to be signed in".
 _COOKIE_ERROR_MARKERS = (
     "sign in",
     "not a bot",
@@ -45,17 +45,85 @@ def cookie_hint(text: Optional[str], cookie_file: Optional[str] = None) -> str:
         return ""
     if cookie_file:
         return (
-            "YouTube still asks for authentication. The cookies file you "
+            "The site still asks for authentication. The cookies file you "
             "selected may be expired or exported from a logged-out session. "
             "Export a fresh cookies.txt from a browser where you are signed "
-            "in to YouTube and select it again."
+            "in to the site and select it again."
         )
     return (
-        "YouTube is asking you to sign in (bot check, age restriction or a "
+        "The site is asking you to sign in (bot check, age restriction or a "
         "private/members-only video). Use cookies: export a cookies.txt "
-        "from a browser where you are signed in to YouTube and select it "
+        "from a browser where you are signed in to the site and select it "
         "under Options \u2192 Cookies file."
     )
+
+
+def wants_single_video(url: str) -> bool:
+    """True for links that point at one video *and* a playlist.
+
+    A YouTube ``watch?v=ID&list=...`` link (or ``youtu.be/ID?list=...``) is a
+    video the user is watching, so it is treated as that single video. Only
+    links that name just a playlist (``/playlist?list=...``) are expanded.
+    """
+    try:
+        from urllib.parse import urlparse, parse_qs
+
+        parsed = urlparse(url)
+        qs = parse_qs(parsed.query)
+        host = (parsed.hostname or "").lower()
+        if "list" not in qs:
+            return False
+        return "v" in qs or host == "youtu.be"
+    except Exception:
+        return False
+
+
+def is_playlist_info(info: Optional[dict]) -> bool:
+    """True when yt-dlp's JSON describes a playlist/channel, not one video."""
+    if not isinstance(info, dict):
+        return False
+    return info.get("_type") in ("playlist", "multi_video") or (
+        "entries" in info and "formats" not in info
+    )
+
+
+def playlist_entries(info: dict) -> list:
+    """Normalise the entries of a (flat) playlist into plain dicts.
+
+    Each result has: index (1-based, position in the playlist), id, title,
+    url, duration, uploader. Entries without a usable URL are skipped.
+    Nested playlists (e.g. a channel's tabs) are flattened one level.
+    """
+    out = []
+
+    def walk(entries):
+        for e in entries or []:
+            if not isinstance(e, dict):
+                continue
+            if e.get("_type") == "playlist" and e.get("entries"):
+                walk(e["entries"])
+                continue
+            url = e.get("webpage_url") or e.get("url") or ""
+            if not url.startswith(("http://", "https://")):
+                # Flat YouTube entries sometimes carry only an id.
+                vid = e.get("id")
+                if vid and (e.get("ie_key") or "").lower() == "youtube":
+                    url = f"https://www.youtube.com/watch?v={vid}"
+                else:
+                    continue
+            out.append(
+                {
+                    "index": len(out) + 1,
+                    "id": e.get("id") or "",
+                    "title": e.get("title") or url,
+                    "url": url,
+                    "duration": e.get("duration"),
+                    "uploader": e.get("uploader") or e.get("channel") or "",
+                }
+            )
+
+    walk(info.get("entries"))
+    return out
 
 
 def _is_safe_path(path: Path, output_dir: Path) -> bool:
@@ -74,7 +142,7 @@ def _is_safe_path(path: Path, output_dir: Path) -> bool:
     return True
 
 
-class YouTubeWorker(QThread):
+class VideoWorker(QThread):
     progress = pyqtSignal(int)
     status = pyqtSignal(str)
     speed_eta = pyqtSignal(str, str)
@@ -206,13 +274,13 @@ class YouTubeWorker(QThread):
                 self.cancel()
                 return
             except Exception as e:
-                print(f"⚠️ [YouTubeWorker] cancel during removal failed: {e}")
+                print(f"⚠️ [VideoWorker] cancel during removal failed: {e}")
 
         # Metadata fetch (or already finishing): nothing to kill, just wait
         # for it to unwind within its own bounded timeout.
         if not self.wait(timeout_ms):
             print(
-                "⚠️ [YouTubeWorker] worker still busy after "
+                "⚠️ [VideoWorker] worker still busy after "
                 f"{timeout_ms}ms; leaving it to finish on its own"
             )
 
@@ -246,12 +314,17 @@ class YouTubeWorker(QThread):
                 "--skip-download",
                 "--dump-json",
                 "--no-warnings",
+                "--no-playlist",
             ]
+            if not self.verify_ssl:
+                cmd.append("--no-check-certificate")
 
             if format_spec and format_spec not in ("bv+ba/b", "ba/b"):
                 cmd.extend(["-f", format_spec])
             elif format_spec == "ba/b":
-                cmd.extend(["-f", "ba"])
+                # "ba/b": sites without a separate audio stream fall back to
+                # the combined one instead of failing the size lookup.
+                cmd.extend(["-f", "ba/b"])
             elif format_spec:
                 cmd.extend(["-f", format_spec])
 
@@ -368,7 +441,7 @@ class YouTubeWorker(QThread):
                 os.killpg(pgid, signal.SIGSTOP)
                 self.paused.emit()
                 self.status.emit("⏸ Paused")
-                print("⏸️ YouTube download paused")
+                print("⏸️ Video download paused")
             except Exception as e:
                 print(f"Pause error: {e}")
 
@@ -380,7 +453,7 @@ class YouTubeWorker(QThread):
                 os.killpg(pgid, signal.SIGCONT)
                 self.resumed.emit()
                 self.status.emit("▶ Resuming...")
-                print("▶️ YouTube download resumed")
+                print("▶️ Video download resumed")
             except Exception as e:
                 print(f"Resume error: {e}")
 
@@ -440,13 +513,13 @@ class YouTubeWorker(QThread):
         try:
             self._delete_partial_files()
         except Exception as e:
-            print(f"⚠️ [YouTubeWorker] Safe cleanup failed: {e}")
+            print(f"⚠️ [VideoWorker] Safe cleanup failed: {e}")
 
         self.speed_eta.emit("", "")
 
         if not self.wait(3000):
             print(
-                "⚠️ [YouTubeWorker] cancel: thread didn't exit in 3s, "
+                "⚠️ [VideoWorker] cancel: thread didn't exit in 3s, "
                 "terminating anyway"
             )
             self.terminate()
@@ -468,9 +541,9 @@ class YouTubeWorker(QThread):
         try:
             if self._temp_dir.exists():
                 shutil.rmtree(self._temp_dir, ignore_errors=True)
-                print(f"🗑️ [YouTubeWorker] Removed temp dir: {self._temp_dir}")
+                print(f"🗑️ [VideoWorker] Removed temp dir: {self._temp_dir}")
         except Exception as e:
-            print(f"⚠️ [YouTubeWorker] Could not remove temp dir: {e}")
+            print(f"⚠️ [VideoWorker] Could not remove temp dir: {e}")
         finally:
             self._temp_dir = None
 
@@ -490,12 +563,12 @@ class YouTubeWorker(QThread):
         """
         output_dir = Path(self.output_path).resolve()
         if not output_dir.is_dir():
-            print(f"⚠️ [YouTubeWorker] Output dir missing: {output_dir}")
+            print(f"⚠️ [VideoWorker] Output dir missing: {output_dir}")
             return
 
         if not self._produced_paths:
             print(
-                "ℹ️ [YouTubeWorker] No produced paths recorded; "
+                "ℹ️ [VideoWorker] No produced paths recorded; "
                 "nothing deleted (safe)"
             )
             return
@@ -507,11 +580,11 @@ class YouTubeWorker(QThread):
                     continue
                 if not _is_safe_path(path, output_dir):
                     print(
-                        f"⚠️ [YouTubeWorker] Refusing to delete " f"outside dir: {path}"
+                        f"⚠️ [VideoWorker] Refusing to delete " f"outside dir: {path}"
                     )
                     continue
                 if path.is_dir():
-                    print(f"⚠️ [YouTubeWorker] Refusing to rmtree: {path}")
+                    print(f"⚠️ [VideoWorker] Refusing to rmtree: {path}")
                     continue
                 path.unlink()
                 deleted += 1
@@ -522,9 +595,9 @@ class YouTubeWorker(QThread):
                 print(f"⚠️ Could not delete {path}: {e}")
 
         if deleted == 0:
-            print("ℹ️ [YouTubeWorker] Nothing to delete (safe)")
+            print("ℹ️ [VideoWorker] Nothing to delete (safe)")
         else:
-            print(f"✅ [YouTubeWorker] Deleted {deleted} file(s)")
+            print(f"✅ [VideoWorker] Deleted {deleted} file(s)")
 
     # ─────────────────────────────────────────────────────────────
     #  Info fetch
@@ -537,10 +610,18 @@ class YouTubeWorker(QThread):
             cmd = [
                 ytdlp_path,
                 "--skip-download",
-                "--dump-json",
+                # One call covers both cases: for a single video this is the
+                # full info (formats included); for a playlist it lists the
+                # entries without extracting each one.
+                "--flat-playlist",
+                "--dump-single-json",
                 "--no-warnings",
-                self.url,
             ]
+            if wants_single_video(self.url):
+                cmd.append("--no-playlist")
+            if not self.verify_ssl:
+                cmd.append("--no-check-certificate")
+            cmd.append(self.url)
 
             if self.proxy_url:
                 cmd.extend(["--proxy", self.proxy_url])
@@ -563,6 +644,9 @@ class YouTubeWorker(QThread):
                 return
 
             info = json.loads(result.stdout)
+            if is_playlist_info(info) and not playlist_entries(info):
+                self.finished.emit(False, "This playlist has no downloadable videos")
+                return
             self._title = info.get("title") or None
             self.progress.emit(100)
             self.info_fetched.emit(info)
@@ -585,7 +669,7 @@ class YouTubeWorker(QThread):
     #  Download (uses -P temp: and -P home:)
     # ─────────────────────────────────────────────────────────────
     def _download(self):
-        """Download YouTube video/audio.
+        """Download Video video/audio.
 
         Uses yt-dlp's -P (--paths):
           -P home:<output_path>  → final merged file goes here
@@ -612,7 +696,7 @@ class YouTubeWorker(QThread):
                 os.chmod(self._temp_dir, 0o700)
             except OSError:
                 pass
-            print(f"📂 [YouTubeWorker] temp dir: {self._temp_dir}")
+            print(f"📂 [VideoWorker] temp dir: {self._temp_dir}")
 
             # ── --print-to-file log ──
             fd, produced_name = tempfile.mkstemp(
@@ -842,7 +926,7 @@ class YouTubeWorker(QThread):
 
         if self._produced_paths:
             print(
-                f"📋 [YouTubeWorker] Recorded {len(self._produced_paths)} "
+                f"📋 [VideoWorker] Recorded {len(self._produced_paths)} "
                 f"produced path(s)"
             )
             for p in sorted(self._produced_paths):
