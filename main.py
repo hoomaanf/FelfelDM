@@ -11,6 +11,7 @@ import threading
 import time
 import subprocess
 import shutil
+import glob
 from PyQt6.QtWidgets import QApplication
 from PyQt6.QtGui import QIcon
 from PyQt6.QtCore import Qt, QTimer, QCoreApplication
@@ -42,6 +43,56 @@ APP_ID = f"FelfelDM_{os.getenv('USER', 'default')}"
 
 # Do not force DISPLAY: hard-defaulting it to :0 breaks multi-seat, remote
 # and `ssh -X` sessions. Qt falls back to the ambient DISPLAY/WAYLAND_DISPLAY.
+
+
+_SESSION_ENV_KEYS = (
+    "WAYLAND_DISPLAY",
+    "DISPLAY",
+    "XAUTHORITY",
+    "XDG_RUNTIME_DIR",
+    "DBUS_SESSION_BUS_ADDRESS",
+    "XDG_SESSION_TYPE",
+)
+
+
+def _adopt_session_env():
+    """Recover the graphical session environment when it is missing.
+
+    The systemd user service (`--daemon`) starts at login, often before
+    DISPLAY / WAYLAND_DISPLAY exist, and freezes that empty environment. The
+    GUI it spawns inherits it and Qt dies with "could not connect to display".
+    The systemd user manager learns the real values later, so ask it for the
+    live ones. Does nothing when the process already has a display (normal
+    launch, `ssh -X`, multi-seat), so those setups are left untouched.
+    """
+    if os.environ.get("WAYLAND_DISPLAY") or os.environ.get("DISPLAY"):
+        return
+
+    runtime_dir = os.environ.setdefault("XDG_RUNTIME_DIR", f"/run/user/{os.getuid()}")
+
+    try:
+        out = subprocess.run(
+            ["systemctl", "--user", "show-environment"],
+            capture_output=True,
+            text=True,
+            timeout=3,
+        ).stdout
+    except Exception:
+        out = ""
+    for line in out.splitlines():
+        key, sep, value = line.partition("=")
+        if sep and value and key in _SESSION_ENV_KEYS:
+            os.environ.setdefault(key, value)
+
+    if not (os.environ.get("WAYLAND_DISPLAY") or os.environ.get("DISPLAY")):
+        # Last resort: a Wayland compositor socket in the runtime dir.
+        socks = [
+            s
+            for s in sorted(glob.glob(os.path.join(runtime_dir, "wayland-*")))
+            if not s.endswith(".lock")
+        ]
+        if socks:
+            os.environ["WAYLAND_DISPLAY"] = os.path.basename(socks[0])
 
 
 def signal_handler(sig, frame):
@@ -201,11 +252,13 @@ def main():
     QApplication.setHighDpiScaleFactorRoundingPolicy(
         Qt.HighDpiScaleFactorRoundingPolicy.PassThrough
     )
+    _adopt_session_env()
     # Prefer the Wayland plugin only when a Wayland session actually exists;
     # otherwise Qt would fail to open a window on an X11-only system instead
-    # of falling back to xcb.
+    # of falling back to xcb. "wayland;xcb" lets Qt fall back to xcb if the
+    # Wayland connection fails.
     if os.environ.get("WAYLAND_DISPLAY"):
-        os.environ.setdefault("QT_QPA_PLATFORM", "wayland")
+        os.environ.setdefault("QT_QPA_PLATFORM", "wayland;xcb")
     os.environ.setdefault("QT_QPA_PLATFORMTHEME", "kde")
 
     app = QApplication(sys.argv)
