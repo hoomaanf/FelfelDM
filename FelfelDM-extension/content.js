@@ -283,8 +283,8 @@
     const host = document.createElement("div");
     host.className = "felfel-dm-fab";
     host.style.cssText = isAudio
-      ? "all: initial; display: inline-block; vertical-align: middle; margin: 0 8px; position: static;"
-      : "all: initial; display: block; position: absolute; top: 12px; right: 12px; z-index: 2147483647;";
+      ? "all: initial; display: inline-block; vertical-align: middle; margin: 0 8px; position: relative; z-index: 2147483647;"
+      : "all: initial; display: block; position: fixed; top: 0; right: 0; z-index: 2147483647;";
 
     const shadow = host.attachShadow({ mode: "closed" });
 
@@ -363,18 +363,53 @@
     return host;
   }
 
-  // Video pills are absolutely positioned inside the media's parent, at the
-  // media's own top-right corner (the parent may be bigger than the video).
+  const PILL_H = 36;
+  const PILL_GAP = 6;
+
+  // Root the video pill lives under: <html>, or the fullscreen element when
+  // the player is fullscreen (anything outside it is not rendered then).
+  function hostRoot(media) {
+    const fs = document.fullscreenElement;
+    return fs && fs !== media && fs.contains(media)
+      ? fs
+      : document.documentElement;
+  }
+
+  // Video pills are position:fixed, OUTSIDE the player, just above its
+  // top-right corner. With no room above (player flush with the top of the
+  // viewport) or in fullscreen they fall back to the inside top-right corner.
   function place(host, media) {
     if (media.tagName === "AUDIO") return; // inline sibling, nothing to place
-    const parent = host.parentElement;
-    if (!parent) return;
-    const pr = parent.getBoundingClientRect();
+    const fs = document.fullscreenElement;
+    if (fs === media) {
+      // Children of a fullscreen <video> are never rendered.
+      host.style.display = "none";
+      return;
+    }
+    const de = document.documentElement;
     const mr = media.getBoundingClientRect();
-    const top = Math.max(0, mr.top - pr.top) + 12;
-    const right = Math.max(0, pr.right - mr.right) + 12;
-    host.style.top = `${Math.round(top)}px`;
-    host.style.right = `${Math.round(right)}px`;
+    if (
+      mr.bottom <= 0 ||
+      mr.top >= de.clientHeight ||
+      mr.right <= 0 ||
+      mr.left >= de.clientWidth
+    ) {
+      host.style.display = "none"; // media scrolled out of view
+      return;
+    }
+    host.style.display = "block";
+
+    const right = Math.max(0, de.clientWidth - mr.right);
+    const inFs = !!(fs && fs.contains(media));
+    if (!inFs && mr.top >= PILL_H + PILL_GAP) {
+      host.style.top = "auto";
+      host.style.bottom = `${Math.round(de.clientHeight - mr.top + PILL_GAP)}px`;
+      host.style.right = `${Math.round(right)}px`;
+    } else {
+      host.style.bottom = "auto";
+      host.style.top = `${Math.round(Math.max(0, mr.top) + 12)}px`;
+      host.style.right = `${Math.round(right + 12)}px`;
+    }
   }
 
   function attach(media) {
@@ -384,12 +419,7 @@
       // Right beside the <audio> element.
       media.insertAdjacentElement("afterend", host);
     } else {
-      const parent = media.parentElement;
-      if (!parent) return;
-      if (window.getComputedStyle(parent).position === "static") {
-        parent.style.position = "relative";
-      }
-      parent.appendChild(host);
+      hostRoot(media).appendChild(host);
       place(host, media);
     }
     panels.set(media, host);
@@ -427,6 +457,25 @@
     }, delay ?? 250);
   }
 
+  let placeRaf = 0;
+  function schedulePlace() {
+    if (placeRaf) return;
+    placeRaf = requestAnimationFrame(() => {
+      placeRaf = 0;
+      panels.forEach((h, m) => place(h, m));
+    });
+  }
+
+  function onFullscreenChange() {
+    panels.forEach((host, media) => {
+      if (media.tagName === "AUDIO") return;
+      const root = hostRoot(media);
+      if (host.parentNode !== root) root.appendChild(host);
+    });
+    schedulePlace();
+    scheduleScan();
+  }
+
   function init() {
     scan();
 
@@ -442,12 +491,19 @@
     // fullscreen and YouTube's SPA navigation all change what is eligible.
     document.addEventListener("loadedmetadata", () => scheduleScan(), true);
     document.addEventListener("play", () => scheduleScan(), true);
-    document.addEventListener("fullscreenchange", () => scheduleScan());
-    window.addEventListener("scroll", () => scheduleScan(300), {
-      passive: true,
-      capture: true,
+    document.addEventListener("fullscreenchange", onFullscreenChange);
+    window.addEventListener(
+      "scroll",
+      () => {
+        schedulePlace();
+        scheduleScan(300);
+      },
+      { passive: true, capture: true },
+    );
+    window.addEventListener("resize", () => {
+      schedulePlace();
+      scheduleScan(300);
     });
-    window.addEventListener("resize", () => scheduleScan(300));
     document.addEventListener("yt-navigate-finish", () => {
       setTimeout(scan, 300);
       setTimeout(scan, 1200);
