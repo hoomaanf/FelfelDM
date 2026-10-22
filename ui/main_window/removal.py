@@ -134,7 +134,6 @@ class RemovalMixin:
     def _remove_selected(self) -> None:
         selected = self.table.selectionModel().selectedRows()
         if not selected:
-            QMessageBox.information(self, "Info", "No downloads selected.")
             return
 
         gids_to_remove = [

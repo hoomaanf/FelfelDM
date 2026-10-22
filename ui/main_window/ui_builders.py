@@ -326,6 +326,10 @@ class UIBuilderMixin:
             self.table.selectionModel().selectionChanged.connect(
                 self._update_toggle_button
             )
+        # A model reset / row removal clears the selection without emitting
+        # selectionChanged, so refresh the Remove button on those too.
+        self.model.modelReset.connect(self._update_remove_button)
+        self.model.rowsRemoved.connect(self._update_remove_button)
 
         self.details_panel = self._build_details_panel()
         self.details_panel.setVisible(True)
@@ -375,6 +379,7 @@ class UIBuilderMixin:
         self.btn_remove.setIconSize(icon_size)
         self.btn_remove.setProperty("variant", "ghost-danger")
         self.btn_remove.clicked.connect(self._remove_selected)
+        self.btn_remove.setEnabled(False)  # enabled while rows are selected
         tb_lay.addWidget(self.btn_remove)
 
         self.btn_clear_completed = QPushButton(

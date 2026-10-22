@@ -449,7 +449,15 @@ class StatusDisplayMixin:
             self.progress_bar.setValue(0)
             self.progress_bar.setFormat(f"No active downloads{speed_part}")
 
+    def _update_remove_button(self) -> None:
+        """Remove only makes sense while at least one download is selected."""
+        if not hasattr(self, "btn_remove"):
+            return
+        selection = self.table.selectionModel() if hasattr(self, "table") else None
+        self.btn_remove.setEnabled(bool(selection and selection.selectedRows()))
+
     def _update_toggle_button(self) -> None:
+        self._update_remove_button()
         if not hasattr(self, "table") or not self.table.selectionModel():
             self.btn_toggle.setEnabled(False)
             self.btn_toggle.setText("Pause")

@@ -58,6 +58,8 @@ class BackendWorker(QThread):
 
     operation_result = pyqtSignal(str, object)
 
+    # Fallback cap for Video downloads that do not belong to a real queue
+    # (Direct Downloads). Queue downloads use their queue's Max Concurrent.
     MAX_PARALLEL_VIDEO_DOWNLOADS = 3
     MAX_PARALLEL_SIZE_FETCHES = 3
 
@@ -1073,8 +1075,7 @@ class BackendWorker(QThread):
             return
 
         with self.video_lock:
-            active = sum(1 for w in self.video_workers.values() if w.is_running())
-            must_wait = active >= self.MAX_PARALLEL_VIDEO_DOWNLOADS
+            must_wait = not self._video_slot_free(download_id)
             if must_wait and download_id not in self._video_pending:
                 self._video_pending.append(download_id)
         if must_wait:
@@ -1394,26 +1395,62 @@ class BackendWorker(QThread):
         self.video_finished.emit(download_id, success, message)
         self._start_next_pending_video()
 
+    def _video_slot_limit(self, item: dict) -> int:
+        """Max simultaneous Video downloads for the queue `item` belongs to.
+
+        Follows the queue's own "Max Concurrent" setting, the same rule aria2
+        applies to normal downloads. Direct Downloads (no real queue) keep
+        the fixed fallback cap.
+        """
+        queue_name = (item or {}).get("queue_id")
+        if queue_name and queue_name != "__direct__":
+            for q in self.store.queues:
+                if q.name == queue_name:
+                    if q.max_concurrent > 0:
+                        return q.max_concurrent
+                    break
+        return self.MAX_PARALLEL_VIDEO_DOWNLOADS
+
+    def _video_slot_free(self, download_id: str) -> bool:
+        """True if `download_id` may start now. Caller must hold video_lock.
+
+        Only downloads of the same queue compete for its slots, so a busy
+        queue never blocks another one.
+        """
+        item = self.video_downloads.get(download_id) or {}
+        queue_name = item.get("queue_id")
+        active = 0
+        for wid, w in self.video_workers.items():
+            if not w.is_running():
+                continue
+            if (self.video_downloads.get(wid) or {}).get("queue_id") == queue_name:
+                active += 1
+        return active < self._video_slot_limit(item)
+
     def _start_next_pending_video(self):
-        """Start waiting downloads while there are free slots."""
+        """Start waiting downloads whose queue has a free slot."""
         while True:
+            nxt = None
             with self.video_lock:
-                if not self._video_pending:
-                    return
-                active = sum(1 for w in self.video_workers.values() if w.is_running())
-                if active >= self.MAX_PARALLEL_VIDEO_DOWNLOADS:
-                    return
-                nxt = self._video_pending.pop(0)
-                item = self.video_downloads.get(nxt)
-                valid = (
-                    item is not None
-                    and item.get("status") == "downloading"
-                    and nxt not in self.video_workers
-                )
-            if valid:
-                self._start_video_download(nxt)
-                # The new worker is registered synchronously; loop to
-                # re-check the slot count.
+                for cand in list(self._video_pending):
+                    item = self.video_downloads.get(cand)
+                    if (
+                        item is None
+                        or item.get("status") != "downloading"
+                        or cand in self.video_workers
+                    ):
+                        # Stale entry (cancelled / paused / already running).
+                        self._video_pending.remove(cand)
+                        continue
+                    if self._video_slot_free(cand):
+                        self._video_pending.remove(cand)
+                        nxt = cand
+                        break
+            if nxt is None:
+                return
+            self._start_video_download(nxt)
+            # The new worker is registered synchronously; loop to re-check
+            # the slot counts.
 
     def _drain_size_pending(self):
         """Start waiting size/metadata fetches while there are free slots."""

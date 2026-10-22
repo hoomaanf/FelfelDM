@@ -230,6 +230,8 @@ class QueuesMixin:
         self._refresh_queue_list()
         self._update_queue_buttons()
         self._apply_settings_to_aria2()
+        if getattr(self, "worker", None):
+            self.worker._start_next_pending_video()
 
         if q.speed_limit > 0:
             self.aria2.change_global_option({"max-overall-download-limit": "0"})
