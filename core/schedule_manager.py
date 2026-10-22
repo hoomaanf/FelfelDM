@@ -147,29 +147,28 @@ class ScheduleManagerThread(QThread):
         except Exception as e:
             print(f"⚠️ [Scheduler] Could not read queues: {e}")
         return None
-
-    def _start_queue_direct(self, queue_name: str) -> None:
+    
+    def _start_queue_direct(self, queue_name: str) -> bool:
         """Start a queue and all its downloads directly, without
         involving the UI thread.
 
-        This is what makes the schedule work while the screen is
-        locked on Wayland: we never emit a signal that the UI has to
-        process — we change state and talk to aria2 ourselves.
+        Returns True if the queue was actually started, False if it was
+        skipped (not found, already running, or manually paused).
         """
         q = self._find_queue(queue_name)
         if q is None:
             print(f"⚠️ [Scheduler] Queue '{queue_name}' not found")
-            return
+            return False
 
         if q.manually_paused:
             print(
                 f"⏸️ [Scheduler] Queue '{queue_name}' is manually paused "
                 f"— skipping auto-start"
             )
-            return
+            return False
 
         if not q.paused:
-            return
+            return False
 
         print(f"▶️ [Scheduler] Starting queue '{queue_name}' (direct)")
 
@@ -185,18 +184,12 @@ class ScheduleManagerThread(QThread):
 
             dtype = info.get("download_type", "normal")
             if dtype == "video":
-                # Video downloads are handled by the worker's
-                # add_video_download path when the UI processes the
-                # start signal. Skip them here — a locked screen can't
-                # safely interact with the yt-dlp workers, and resuming
-                # a paused yt-dlp mid-process is what the UI does.
                 continue
 
             aria2_gid = info.get("aria2_gid")
             if not aria2_gid:
                 continue
 
-            # Only resume downloads that are paused/waiting/stopped.
             try:
                 st = self._aria2.get_status(aria2_gid)
             except Exception:
@@ -204,19 +197,13 @@ class ScheduleManagerThread(QThread):
             if not st:
                 continue
             real_status = st.get("status", "")
-            # "stopped" (finished/errored/removed) cannot be unpaused in
-            # aria2; the UI's start logic retries those. Only paused and
-            # waiting downloads can be resumed here.
             if real_status in ("paused", "waiting"):
                 gids_to_resume.append(aria2_gid)
 
         if gids_to_resume:
             try:
-                # Use the bulk API to keep it to one round trip.
                 ok = self._aria2.resume_multi(gids_to_resume)
                 if ok:
-                    # No status written here: aria2 is the only source of a
-                    # download's status and the next poll reports it.
                     print(
                         f"▶️ [Scheduler] Resumed {len(gids_to_resume)} "
                         f"download(s) in queue '{queue_name}'"
@@ -229,22 +216,26 @@ class ScheduleManagerThread(QThread):
             except Exception as e:
                 print(f"⚠️ [Scheduler] resume_multi failed: {e}")
 
-        # Persist the new state so a restart preserves it.
         try:
             self._store.save()
         except Exception as e:
             print(f"⚠️ [Scheduler] Could not save store: {e}")
 
-    def _pause_queue_direct(self, queue_name: str) -> None:
+        return True
+
+    def _pause_queue_direct(self, queue_name: str) -> bool:
         """Pause a queue and all its downloads directly, without
         involving the UI thread.
+
+        Returns True if the queue was actually paused, False if it was
+        skipped (not found or already paused).
         """
         q = self._find_queue(queue_name)
         if q is None:
-            return
+            return False
 
         if q.paused:
-            return
+            return False
 
         print(f"⏸️ [Scheduler] Pausing queue '{queue_name}' (direct)")
 
@@ -259,7 +250,7 @@ class ScheduleManagerThread(QThread):
 
             dtype = info.get("download_type", "normal")
             if dtype == "video":
-                continue  # handled by UI when unlocked
+                continue
 
             aria2_gid = info.get("aria2_gid")
             if not aria2_gid:
@@ -291,6 +282,7 @@ class ScheduleManagerThread(QThread):
         except Exception as e:
             print(f"⚠️ [Scheduler] Could not save store: {e}")
 
+        return True
     # ─────────────────────────────────────────────────────────────
     #  Main loop
     # ─────────────────────────────────────────────────────────────
@@ -319,14 +311,14 @@ class ScheduleManagerThread(QThread):
                 self._running_queues -= set(to_pause)
 
             for queue_name in to_start:
-                # Do the real work here, in this thread.
-                self._start_queue_direct(queue_name)
-                # Then notify the UI (may be delayed on Wayland lock).
-                self.start_queue.emit(queue_name)
+                started = self._start_queue_direct(queue_name)
+                if started:
+                    self.start_queue.emit(queue_name)
 
             for queue_name in to_pause:
-                self._pause_queue_direct(queue_name)
-                self.pause_queue.emit(queue_name)
+                paused = self._pause_queue_direct(queue_name)
+                if paused:
+                    self.pause_queue.emit(queue_name)
 
             slept = 0.0
             while slept < self._check_interval and not self._stop_requested:

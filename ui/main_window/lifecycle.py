@@ -184,7 +184,6 @@ class LifecycleMixin:
 
             for q in self.store.queues:
                 q.paused = True
-                q.manually_paused = True
             self.store.save()
 
             print(
