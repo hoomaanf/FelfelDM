@@ -191,7 +191,20 @@ class Aria2RPC:
 
         return None
 
-    def is_connected(self) -> bool:
+    def is_connected(self, fast: bool = False) -> bool:
+        """True if aria2's RPC answers.
+
+        ``fast=True`` makes a single short attempt with no retries. Used for
+        startup readiness polling, where _call's retry backoff (0.2s+) only
+        adds latency to every probe while aria2 is still booting.
+        """
+        if fast:
+            saved_retry, saved_timeout = self._retry_count, self._timeout
+            self._retry_count, self._timeout = 1, 0.3
+            try:
+                return self.is_connected()
+            finally:
+                self._retry_count, self._timeout = saved_retry, saved_timeout
         try:
             result = self._call("aria2.getVersion")
             if result:

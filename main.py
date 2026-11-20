@@ -12,6 +12,7 @@ import time
 import subprocess
 import shutil
 import glob
+
 from PyQt6.QtWidgets import QApplication
 from PyQt6.QtGui import QIcon
 from PyQt6.QtCore import Qt, QTimer, QCoreApplication
@@ -314,6 +315,10 @@ def main():
 
     win = MainWindow()
     theme = win.store.settings.get("theme", "auto")
+    # Reuse the theme already detected during UI construction instead of
+    # running detect_system_theme() (multiple subprocesses) a second time.
+    if theme == "auto":
+        theme = "dark" if getattr(win, "_detected_dark", False) else "light"
     setup_style(app, theme)
 
     # Detect if this launch is triggered by the browser extension

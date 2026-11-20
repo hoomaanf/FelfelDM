@@ -494,16 +494,10 @@ class DataStore:
         self._load_video_downloads()
 
     def _load_secret(self) -> None:
-        if KEYRING_AVAILABLE:
-            try:
-                secret = keyring.get_password(KEYRING_SERVICE, KEYRING_KEY)
-                if secret:
-                    with self._lock:
-                        self.settings["aria2_secret"] = secret
-                    return
-            except Exception as e:
-                print(f"⚠️ Could not load secret from keyring: {e}")
-
+        # Fast path first: the 0600 secret.txt. It holds the same secret that
+        # aria2.conf (also 0600) already embeds, so reading it is not a
+        # security downgrade — and it skips `keyring`, whose backend probe
+        # (KWallet/SecretService/...) costs ~0.2-0.7s at startup.
         secret_file = self.config_dir / "secret.txt"
         if secret_file.exists():
             try:
@@ -512,9 +506,24 @@ class DataStore:
                 if secret:
                     with self._lock:
                         self.settings["aria2_secret"] = secret
+                    self._persisted_secret = secret
                     return
             except Exception as e:
                 print(f"⚠️ Could not read fallback secret file: {e}")
+
+        # Slow path: keyring (first run after install/upgrade, or no file yet).
+        if KEYRING_AVAILABLE:
+            try:
+                secret = keyring.get_password(KEYRING_SERVICE, KEYRING_KEY)
+                if secret:
+                    with self._lock:
+                        self.settings["aria2_secret"] = secret
+                    # Mirror to the 0600 file so later starts take the fast path.
+                    self._write_secret_file(secret)
+                    self._persisted_secret = secret
+                    return
+            except Exception as e:
+                print(f"⚠️ Could not load secret from keyring: {e}")
 
         # No secret found anywhere (fresh install, or keyring/file both
         # empty): aria2's RPC interface must never run without one, so
@@ -527,19 +536,18 @@ class DataStore:
         else:
             print("⚠️ Generated aria2 RPC secret but could not persist it")
 
-    def _save_secret(self, secret: str) -> bool:
-        if not secret:
-            return False
-
-        if KEYRING_AVAILABLE:
-            try:
-                keyring.set_password(KEYRING_SERVICE, KEYRING_KEY, secret)
-                return True
-            except Exception as e:
-                print(f"⚠️ Could not save secret to keyring: {e}")
-
+    def _write_secret_file(self, secret: str) -> bool:
         try:
             secret_file = self.config_dir / "secret.txt"
+            # Skip the write when the file already holds the same secret
+            # (called on every persist, which would otherwise rewrite it).
+            if secret_file.exists():
+                try:
+                    with open(secret_file, "r", encoding="utf-8") as f:
+                        if f.read().strip() == secret:
+                            return True
+                except Exception:
+                    pass
             with open(secret_file, "w", encoding="utf-8") as f:
                 f.write(secret)
             os.chmod(secret_file, 0o600)
@@ -547,6 +555,31 @@ class DataStore:
         except Exception as e:
             print(f"⚠️ Could not persist secret to fallback file: {e}")
             return False
+
+    def _save_secret(self, secret: str) -> bool:
+        if not secret:
+            return False
+
+        # _persist() calls this on every save. Skip when nothing changed,
+        # otherwise every save would re-touch keyring (which triggers the
+        # slow backend probe) and rewrite the file.
+        if secret == getattr(self, "_persisted_secret", None):
+            return True
+
+        ok = False
+        if KEYRING_AVAILABLE:
+            try:
+                keyring.set_password(KEYRING_SERVICE, KEYRING_KEY, secret)
+                ok = True
+            except Exception as e:
+                print(f"⚠️ Could not save secret to keyring: {e}")
+
+        # Always mirror to the 0600 file too, so the next start is fast.
+        if self._write_secret_file(secret):
+            ok = True
+        if ok:
+            self._persisted_secret = secret
+        return ok
 
     def _backup_corrupted_file(self) -> None:
         if not self.data_file.exists():

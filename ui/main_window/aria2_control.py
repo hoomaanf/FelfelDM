@@ -12,8 +12,13 @@ from core import Aria2RPC, BackendWorker, Queue, aria2_process
 class Aria2ControlMixin:
     """Starting/stopping aria2 and sending it commands (pause, resume, limits, proxy)."""
 
-    def _start_aria2_if_needed(self) -> None:
+    def _start_aria2_if_needed(self, wait: bool = True) -> None:
         """Start aria2 if it isn't already running.
+
+        With ``wait=False`` this only writes the config and spawns the process
+        (fast, no polling). Startup uses that to let aria2 boot *while* the UI
+        is being built, then waits for it in ``_init_backend`` — this hides
+        aria2's boot time behind UI construction.
 
         C44/C56 fix:
         - Removed --rpc-listen-all and --rpc-allow-origin-all. The
@@ -24,8 +29,23 @@ class Aria2ControlMixin:
           code leaked the secret to every local user via
           /proc/<pid>/cmdline.
         """
-        if self.aria2.is_connected():
-            return
+        proc = self._spawn_aria2()
+        if wait:
+            if proc is None:
+                proc = getattr(self, "_aria2_proc", None)
+            self._wait_for_aria2(proc)
+
+    def _spawn_aria2(self):
+        """Write the conf and spawn aria2 without waiting.
+
+        Returns the Popen, or None when aria2 is already connected or was
+        already spawned earlier in this session (so a second call never
+        launches a duplicate process).
+        """
+        if getattr(self, "_aria2_spawn_attempted", False):
+            return None
+        if self.aria2.is_connected(fast=True):
+            return None
         try:
             port = self.store.settings["aria2_port"]
             max_tries = self.store.settings.get("max_tries", 5)
@@ -81,8 +101,10 @@ class Aria2ControlMixin:
             # Our own child process, not --daemon: aria2 has no pid-file
             # option, so a daemonised aria2 could never be found again and
             # kept running after the app quit.
-            aria2_process.spawn(conf_path)
-            time.sleep(2.0)
+            proc = aria2_process.spawn(conf_path)
+            self._aria2_spawn_attempted = True
+            self._aria2_proc = proc
+            return proc
 
         except FileNotFoundError:
             QMessageBox.critical(
@@ -90,6 +112,30 @@ class Aria2ControlMixin:
                 "aria2 Not Found",
                 "aria2 is not installed.",
             )
+            return None
+
+    def _wait_for_aria2(self, proc) -> None:
+        """Poll until aria2's RPC answers (or the child exits / timeout).
+
+        Polling replaces the old fixed ``time.sleep(2.0)``: aria2 normally
+        accepts RPC within a few hundred ms. ``on_error`` is muted while
+        probing so the "connection refused" retries don't surface as error
+        toasts. If the child exits on its own (bad conf, port already in use)
+        we stop waiting immediately.
+        """
+        on_error = self.aria2.on_error
+        self.aria2.on_error = None
+        try:
+            deadline = time.monotonic() + 10.0
+            while time.monotonic() < deadline:
+                if self.aria2.is_connected(fast=True):
+                    return
+                if proc is not None and proc.poll() is not None:
+                    print("⚠️ aria2 exited during startup")
+                    return
+                time.sleep(0.05)
+        finally:
+            self.aria2.on_error = on_error
 
     def _stop_own_aria2(self) -> None:
         """Stop the aria2 instance(s) FelfelDM started, and only those.
@@ -118,6 +164,9 @@ class Aria2ControlMixin:
             self.store.settings["aria2_port"],
             self.store.settings["aria2_secret"],
         )
+        # Fresh instance: allow a new spawn and forget the old child handle.
+        self._aria2_spawn_attempted = False
+        self._aria2_proc = None
 
         self._start_aria2_if_needed()
         self._apply_global_speed_limit()

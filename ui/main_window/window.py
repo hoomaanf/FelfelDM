@@ -85,6 +85,15 @@ class MainWindow(
 
     def _init_variables(self) -> None:
         self.store = DataStore()
+        # Created early so the UI can spawn aria2 in the background before
+        # the backend phase (see _init_ui / _init_backend).
+        self.aria2 = Aria2RPC(
+            self.store.settings["aria2_host"],
+            self.store.settings["aria2_port"],
+            self.store.settings["aria2_secret"],
+        )
+        self._aria2_spawn_attempted = False
+        self._aria2_proc = None
         self._all_downloads: Dict[str, Dict[str, Any]] = {}
         self._current_queue_idx: int = 0
         self._retrying_gids: Set[str] = set()
@@ -132,10 +141,16 @@ class MainWindow(
     def _init_ui(self) -> None:
         theme_setting: str = self.store.settings.get("theme", "auto")
         is_dark: bool = self._detect_theme(theme_setting)
+        self._detected_dark = is_dark
 
         self.splash = SplashScreen(is_dark=is_dark)
         self.splash.update_status("Loading FelfelDM...", 5)
         QApplication.processEvents()
+
+        # Spawn aria2 now (non-blocking) and let it boot while the UI is
+        # built. _init_backend just waits for readiness, so its startup time
+        # is hidden behind UI construction.
+        self._start_aria2_if_needed(wait=False)
 
         self.setWindowTitle("FelfelDM")
         self.setMinimumSize(1300, 680)
@@ -166,11 +181,8 @@ class MainWindow(
         self.splash.update_status("Initializing aria2...", 35)
         QApplication.processEvents()
 
-        self.aria2 = Aria2RPC(
-            self.store.settings["aria2_host"],
-            self.store.settings["aria2_port"],
-            self.store.settings["aria2_secret"],
-        )
+        # self.aria2 was created in _init_variables; aria2 may already be
+        # booting in the background (spawned from _init_ui).
 
         self.schedule_thread = ScheduleManagerThread(
             store=self.store,
@@ -182,7 +194,6 @@ class MainWindow(
         self.schedule_thread.start()
 
         self.proxy_manager = ProxyManager(self.store)
-        self._apply_proxy_to_aria2()
         self._aria2_error_signal.connect(self._on_aria2_error)
         self._ytdlp_probe_done.connect(self._on_ytdlp_probe_done)
         self.aria2.on_error = self._aria2_error_signal.emit
@@ -190,10 +201,15 @@ class MainWindow(
         self.splash.update_status("Connecting to aria2...", 45)
         QApplication.processEvents()
 
-        if not self.aria2.is_connected():
+        if not self.aria2.is_connected(fast=True):
             self.splash.update_status("Starting aria2 daemon...", 55)
             self._start_aria2_if_needed()
             QApplication.processEvents()
+
+        # Apply the global proxy only once aria2 is actually reachable;
+        # calling it before the wait made the RPC retry (~220ms) and was a
+        # no-op when aria2 had not finished booting.
+        self._apply_proxy_to_aria2()
 
         self.splash.update_status("aria2 ready!", 60)
         QApplication.processEvents()
@@ -207,13 +223,8 @@ class MainWindow(
         QApplication.processEvents()
         self._start_backend()
 
-        self.splash.update_status("Waiting for aria2...", 92)
-        QApplication.processEvents()
-
-        wait_count = 0
-        while not self.aria2.is_connected() and wait_count < 25:
-            time.sleep(0.2)
-            wait_count += 1
+        # aria2 readiness is handled inside _start_aria2_if_needed(), which
+        # now polls until RPC answers instead of sleeping a fixed amount.
 
         self.splash.update_status("Restoring downloads...", 93)
         QApplication.processEvents()
